@@ -1586,7 +1586,9 @@ export class ToolExecutor {
   ): Promise<RemoteExecutionRunResult> {
     const codeSessionId = input.request?.codeContext?.sessionId?.trim() || undefined;
     const session = codeSessionId ? this.getCodeSessionRecord(codeSessionId) : null;
-    const managedSandboxes = session?.workState.managedSandboxes.filter((record) => record.status === 'active') ?? [];
+    const managedSandboxes = session?.workState.managedSandboxes
+      .filter((record) => record.status === 'active' || record.status === 'stopped')
+      ?? [];
     const descriptors = await this.resolveRemoteExecutionTargetDescriptors(
       input.profileId,
       input.command.requestedCommand,
@@ -1611,7 +1613,16 @@ export class ToolExecutor {
       if (!target) {
         continue;
       }
-      const preferredManagedSandbox = managedSandboxes.find((record) => record.targetId === descriptor.id);
+      const preferredManagedSandbox = [...managedSandboxes]
+        .filter((record) => record.targetId === descriptor.id)
+        .sort((left, right) => {
+          const leftScore = left.status === 'active' ? 2 : 1;
+          const rightScore = right.status === 'active' ? 2 : 1;
+          if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+          }
+          return (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0);
+        })[0];
       try {
         const result = await service.runBoundedJob({
           ...input,

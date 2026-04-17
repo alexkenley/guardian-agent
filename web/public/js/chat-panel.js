@@ -1357,6 +1357,23 @@ function updateThinkingEl(el, run) {
 }
 
 function summarizeTimelineRun(run) {
+  const liveSummary = run?.liveSummary;
+  const liveSummaryItems = Array.isArray(liveSummary?.items)
+    ? liveSummary.items
+      .filter((item) => String(item?.title || '').trim())
+      .map((item) => ({
+        title: String(item.title || '').trim(),
+        detail: String(item.detail || '').trim(),
+      }))
+    : [];
+  const liveSummaryLabel = String(liveSummary?.label || '').trim();
+  if (liveSummaryItems.length > 0 || liveSummaryLabel) {
+    return {
+      label: liveSummaryItems[liveSummaryItems.length - 1]?.title || liveSummaryLabel || 'Working…',
+      items: liveSummaryItems,
+    };
+  }
+
   const items = Array.isArray(run?.items) ? run.items : [];
   const recentItems = [];
   let lastKey = '';

@@ -631,6 +631,308 @@ describe('RemoteExecutionService', () => {
     expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('resumes a stopped cached managed lease before the next code-session run', async () => {
+    const root = createRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
+    let now = 3_000;
+    const createLeaseSpy = vi.fn(async (request) => createLease(request.localWorkspaceRoot, {
+      id: 'managed-stopped-lease',
+      leaseMode: 'managed',
+      state: 'stopped',
+    }));
+    const resumeLeaseSpy = vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, {
+      ...lease,
+      leaseMode: 'managed',
+      state: 'running',
+    }));
+    const runWithLeaseSpy = vi.fn(async (lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest) => ({
+      targetId: request.target.id,
+      backendKind: request.target.backendKind,
+      profileId: request.target.profileId,
+      profileName: request.target.profileName,
+      requestedCommand: request.command.requestedCommand,
+      status: 'succeeded' as const,
+      sandboxId: lease.sandboxId,
+      stdout: '/workspace',
+      stderr: '',
+      durationMs: 5,
+      startedAt: now,
+      completedAt: now + 5,
+      networkMode: request.target.networkMode,
+      allowedDomains: [...request.target.allowedDomains],
+      allowedCidrs: [...request.target.allowedCidrs],
+      stagedFiles: request.stagedFiles.length,
+      stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
+      workspaceRoot: request.workspaceRoot,
+      cwd: request.cwd,
+      artifactFiles: [],
+    }));
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: true,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+          state: typeof lease.state === 'string' ? lease.state : 'stopped',
+        })),
+        createLease: createLeaseSpy,
+        resumeLease: resumeLeaseSpy,
+        runWithLease: runWithLeaseSpy,
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
+      }],
+      now: () => now,
+    });
+
+    await service.acquireLease({
+      target: TARGET,
+      localWorkspaceRoot: root,
+      codeSessionId: 'code-session-stopped',
+      leaseMode: 'managed',
+    });
+
+    const result = await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      codeSessionId: 'code-session-stopped',
+      leaseMode: 'managed',
+    });
+
+    expect(createLeaseSpy).toHaveBeenCalledTimes(1);
+    expect(resumeLeaseSpy).toHaveBeenCalledTimes(1);
+    expect(runWithLeaseSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'managed-stopped-lease',
+        leaseMode: 'managed',
+        state: 'running',
+      }),
+      expect.any(Object),
+    );
+    expect(result.leaseId).toBe('managed-stopped-lease');
+    expect(result.leaseReused).toBe(true);
+  });
+
+  it('resumes a preferred stopped managed lease before probing or creating a replacement sandbox', async () => {
+    const root = createRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
+    let now = 3_500;
+    const probe = vi.fn(async () => ({
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      healthState: 'healthy' as const,
+      reason: 'ok',
+      checkedAt: now,
+      durationMs: 5,
+    }));
+    const createLeaseSpy = vi.fn(async () => {
+      throw new Error('Should not create a replacement lease when a preferred managed lease is reusable.');
+    });
+    const resumeLeaseSpy = vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, {
+      ...lease,
+      id: 'preferred-managed-lease',
+      leaseMode: 'managed',
+      state: 'running',
+    }));
+    const runWithLeaseSpy = vi.fn(async (lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest) => ({
+      targetId: request.target.id,
+      backendKind: request.target.backendKind,
+      profileId: request.target.profileId,
+      profileName: request.target.profileName,
+      requestedCommand: request.command.requestedCommand,
+      status: 'succeeded' as const,
+      sandboxId: lease.sandboxId,
+      stdout: '/workspace',
+      stderr: '',
+      durationMs: 5,
+      startedAt: now,
+      completedAt: now + 5,
+      networkMode: request.target.networkMode,
+      allowedDomains: [...request.target.allowedDomains],
+      allowedCidrs: [...request.target.allowedCidrs],
+      stagedFiles: request.stagedFiles.length,
+      stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
+      workspaceRoot: request.workspaceRoot,
+      cwd: request.cwd,
+      artifactFiles: [],
+    }));
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: true,
+        },
+        probe,
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+          state: typeof lease.state === 'string' ? lease.state : 'stopped',
+        })),
+        createLease: createLeaseSpy,
+        resumeLease: resumeLeaseSpy,
+        runWithLease: runWithLeaseSpy,
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
+      }],
+      now: () => now,
+    });
+    const preferredLease = createLease(root, {
+      id: 'preferred-managed-lease',
+      leaseMode: 'managed',
+      state: 'stopped',
+    });
+
+    const result = await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      preferredLease,
+      codeSessionId: 'code-session-preferred',
+      leaseMode: 'managed',
+    });
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(createLeaseSpy).not.toHaveBeenCalled();
+    expect(resumeLeaseSpy).toHaveBeenCalledTimes(1);
+    expect(runWithLeaseSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'preferred-managed-lease',
+        leaseMode: 'managed',
+        state: 'running',
+      }),
+      expect.any(Object),
+    );
+    expect(result.leaseId).toBe('preferred-managed-lease');
+    expect(result.leaseReused).toBe(true);
+  });
+
+  it('does not create a replacement lease when a stopped managed lease cannot be resumed', async () => {
+    const root = createRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
+    let now = 4_000;
+    const createLeaseSpy = vi.fn(async (request) => createLease(request.localWorkspaceRoot, {
+      id: 'managed-stopped-lease',
+      leaseMode: 'managed',
+      state: 'stopped',
+    }));
+    const resumeLeaseSpy = vi.fn(async () => {
+      throw new Error('Managed sandbox cannot be restarted.');
+    });
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+          state: typeof lease.state === 'string' ? lease.state : 'stopped',
+        })),
+        createLease: createLeaseSpy,
+        resumeLease: resumeLeaseSpy,
+        runWithLease: vi.fn(),
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
+      }],
+      now: () => now,
+    });
+
+    await service.acquireLease({
+      target: TARGET,
+      localWorkspaceRoot: root,
+      codeSessionId: 'code-session-stopped',
+      leaseMode: 'managed',
+    });
+
+    await expect(service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      codeSessionId: 'code-session-stopped',
+      leaseMode: 'managed',
+    })).rejects.toThrow('Managed sandbox cannot be restarted.');
+
+    expect(createLeaseSpy).toHaveBeenCalledTimes(1);
+    expect(resumeLeaseSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('caches successful probe results for repeated ephemeral jobs', async () => {
     const root = createRoot();
     writeFileSync(join(root, 'package.json'), '{"name":"demo"}');

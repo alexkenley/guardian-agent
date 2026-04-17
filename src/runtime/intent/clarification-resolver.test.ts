@@ -129,4 +129,19 @@ describe('clarification-resolver', () => {
     expect(route).toBe('automation_authoring');
     expect(operation).toBe('create');
   });
+
+  it('repairs explicit filesystem writes that were misclassified as reads', () => {
+    const repairContext: IntentGatewayRepairContext = {
+      sourceContent: 'In this workspace, write a short report to C:\\Sensitive\\round2-approval.txt and continue once approval is granted.',
+    };
+
+    const operation = repairIntentGatewayOperation(
+      'read',
+      'filesystem_task',
+      'new_request',
+      repairContext,
+    );
+
+    expect(operation).toBe('create');
+  });
 });

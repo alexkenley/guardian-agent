@@ -1,4 +1,5 @@
 import type { UserMessage } from '../agent/types.js';
+import { getProviderTier } from '../llm/provider-metadata.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { ContentTrustLevel, ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import {
@@ -40,6 +41,7 @@ import {
 } from '../runtime/execution-profiles.js';
 import {
   buildRoutedIntentAdditionalSection,
+  buildToolExecutionCorrectionPrompt,
   prepareToolExecutionForIntent,
 } from '../runtime/routed-tool-execution.js';
 import { readApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
@@ -53,6 +55,12 @@ import {
   stripLeadingContextPrefix,
   toLLMToolDef,
 } from '../chat-agent-helpers.js';
+import {
+  buildAnswerFirstSkillFallbackResponse,
+  buildAnswerFirstSkillCorrectionPrompt,
+  isAnswerFirstSkillResponseSufficient,
+  shouldUseAnswerFirstForSkills,
+} from '../util/answer-first-skills.js';
 import type { ExecutionPlan, PlanNode } from '../runtime/planner/types.js';
 import type { PlanExecutionOutcome, PlanExecutionPauseControl } from '../runtime/planner/orchestrator.js';
 
@@ -84,6 +92,7 @@ interface SuspendedToolLoopSession {
   kind: 'tool_loop';
   llmMessages: ChatMessage[];
   pendingTools: SuspendedToolCall[];
+  originalMessage: UserMessage;
   executionProfile?: SelectedExecutionProfile;
 }
 
@@ -140,6 +149,14 @@ function buildWorkerPromptAdditionalSections(
   return sections.length > 0 ? sections : undefined;
 }
 
+function shouldReuseWorkerPreRoutedIntentGateway(
+  record: IntentGatewayRecord | null | undefined,
+): record is IntentGatewayRecord {
+  if (!record) return false;
+  if (record.available === false) return true;
+  return shouldReusePreRoutedIntentGateway(record);
+}
+
 export interface WorkerMessageHandleParams {
   message: UserMessage;
   systemPrompt: string;
@@ -191,6 +208,52 @@ function buildExecutionProfileResponseSource(
       : {}),
     usedFallback: false,
   };
+}
+
+function buildChatResponseSource(
+  response: BrokeredChatResponse,
+  executionProfile: SelectedExecutionProfile | null | undefined,
+  options: {
+    usedFallback: boolean;
+    notice?: string;
+  },
+): ResponseSourceMetadata | undefined {
+  if (response.providerLocality !== 'local' && response.providerLocality !== 'external') {
+    return undefined;
+  }
+  const actualProviderName = typeof response.providerName === 'string'
+    ? response.providerName.trim()
+    : '';
+  const useSelectedExecutionProfile = !!executionProfile
+    && (
+      !actualProviderName
+      || actualProviderName === executionProfile.providerName
+      || actualProviderName === executionProfile.providerType
+    );
+  const providerName = useSelectedExecutionProfile
+    ? executionProfile.providerType
+    : actualProviderName;
+  const providerProfileName = useSelectedExecutionProfile
+    && executionProfile.providerName !== executionProfile.providerType
+    ? executionProfile.providerName
+    : undefined;
+  return {
+    locality: response.providerLocality,
+    ...(providerName ? { providerName } : {}),
+    ...(providerProfileName ? { providerProfileName } : {}),
+    ...((useSelectedExecutionProfile ? executionProfile.providerTier : getProviderTier(providerName))
+      ? { providerTier: (useSelectedExecutionProfile ? executionProfile.providerTier : getProviderTier(providerName)) }
+      : {}),
+    ...(response.model?.trim() ? { model: response.model.trim() } : {}),
+    usedFallback: options.usedFallback,
+    ...(options.notice ? { notice: options.notice } : {}),
+  };
+}
+
+function isRetryableBrokeredChatFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.trim() : String(error ?? '').trim();
+  if (!message) return false;
+  return /\b(?:internal server error|service(?: temporarily)? unavailable|gateway timeout|bad gateway|rate limit|quota|too many requests|could not reach|network error|model not found|model\b.+\bnot available|api error\s+(?:5\d{2}|429))\b/i.test(message);
 }
 
 function createPlannerPauseControl(result: unknown): PlanExecutionPauseControl {
@@ -1054,7 +1117,16 @@ export class BrokeredWorkerSession {
     this.suspendedSession = null;
     this.pendingApprovals = null;
 
-    return this.executeLoop(params.message, resumedMessages, chatFn, toolExecutor, params);
+    return this.executeLoop(
+      suspended.originalMessage,
+      resumedMessages,
+      chatFn,
+      toolExecutor,
+      {
+        ...params,
+        message: suspended.originalMessage,
+      },
+    );
   }
 
   private async resumeSuspendedPlannerAfterApproval(
@@ -1299,7 +1371,7 @@ export class BrokeredWorkerSession {
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
   ): Promise<IntentGatewayRecord | null> {
     const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
-    if (shouldReusePreRoutedIntentGateway(preRouted)) {
+    if (shouldReuseWorkerPreRoutedIntentGateway(preRouted)) {
       return preRouted;
     }
     return this.intentGateway.classify(
@@ -1344,17 +1416,7 @@ export class BrokeredWorkerSession {
     let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<BrokeredChatResponse>) | undefined;
     if (params.hasFallbackProvider || selectedExecutionProfile?.fallbackProviderOrder?.length) {
       fallbackChatFn = async (msgs, opts) => {
-        responseSource = {
-          locality: selectedExecutionProfile?.providerLocality ?? 'external',
-          ...(selectedExecutionProfile?.providerType ? { providerName: selectedExecutionProfile.providerType } : {}),
-          ...(selectedExecutionProfile?.providerName && selectedExecutionProfile.providerName !== selectedExecutionProfile.providerType
-            ? { providerProfileName: selectedExecutionProfile.providerName }
-            : {}),
-          ...(selectedExecutionProfile?.providerTier ? { providerTier: selectedExecutionProfile.providerTier } : {}),
-          usedFallback: true,
-          notice: 'Retried with an alternate model after the local model failed to format a tool call.',
-        };
-        return this.client.llmChat(
+        const fallbackResponse = await this.client.llmChat(
           msgs,
           opts,
           selectedExecutionProfile
@@ -1365,48 +1427,40 @@ export class BrokeredWorkerSession {
               }
             : { useFallback: true },
         );
+        responseSource = buildChatResponseSource(fallbackResponse, selectedExecutionProfile, {
+          usedFallback: true,
+          notice: 'Retried with an alternate model.',
+        }) ?? responseSource;
+        return fallbackResponse;
       };
     }
 
+    const runFallbackChat = async (
+      messages: ChatMessage[],
+      options: ChatOptions | undefined,
+      notice: string,
+    ): Promise<BrokeredChatResponse> => {
+      if (!fallbackChatFn) {
+        throw new Error('Fallback chat requested without an available fallback provider.');
+      }
+      const fallbackResponse = await fallbackChatFn(messages, options);
+      responseSource = buildChatResponseSource(fallbackResponse, selectedExecutionProfile, {
+        usedFallback: true,
+        notice,
+      }) ?? responseSource;
+      return fallbackResponse;
+    };
+
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(message.content);
+    const toolExecutionCorrectionPrompt = buildToolExecutionCorrectionPrompt(intentDecision);
 
     const result = await runLlmLoop(
       llmMessages,
       async (messages, options) => {
         try {
           const chatResponse = await chatFn(messages, options);
-          responseSource = responseSource ?? (
-            chatResponse.providerLocality === 'local' || chatResponse.providerLocality === 'external'
-              ? (() => {
-                  const actualProviderName = typeof chatResponse.providerName === 'string'
-                    ? chatResponse.providerName.trim()
-                    : '';
-                  const useSelectedExecutionProfile = !!selectedExecutionProfile
-                    && (
-                      !actualProviderName
-                      || actualProviderName === selectedExecutionProfile.providerName
-                      || actualProviderName === selectedExecutionProfile.providerType
-                    );
-                  const providerName = useSelectedExecutionProfile
-                    ? selectedExecutionProfile.providerType
-                    : actualProviderName;
-                  const selectedProviderTier = useSelectedExecutionProfile
-                    ? selectedExecutionProfile.providerTier
-                    : undefined;
-                  return {
-                    locality: chatResponse.providerLocality,
-                    ...(providerName ? { providerName } : {}),
-                    ...(useSelectedExecutionProfile
-                      && selectedExecutionProfile.providerName !== selectedExecutionProfile.providerType
-                      ? { providerProfileName: selectedExecutionProfile.providerName }
-                      : {}),
-                    ...(selectedProviderTier
-                      ? { providerTier: selectedProviderTier }
-                      : {}),
-                  } satisfies ResponseSourceMetadata;
-                })()
-              : undefined
-          );
+          responseSource = responseSource
+            ?? buildChatResponseSource(chatResponse, selectedExecutionProfile, { usedFallback: false });
           return chatResponse;
         } catch (error) {
           if (isLocalToolCallParseError(error)) {
@@ -1414,9 +1468,20 @@ export class BrokeredWorkerSession {
               throw error;
             }
             if (fallbackChatFn) {
-              return fallbackChatFn(messages, options);
+              return runFallbackChat(
+                messages,
+                options,
+                'Retried with an alternate model after the local model failed to format a tool call.',
+              );
             }
             throw new Error(buildLocalModelTooComplicatedMessage());
+          }
+          if (fallbackChatFn && isRetryableBrokeredChatFailure(error)) {
+            return runFallbackChat(
+              messages,
+              options,
+              'Retried with an alternate model after the selected model failed to complete the request.',
+            );
           }
           throw error;
         }
@@ -1460,6 +1525,11 @@ export class BrokeredWorkerSession {
       {
         allowModelMemoryMutation,
         fallbackChatFn,
+        preferAnswerFirst: shouldUseAnswerFirstForSkills(params.activeSkills),
+        answerFirstCorrectionPrompt: buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, stripLeadingContextPrefix(message.content)),
+        answerFirstFallbackContent: buildAnswerFirstSkillFallbackResponse(params.activeSkills, stripLeadingContextPrefix(message.content)),
+        answerFirstResponseIsSufficient: (content) => isAnswerFirstSkillResponseSufficient(params.activeSkills, content),
+        toolExecutionCorrectionPrompt,
       },
     );
 
@@ -1473,6 +1543,10 @@ export class BrokeredWorkerSession {
         kind: 'tool_loop',
         llmMessages: result.messages,
         pendingTools,
+        originalMessage: {
+          ...message,
+          ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
+        },
         ...(selectedExecutionProfile ? { executionProfile: selectedExecutionProfile } : {}),
       };
 

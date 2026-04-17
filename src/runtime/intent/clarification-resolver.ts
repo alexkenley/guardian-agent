@@ -1,4 +1,7 @@
-import { extractExplicitRemoteExecCommand } from './entity-resolvers/coding.js';
+import {
+  extractExplicitRemoteExecCommand,
+  inferExplicitFilesystemTaskOperation,
+} from './entity-resolvers/coding.js';
 import {
   inferAutomationControlOperation,
   inferAutomationOutputOperation,
@@ -101,6 +104,12 @@ export function repairIntentGatewayOperation(
   }
   if (route === 'automation_output_task' && isExplicitAutomationOutputRequest(rawSourceContent)) {
     return inferAutomationOutputOperation(rawSourceContent, operation);
+  }
+  if (route === 'filesystem_task') {
+    const inferredFilesystemOperation = inferExplicitFilesystemTaskOperation(rawSourceContent, operation);
+    if (inferredFilesystemOperation) {
+      return inferredFilesystemOperation;
+    }
   }
   if (
     route === 'coding_task'

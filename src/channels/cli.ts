@@ -258,6 +258,20 @@ function extractCliLiveProgressSnapshot(event: SSEEvent, requestId: string): Cli
   if (normalizedRequestId && detail.summary.runId !== normalizedRequestId) return null;
   if (!normalizedRequestId) return null;
 
+  const liveSummaryItem = detail.liveSummary?.items[detail.liveSummary.items.length - 1];
+  const liveSummaryTitle = typeof liveSummaryItem?.title === 'string' && liveSummaryItem.title.trim()
+    ? liveSummaryItem.title.trim()
+    : (typeof detail.liveSummary?.label === 'string' ? detail.liveSummary.label.trim() : '');
+  if (liveSummaryTitle) {
+    const detailText = typeof liveSummaryItem?.detail === 'string' ? liveSummaryItem.detail.trim() : '';
+    return {
+      key: `live:${detail.summary.runId}:${liveSummaryTitle}:${detailText}`,
+      tone: mapCliProgressTone(undefined, detail.summary.status),
+      title: liveSummaryTitle,
+      detail: detailText,
+    };
+  }
+
   const meaningfulItems = detail.items.filter(isMeaningfulCliTimelineItem);
   const latestItem = meaningfulItems[meaningfulItems.length - 1];
   if (latestItem && latestItem.title.trim()) {

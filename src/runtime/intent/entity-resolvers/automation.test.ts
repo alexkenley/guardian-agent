@@ -25,4 +25,10 @@ describe('automation intent entity resolver', () => {
     expect(isExplicitAutomationOutputRequest(content)).toBe(true);
     expect(inferAutomationOutputOperation(content)).toBe('inspect');
   });
+
+  it('ignores repository file references that happen to include automation terms', () => {
+    const content = 'Inspect src/runtime/intent/unstructured-recovery.ts, src/runtime/intent/entity-resolvers/automation.ts, and src/worker/worker-session.ts for any path where quarantined content could still leak into later planning. Write tmp/round2-security-review.md with findings ordered by severity.';
+    expect(isExplicitAutomationControlRequest(content)).toBe(false);
+    expect(isExplicitAutomationOutputRequest(content)).toBe(false);
+  });
 });

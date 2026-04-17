@@ -111,6 +111,81 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(seenTools).toContain('code_plan');
   });
 
+  it('uses the answer-first path for writing-plans skills before entering the brokered tool loop', async () => {
+    const listLoadedTools = vi.fn(async () => [
+      {
+        name: 'code_plan',
+        description: 'Generate a coding plan.',
+        parameters: { type: 'object', properties: { task: { type: 'string' } } },
+      },
+    ]);
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'none',
+            confidence: 'low',
+            summary: 'Stay in the normal coding assistant path.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (Array.isArray(options?.tools) && options.tools.length === 0) {
+        return {
+          content: 'Acceptance Gates\n- Keep the archived-routines scope bounded.\n\nExisting Checks To Reuse\n- Reuse the current dashboard and coding harness coverage.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'anthropic',
+        } as ChatResponse;
+      }
+      throw new Error('The brokered worker should not enter the tool loop when answer-first succeeds.');
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      listLoadedTools,
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      activeSkills: [{
+        id: 'writing-plans',
+        name: 'Writing Plans',
+        summary: 'Write bounded implementation plans with acceptance gates and existing checks.',
+      }],
+      message: {
+        id: 'msg-plan-answer-first',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Write an implementation plan for adding archived routines to this app. Break this down before editing anything.',
+        timestamp: Date.now(),
+        metadata: {
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-1',
+          },
+        },
+      },
+    });
+
+    expect(result.content).toContain('Acceptance Gates');
+    expect(result.content).toContain('Existing Checks To Reuse');
+    expect(llmChat).toHaveBeenCalled();
+    expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.length === 0)).toBe(true);
+    expect(llmChat.mock.calls.some((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'code_plan'))).toBe(false);
+  });
+
   it('suppresses approval-looking text when no real approval metadata exists', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
@@ -416,6 +491,293 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(
       llmChat.mock.calls.filter(([, options]) => options?.tools?.[0]?.name === 'route_intent'),
     ).toHaveLength(1);
+  });
+
+  it('retries through fallback providers when the selected model fails with a retryable API error', async () => {
+    const llmChat = vi.fn(async (_messages, _options, routing) => {
+      if (routing?.useFallback === true) {
+        return {
+          content: 'Fallback provider completed the request.',
+          model: 'grok-4.1-fast-reasoning',
+          finishReason: 'stop',
+          providerLocality: 'external',
+          providerName: 'xai',
+        } as ChatResponse;
+      }
+      throw new Error('Ollama Cloud API error 503: Service Temporarily Unavailable');
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      hasFallbackProvider: true,
+      executionProfile: {
+        id: 'managed_cloud_direct',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'glm-5.1',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'low',
+        contextBudget: 80_000,
+        toolContextMode: 'standard',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['xai'],
+        reason: 'test fallback profile',
+      },
+      message: {
+        id: 'msg-fallback-retry',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Create a quick summary of the current workspace state.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Answer directly.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(result.content).toBe('Fallback provider completed the request.');
+    expect(llmChat.mock.calls.some((call) => call[2]?.useFallback === true)).toBe(true);
+    expect(result.metadata).toMatchObject({
+      responseSource: {
+        locality: 'external',
+        providerName: 'xai',
+        providerTier: 'frontier',
+        model: 'grok-4.1-fast-reasoning',
+        usedFallback: true,
+        notice: 'Retried with an alternate model after the selected model failed to complete the request.',
+      },
+    });
+  });
+
+  it('resumes approval-blocked remote runs with the original request text so follow-up remote steps keep the same profile', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('The pre-routed coding intent should have been reused.');
+      }
+      if (Array.isArray(options?.tools) && options.tools.length === 0) {
+        return {
+          content: 'Approval is pending.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'ollama-cloud-coding',
+        } as ChatResponse;
+      }
+      const hasFirstToolResult = messages.some((entry) => entry.role === 'tool' && entry.toolCallId === 'tool-call-1');
+      const hasSecondToolResult = messages.some((entry) => entry.role === 'tool' && entry.toolCallId === 'tool-call-2');
+      if (!hasFirstToolResult) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'tool-call-1',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'pwd' }),
+          }],
+          providerLocality: 'external',
+          providerName: 'ollama-cloud-coding',
+        } as ChatResponse;
+      }
+      if (!hasSecondToolResult) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'tool-call-2',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'pwd' }),
+          }],
+          providerLocality: 'external',
+          providerName: 'ollama-cloud-coding',
+        } as ChatResponse;
+      }
+      return {
+        content: 'Remote sandbox retry stayed pinned to the Daytona profile.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'ollama-cloud-coding',
+      } as ChatResponse;
+    });
+
+    let remoteCallCount = 0;
+    const callTool = vi.fn(async (request: Record<string, unknown>) => {
+      if (request.toolName !== 'code_remote_exec') {
+        throw new Error(`Unexpected tool ${String(request.toolName)}`);
+      }
+      remoteCallCount += 1;
+      if (remoteCallCount === 1) {
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-remote-1',
+          jobId: 'job-remote-1',
+          message: 'Approval required.',
+          approvalSummary: {
+            toolName: 'code_remote_exec',
+            argsPreview: '{"command":"pwd","profile":"Daytona"}',
+          },
+        };
+      }
+      expect(request.args).toMatchObject({
+        command: 'pwd',
+        profile: 'Daytona',
+      });
+      expect(request.codeContext).toMatchObject({
+        workspaceRoot: '/repo',
+        sessionId: 'session-123',
+      });
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-remote-2',
+        message: 'Ran pwd in the resumed sandbox.',
+        output: {
+          stdout: '/workspace',
+          stderr: '',
+        },
+      };
+    });
+
+    const getApprovalResult = vi.fn(async () => ({
+      success: true,
+      status: 'approved',
+      jobId: 'job-remote-1',
+      message: 'Approved and executed.',
+      output: {
+        stdout: '/workspace',
+        stderr: '',
+      },
+    }));
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            profile: { type: 'string' },
+          },
+          required: ['command'],
+        },
+        risk: 'mutating',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult,
+    } as never);
+
+    const initial = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-remote-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        surfaceId: 'surface-remote',
+        channel: 'web',
+        content: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session, then run `pwd` again in the same remote sandbox.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata({
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'session-123',
+          },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Run remote sandbox commands in the attached coding session.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            entities: {
+              codingRemoteExecRequested: true,
+              profileId: 'Daytona',
+            },
+          },
+        }),
+      },
+    });
+
+    expect(initial.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          approvalSummaries: [
+            {
+              id: 'approval-remote-1',
+              toolName: 'code_remote_exec',
+            },
+          ],
+        },
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-remote-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-remote-1',
+          decision: 'approved',
+          resultMessage: 'Approved and executed.',
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(getApprovalResult).toHaveBeenCalledWith('approval-remote-1');
+    expect(resumed.content).toBe('Remote sandbox retry stayed pinned to the Daytona profile.');
+    expect(callTool).toHaveBeenCalledTimes(2);
   });
 
   it('answers tool-report questions only after the gateway classifies the turn as general assistant', async () => {
@@ -939,6 +1301,76 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(llmChat.mock.calls.some((call) => call[1]?.tools?.[0]?.name === 'route_intent')).toBe(false);
     expect(callTool).not.toHaveBeenCalled();
     expect(result.content).toBe('Stayed on the local calendar path.');
+  });
+
+  it('reuses unavailable pre-routed intent metadata in brokered sessions so worker reclassification cannot drift into coding-session control', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'coding_session_control',
+            confidence: 'low',
+            operation: 'navigate',
+            summary: 'List coding workspaces.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      const systemPrompt = messages.find((entry) => entry.role === 'system')?.content ?? '';
+      expect(systemPrompt).toContain('[routed-intent]');
+      expect(systemPrompt).toContain('route: unknown');
+      return {
+        content: 'Preserved the original unavailable route without drifting into workspace listing.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-pre-routed-unavailable',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'In this workspace, write a short report to C:\\Sensitive\\round2-approval.txt and continue once approval is granted.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: false,
+          model: 'unknown',
+          latencyMs: 3,
+          decision: {
+            route: 'unknown',
+            confidence: 'low',
+            operation: 'unknown',
+            summary: 'Routing provider unavailable.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(llmChat.mock.calls.some((call) => call[1]?.tools?.[0]?.name === 'route_intent')).toBe(false);
+    expect(result.content).toBe('Preserved the original unavailable route without drifting into workspace listing.');
   });
 
   it('suspends and resumes complex planning tasks through brokered approval metadata', async () => {

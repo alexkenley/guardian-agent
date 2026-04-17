@@ -675,6 +675,147 @@ describe('ToolExecutor', () => {
     }));
   });
 
+  it('passes stopped managed sandbox leases back into code-session remote runs so restartable providers can resume them', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Stopped Managed Sandbox Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'managed-lease-1',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-stopped-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'stopped',
+          state: 'stopped',
+          acquiredAt: 10,
+          lastUsedAt: 25,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/package.json'],
+          healthState: 'healthy',
+          healthReason: 'manually stopped',
+          healthCheckedAt: 25,
+        }],
+      },
+    });
+
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox-stopped-1',
+        leaseId: 'managed-lease-1',
+        leaseScope: 'code_session' as const,
+        leaseReused: true,
+        leaseMode: 'managed' as const,
+        exitCode: 0,
+        stdout: '/workspace\n',
+        stderr: '',
+        durationMs: 50,
+        startedAt: 10,
+        completedAt: 60,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 0,
+        stagedBytes: 0,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+      listActiveLeases: vi.fn(() => [{
+        id: 'managed-lease-1',
+        targetId: 'daytona:daytona-main',
+        backendKind: 'daytona_sandbox' as const,
+        profileId: 'daytona-main',
+        profileName: 'Daytona Main',
+        sandboxId: 'sandbox-stopped-1',
+        localWorkspaceRoot: root,
+        remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+        acquiredAt: 10,
+        lastUsedAt: 60,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        trackedRemotePaths: ['/workspace/package.json'],
+        leaseMode: 'managed' as const,
+        state: 'running',
+      }]),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['pwd'],
+      allowedDomains: ['localhost', 'daytona.io'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runRemoteExecutionJob({
+      profileId: 'Daytona',
+      command: {
+        requestedCommand: 'pwd',
+        includePaths: [],
+        artifactPaths: [],
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      request: {
+        origin: 'web',
+        channel: 'web',
+        codeContext: {
+          workspaceRoot: root,
+          sessionId: session.id,
+        },
+      },
+      leaseMode: 'ephemeral',
+    });
+
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      codeSessionId: session.id,
+      leaseMode: 'managed',
+      preferredLease: expect.objectContaining({
+        id: 'managed-lease-1',
+        leaseMode: 'managed',
+        state: 'stopped',
+      }),
+    }));
+    expect(result.leaseMode).toBe('managed');
+    expect(result.leaseReused).toBe(true);
+  });
+
   it('allows the built-in Vercel remote sandbox control-plane host without widening allowedDomains', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

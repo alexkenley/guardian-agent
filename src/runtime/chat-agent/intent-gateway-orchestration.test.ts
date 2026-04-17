@@ -275,6 +275,17 @@ describe('intent-gateway-orchestration', () => {
     })).toBe('Check my unread email.');
   });
 
+  it('restores the last actionable request after sandbox prerequisite failures are cleared', () => {
+    expect(resolveRetryAfterFailureContinuationContent({
+      content: "I've started that Daytona Sandbox so try again with the same request",
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.',
+      }),
+      conversationKey: { agentId: 'assistant', userId: 'user-1', channel: 'web' },
+      readLatestAssistantOutput: () => 'The remote execution failed. The Daytona Main sandbox is currently stopped and cannot accept commands until restarted.',
+    })).toBe('In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.');
+  });
+
   it('delegates affirmative workspace-switch replies to the attach handler', async () => {
     const pendingAction = makePendingAction({
       blocker: {

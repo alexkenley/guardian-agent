@@ -8,6 +8,7 @@ const AUTOMATION_CONTROL_VERB_PATTERN = /\b(?:disable|enable|run|inspect|show|re
 const AUTOMATION_OUTPUT_ANALYSIS_PATTERN = /\b(analy[sz]e|summari[sz]e|explain|review|compare|investigate|interpret|what did(?:\s+it)?\s+find)\b/i;
 const AUTOMATION_OUTPUT_CONTEXT_PATTERN = /\b(output|outputs|result|results|findings|history|timeline|step output|run output)\b/i;
 const INJECTED_SKILL_CATALOG_PATTERN = /\brelevant skills(?: when useful)?:[\s\S]*$/i;
+const FILE_REFERENCE_PATTERN = /\b(?:[a-z]:\\[^\s"'`]+|(?:src|docs|tmp|web|policies|scripts|native|skills)\/[^\s"'`]+|[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml))\b/gi;
 
 export function isExplicitAutomationAuthoringRequest(content: string | undefined): boolean {
   const normalized = normalizeAutomationIntentSource(content);
@@ -128,5 +129,9 @@ function cleanAutomationNameCandidate(value: string | undefined): string | undef
 }
 
 function normalizeAutomationIntentSource(content: string | undefined): string {
-  return collapseIntentGatewayWhitespace((content ?? '').replace(INJECTED_SKILL_CATALOG_PATTERN, ' '));
+  return collapseIntentGatewayWhitespace(
+    (content ?? '')
+      .replace(INJECTED_SKILL_CATALOG_PATTERN, ' ')
+      .replace(FILE_REFERENCE_PATTERN, ' '),
+  );
 }

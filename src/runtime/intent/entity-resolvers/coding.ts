@@ -222,7 +222,30 @@ export function inferExplicitFilesystemTaskOperation(
   parsedOperation: IntentGatewayOperation,
 ): IntentGatewayOperation | null {
   if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
-  if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+  const inferredOperation = inferFilesystemOperationFromVerbs(normalized);
+  if (!parsedOperation || parsedOperation === 'unknown') {
+    return inferredOperation;
+  }
+  if (!inferredOperation) {
+    return parsedOperation;
+  }
+  const parsedIsMutating = parsedOperation === 'create'
+    || parsedOperation === 'update'
+    || parsedOperation === 'delete';
+  const inferredIsMutating = inferredOperation === 'create'
+    || inferredOperation === 'update'
+    || inferredOperation === 'delete';
+  if (!parsedIsMutating && inferredIsMutating) {
+    return inferredOperation;
+  }
+  return parsedOperation;
+}
+
+export function hasExplicitRepoFileReference(normalized: string): boolean {
+  return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
+}
+
+function inferFilesystemOperationFromVerbs(normalized: string): IntentGatewayOperation | null {
   if (/\b(?:create|add|make|write|save|store|put|touch|mkdir)\b/.test(normalized)) {
     return 'create';
   }
@@ -239,8 +262,4 @@ export function inferExplicitFilesystemTaskOperation(
     return 'read';
   }
   return null;
-}
-
-export function hasExplicitRepoFileReference(normalized: string): boolean {
-  return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
 }

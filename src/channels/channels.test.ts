@@ -373,6 +373,80 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('prefers shared liveSummary commentary for CLI progress updates', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({
+      input,
+      output,
+      dashboard: {
+        onStreamDispatch: async (_agentId, msg, emitSSE) => {
+          const runId = msg.requestId || 'cli-live-summary-run';
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{
+                id: 'prepared',
+                runId,
+                type: 'note',
+                status: 'info',
+                source: 'orchestrator',
+                timestamp: Date.now(),
+                title: 'Prepared request',
+              }, {
+                id: 'delegate',
+                runId,
+                type: 'handoff_started',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now() + 1,
+                title: 'Delegated to Workspace Implementer',
+                detail: 'Brokered worker dispatch started.',
+              }, {
+                id: 'delegate-running',
+                runId,
+                type: 'note',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now() + 2,
+                title: 'Workspace Implementer is working',
+                detail: 'Reviewing source files and approvals.',
+              }],
+              liveSummary: {
+                label: 'Workspace Implementer is working',
+                items: [{
+                  title: 'Delegated to Workspace Implementer',
+                  detail: 'Brokered worker dispatch started.',
+                }, {
+                  title: 'Workspace Implementer is working',
+                  detail: 'Reviewing source files and approvals.',
+                }],
+              },
+            },
+          });
+          return {
+            requestId: runId,
+            runId,
+            content: 'Completed.',
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'fallback' }));
+    output.read();
+
+    input.write('inspect repo\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('[progress] Workspace Implementer is working — Reviewing source files and approvals.');
+    expect(text).not.toContain('[progress] Prepared request');
+
+    await cli.stop();
+  });
+
   it('keeps live progress as durable commentary lines in TTY mode', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

@@ -12,9 +12,10 @@ import type {
 const PROVIDER_MUTATION_METHOD_PATTERN = /\b(create|insert|update|patch|delete|send|remove|modify|forward|reply)\b/i;
 const REPO_INSPECTION_SHELL_PATTERN = /\b(?:git\s+grep|grep|rg|findstr|sed|head|tail|cat|type|get-content)\b/i;
 const GIT_HISTORY_SHELL_PATTERN = /\b(?:git\s+diff|git\s+show|git\s+log|git\s+blame)\b/i;
-const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated)\s+sandbox\b/i;
+const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+sandbox\b/i;
 const EXPLICIT_REMOTE_PROFILE_PATTERN = /\bprofileid\s+([a-z0-9._:-]+)/i;
 const NAMED_REMOTE_PROFILE_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?([a-z0-9][a-z0-9._ -]*?)\s+profile\b/i;
+const NAMED_REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?(?:existing\s+|current\s+|managed\s+)?[a-z0-9][a-z0-9._ -]*?\s+sandbox\b/i;
 const SIMPLE_MKDIR_REMOTE_EXEC_PATTERN = /^\s*mkdir(?:\s+-p)?\s+.+$/i;
 const SIMPLE_TOUCH_REMOTE_EXEC_PATTERN = /^\s*touch\s+.+$/i;
 const SIMPLE_FILE_WRITE_REMOTE_EXEC_PATTERN = /^\s*(?:printf|echo|cat)\b[\s\S]*(?:^|[;&|]\s*|\s)(?:>{1,2}|tee\b)/i;
@@ -152,6 +153,48 @@ export function buildRoutedIntentAdditionalSection(
     mode: 'explicit',
     content: wrapTaggedSection('routed-intent', lines.join('\n')),
   };
+}
+
+export function buildToolExecutionCorrectionPrompt(
+  decision: IntentGatewayDecision | null | undefined,
+): string | undefined {
+  if (!decision) return undefined;
+
+  if (decision.route === 'complex_planning_task') {
+    const lines = [
+      'System correction: this turn is already routed to Guardian\'s brokered complex-planning path.',
+      'Do not stop at narration, limitations, or "I will inspect" commentary before using tools.',
+      'Use the brokered filesystem and repo tools now to inspect the requested files and create the requested scratch outputs.',
+      'Only ask the user for approval after a real tool result returns pending_approval.',
+    ];
+    if (decision.entities.codingRemoteExecRequested === true) {
+      lines.splice(
+        2,
+        0,
+        'Because the user explicitly requested remote sandbox execution, keep the execution in code_remote_exec or remote-required verification tools instead of drifting back to host tooling.',
+      );
+    }
+    return lines.join(' ');
+  }
+
+  if (decision.route === 'coding_task' && (decision.requiresRepoGrounding || decision.operation === 'run')) {
+    const lines = [
+      'System correction: this turn is a repo-grounded coding request.',
+      'Do not answer from memory or stop at narration before using repo/filesystem tools.',
+      'Inspect the requested files with fs_search, code_symbol_search, and fs_read, and write any requested scratch outputs with fs_write/fs_mkdir unless a real tool result blocks you.',
+      'Only ask the user for approval after a real tool result returns pending_approval.',
+    ];
+    if (decision.entities.codingRemoteExecRequested === true) {
+      lines.splice(
+        3,
+        0,
+        'Because the user explicitly requested remote sandbox execution, keep the execution in code_remote_exec or remote-required verification tools instead of falling back to host execution.',
+      );
+    }
+    return lines.join(' ');
+  }
+
+  return undefined;
 }
 
 function buildIntentRoutedToolDenial(input: {
@@ -331,7 +374,12 @@ function isExplicitRemoteSandboxIntent(
   const normalizedRequest = typeof requestText === 'string'
     ? stripLeadingContextPrefix(requestText).trim()
     : '';
-  return normalizedRequest.length > 0 && REMOTE_SANDBOX_REQUEST_PATTERN.test(normalizedRequest);
+  if (!normalizedRequest) return false;
+  if (resolveExplicitRemoteProfileId(decision, normalizedRequest)) {
+    return true;
+  }
+  return REMOTE_SANDBOX_REQUEST_PATTERN.test(normalizedRequest)
+    || NAMED_REMOTE_SANDBOX_REQUEST_PATTERN.test(normalizedRequest);
 }
 
 function resolveExplicitRemoteProfileId(

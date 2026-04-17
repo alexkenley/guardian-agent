@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ContinuityThreadStore } from '../continuity-threads.js';
 import { PendingActionStore } from '../pending-actions.js';
 import { ChatAgentOrchestrationState } from './orchestration-state.js';
 
@@ -7,6 +8,15 @@ function createStore(nowMs = 1_710_000_000_000): PendingActionStore {
   return new PendingActionStore({
     enabled: false,
     sqlitePath: '/tmp/guardianagent-orchestration-state.test.sqlite',
+    now: () => nowMs,
+  });
+}
+
+function createContinuityStore(nowMs = 1_710_000_000_000): ContinuityThreadStore {
+  return new ContinuityThreadStore({
+    enabled: false,
+    sqlitePath: '/tmp/guardianagent-continuity-state.test.sqlite',
+    retentionDays: 30,
     now: () => nowMs,
   });
 }
@@ -198,5 +208,79 @@ describe('ChatAgentOrchestrationState', () => {
 
     expect(pendingAction?.id).toBe(created.id);
     expect(pendingAction?.resume?.kind).toBe('direct_route');
+  });
+
+  it('does not replace the last actionable request with a referential status check', () => {
+    const nowMs = 1_710_000_000_000;
+    const continuityStore = createContinuityStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const initial = state.updateContinuityThreadFromIntent({
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      routingContent: 'In this workspace, write a short report to C:\\Sensitive\\round2-approval.txt and continue once approval is granted.',
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'filesystem_task',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Write the approval smoke report.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'tool_call',
+          preferredTier: 'local',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'medium',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          entities: {},
+        },
+      },
+    });
+
+    const updated = state.updateContinuityThreadFromIntent({
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: initial,
+      routingContent: 'Did that last request work?',
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'medium',
+          operation: 'read',
+          summary: 'Check whether the previous request succeeded.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          preferredAnswerPath: 'direct',
+          expectedContextPressure: 'low',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          entities: {},
+        },
+      },
+    });
+
+    expect(updated?.lastActionableRequest).toBe('In this workspace, write a short report to C:\\Sensitive\\round2-approval.txt and continue once approval is granted.');
   });
 });

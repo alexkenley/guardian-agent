@@ -7,7 +7,7 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from './typ
 import { assignProvenance } from './provenance.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import { parseToolJobOutputPreview } from '../tools/job-results.js';
-import type { ChatMessage, ChatOptions } from '../llm/types.js';
+import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider } from '../llm/types.js';
 import { getProviderLocalityFromName } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('broker-server');
@@ -286,21 +286,34 @@ export class BrokerServer {
 
           const instance = this.runtime.registry.get(token.agentId);
           const primaryName = instance?.definition.providerName ?? this.runtime.defaultProviderName;
-          let provider = this.runtime.getProvider(requestedProviderName ?? primaryName);
+          const preferredProviderName = requestedProviderName ?? primaryName;
+          const candidateNames = useFallback
+            ? [...new Set([
+                ...requestedFallbackOrder,
+                ...this.runtime.getProviderNames(),
+              ])].filter((name) => name && name !== preferredProviderName)
+            : (preferredProviderName ? [preferredProviderName] : []);
 
-          if (useFallback) {
-            const candidateOrder = requestedFallbackOrder.length > 0
-              ? requestedFallbackOrder
-              : this.runtime.getProviderNames();
-            for (const name of candidateOrder) {
-              if (name !== (requestedProviderName ?? primaryName)) {
-                const p = this.runtime.getProvider(name);
-                if (p) { provider = p; break; }
-              }
+          let provider: LLMProvider | null = null;
+          let chatResponse: ChatResponse | null = null;
+          let lastError: unknown;
+
+          for (const name of candidateNames) {
+            const candidateProvider = this.runtime.getProvider(name);
+            if (!candidateProvider) continue;
+            try {
+              chatResponse = await candidateProvider.chat(chatMessages, chatOptions);
+              provider = candidateProvider;
+              break;
+            } catch (error) {
+              lastError = error;
             }
           }
 
-          if (!provider) {
+          if (!provider || !chatResponse) {
+            if (lastError) {
+              throw lastError;
+            }
             this.sendResponse({
               jsonrpc: '2.0',
               id: request.id,
@@ -309,7 +322,6 @@ export class BrokerServer {
             return;
           }
 
-          const chatResponse = await provider.chat(chatMessages, chatOptions);
           result = {
             ...chatResponse,
             providerName: provider.name,

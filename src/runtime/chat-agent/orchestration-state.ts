@@ -26,6 +26,7 @@ export const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 
 export const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay|sure|switch|replace|switch it|switch to (?:that|the new one|the new request)|replace it|do that instead)\b/i;
 export const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
+const CONTINUITY_STATUS_CHECK_PATTERN = /^(?:did\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task))(?:\s+\w+){0,3}\s+work|what happened(?:\s+(?:with|to|about)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)))?)\??$/i;
 
 const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
 
@@ -176,9 +177,13 @@ export class ChatAgentOrchestrationState {
     }
     const routingContent = input.routingContent.trim();
     const resolvedContent = decision.resolvedContent?.trim();
-    const nextLastActionableRequest = decision.turnRelation === 'new_request'
+    const candidateLastActionableRequest = decision.turnRelation === 'new_request'
       ? (routingContent || undefined)
       : (resolvedContent || undefined);
+    const nextLastActionableRequest = candidateLastActionableRequest
+      && !isContinuityStatusCheck(candidateLastActionableRequest)
+      ? candidateLastActionableRequest
+      : input.continuityThread?.lastActionableRequest;
     const summary = normalizeUserFacingIntentGatewaySummary(decision.summary);
     return this.continuityThreadStore.upsert(
       this.buildContinuityThreadScope(normalizedUserId),
@@ -772,4 +777,8 @@ export class ChatAgentOrchestrationState {
       expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
     }, nowMs);
   }
+}
+
+function isContinuityStatusCheck(content: string): boolean {
+  return CONTINUITY_STATUS_CHECK_PATTERN.test(content.trim());
 }

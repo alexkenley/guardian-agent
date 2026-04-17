@@ -13,6 +13,16 @@ export interface LlmLoopOptions {
   allowModelMemoryMutation?: boolean;
   /** Optional fallback chat function for quality-based retry with an external provider. */
   fallbackChatFn?: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>;
+  /** When true, try a tool-free answer before entering the tool loop. */
+  preferAnswerFirst?: boolean;
+  /** Optional validator for tool-free answer-first content. */
+  answerFirstResponseIsSufficient?: (content: string) => boolean;
+  /** Optional corrective prompt for plan/review/verification skill shape. */
+  answerFirstCorrectionPrompt?: string;
+  /** Optional fallback content when an answer-first skill response stays structurally invalid. */
+  answerFirstFallbackContent?: string;
+  /** Optional system correction used when a repo/file task narrates instead of using tools. */
+  toolExecutionCorrectionPrompt?: string;
 }
 
 // Extracted LLM loop, which can run either in-process or in an isolated worker
@@ -29,9 +39,12 @@ export async function runLlmLoop(
   let rounds = 0;
   let hasPendingApprovals = false;
   let forcedPolicyRetryUsed = false;
+  let forcedSkillShapeRetryCount = 0;
+  let forcedToolExecutionRetryUsed = false;
   let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
   let currentContextTrustLevel: import('../tools/types.js').ContentTrustLevel = 'trusted';
   const currentTaintReasons = new Set<string>();
+  let seededAnswerFirstResponse: ChatResponse | null = null;
 
   const allToolDefs = toolCaller ? toolCaller.listAlwaysLoaded() : [];
   let llmToolDefs = allToolDefs.map((definition) => toLLMToolDef(definition, 'external'));
@@ -76,6 +89,22 @@ export async function runLlmLoop(
 
   const formatToolError = (message: string): string => formatToolResultForLLM('tool_error', { success: false, error: message }, []);
 
+  const recoverStructuredToolCalls = (response: ChatResponse): ChatResponse => {
+    if (response.toolCalls?.length) {
+      return response;
+    }
+    const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+    if (!recoveredToolCalls?.toolCalls.length) {
+      return response;
+    }
+    return {
+      ...response,
+      toolCalls: recoveredToolCalls.toolCalls,
+      finishReason: 'tool_calls',
+      content: '',
+    };
+  };
+
   const extractToolNameFromSearchQuery = (args: Record<string, unknown>): string | null => {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     if (!query) return null;
@@ -104,7 +133,35 @@ export async function runLlmLoop(
     return result;
   };
 
+  if (options?.preferAnswerFirst) {
+    try {
+      const answerFirstResponse = recoverStructuredToolCalls(await chatFn(
+        withTaintedContentSystemPrompt(
+          messages,
+          currentContextTrustLevel,
+          currentTaintReasons,
+        ),
+        { tools: [] },
+      ));
+      const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
+      if (
+        answerFirstContent
+        && (options?.answerFirstResponseIsSufficient?.(answerFirstContent) ?? !isResponseDegraded(answerFirstContent))
+        && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
+      ) {
+        finalContent = answerFirstContent;
+      } else if (answerFirstResponse.toolCalls?.length) {
+        seededAnswerFirstResponse = answerFirstResponse;
+      }
+    } catch {
+      finalContent = '';
+    }
+  }
+
   while (rounds < maxRounds) {
+    if (finalContent) {
+      break;
+    }
     // Context window awareness: compact oldest tool results if approaching budget
     compactMessagesIfOverBudget(messages, contextBudget);
 
@@ -114,7 +171,10 @@ export async function runLlmLoop(
       currentTaintReasons,
     );
 
-    let response = await chatFn(plannerMessages, { tools: llmToolDefs });
+    let response = rounds === 0 && seededAnswerFirstResponse
+      ? seededAnswerFirstResponse
+      : await chatFn(plannerMessages, { tools: llmToolDefs });
+    seededAnswerFirstResponse = null;
     finalContent = response.content ?? '';
 
     if (
@@ -134,16 +194,46 @@ export async function runLlmLoop(
       finalContent = response.content ?? '';
     }
 
-    if (!response.toolCalls || response.toolCalls.length === 0) {
-      const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
-      if (recoveredToolCalls?.toolCalls.length) {
-        response = {
-          ...response,
-          toolCalls: recoveredToolCalls.toolCalls,
-          finishReason: 'tool_calls',
-        };
-        finalContent = '';
-      }
+    response = recoverStructuredToolCalls(response);
+    finalContent = response.content ?? '';
+
+    if (
+      forcedSkillShapeRetryCount < 2
+      && (!response.toolCalls || response.toolCalls.length === 0)
+      && options?.answerFirstCorrectionPrompt?.trim()
+      && options.answerFirstResponseIsSufficient
+      && !options.answerFirstResponseIsSufficient(response.content ?? '')
+    ) {
+      forcedSkillShapeRetryCount += 1;
+      response = await chatFn(
+        [
+          ...plannerMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: options.answerFirstCorrectionPrompt },
+        ],
+        { tools: llmToolDefs },
+      );
+      response = recoverStructuredToolCalls(response);
+      finalContent = response.content ?? '';
+    }
+
+    if (
+      !forcedToolExecutionRetryUsed
+      && lastToolRoundResults.length === 0
+      && (!response.toolCalls || response.toolCalls.length === 0)
+      && shouldRetryToolExecutionCorrection(response.content ?? '', llmToolDefs, options?.toolExecutionCorrectionPrompt)
+    ) {
+      forcedToolExecutionRetryUsed = true;
+      response = await chatFn(
+        [
+          ...plannerMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: options?.toolExecutionCorrectionPrompt ?? '' },
+        ],
+        { tools: llmToolDefs },
+      );
+      response = recoverStructuredToolCalls(response);
+      finalContent = response.content ?? '';
     }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
@@ -301,6 +391,15 @@ export async function runLlmLoop(
     finalContent = summarizeToolRoundFallback(lastToolRoundResults);
   }
 
+  if (
+    options?.answerFirstFallbackContent
+    && options.answerFirstResponseIsSufficient
+    && !options.answerFirstResponseIsSufficient(finalContent)
+    && lastToolRoundResults.length === 0
+  ) {
+    finalContent = options.answerFirstFallbackContent;
+  }
+
   if (!finalContent) {
     finalContent = 'I could not generate a final response for that request.';
   }
@@ -368,9 +467,20 @@ function shouldRetryPolicyUpdateCorrection(
     || lower.includes('edit the configuration file')
     || lower.includes('update your guardian agent config')
     || lower.includes('you will need to manually');
+  const asksForPolicyConfirmation = /\b(?:if you(?:['’]d)? like me to add|would you like me to add|please confirm(?: that)? you want me to add|i can request that approval now|we need policy approval to add)\b/.test(lower);
   const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains)/.test(`${latestUser}\n${lower}`);
 
-  return isPolicyScoped && (claimsToolMissing || pushesManualConfig);
+  return isPolicyScoped && (claimsToolMissing || pushesManualConfig || asksForPolicyConfirmation);
+}
+
+function shouldRetryToolExecutionCorrection(
+  responseContent: string,
+  toolDefs: import('../llm/types.js').ToolDefinition[],
+  correctionPrompt?: string,
+): boolean {
+  return !!correctionPrompt?.trim()
+    && responseContent.trim().length > 0
+    && toolDefs.length > 0;
 }
 
 function buildPolicyUpdateCorrectionPrompt(): string {

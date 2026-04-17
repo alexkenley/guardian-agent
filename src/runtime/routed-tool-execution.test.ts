@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { IntentGatewayDecision } from './intent-gateway.js';
 import {
   buildRoutedIntentAdditionalSection,
+  buildToolExecutionCorrectionPrompt,
   prepareToolExecutionForIntent,
 } from './routed-tool-execution.js';
 
@@ -80,6 +81,14 @@ describe('routed tool execution', () => {
     expect(section?.content).toContain('brokered complex-planning path');
     expect(section?.content).toContain('fs_read, fs_search, fs_mkdir, and fs_write');
     expect(section?.content).toContain('Do not use code_remote_exec for simple directory creation or text-file writes');
+  });
+
+  it('builds a tool-execution correction prompt for repo-grounded coding turns', () => {
+    const prompt = buildToolExecutionCorrectionPrompt(repoDecision());
+
+    expect(prompt).toContain('repo-grounded coding request');
+    expect(prompt).toContain('fs_search, code_symbol_search, and fs_read');
+    expect(prompt).toContain('Only ask the user for approval after a real tool result returns pending_approval');
   });
 
   it('denies grep-style shell inspection during repo-grounded coding review turns', () => {
@@ -393,5 +402,37 @@ describe('routed tool execution', () => {
     });
 
     expect(prepared.immediateResult).toBeUndefined();
+  });
+
+  it('treats named managed sandbox wording as explicit remote intent for trivial remote file writes', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'printf "daytona resumed ok\\n" > tmp/daytona-resume-smoke.txt',
+      },
+      requestText: 'In the Guardian workspace, using the existing Daytona sandbox for this coding session, create tmp/daytona-resume-smoke.txt containing exactly "daytona resumed ok". Reuse the current managed sandbox if it exists; do not create a new one.',
+      referenceTime: Date.now(),
+      intentDecision: complexPlanningDecision(),
+    });
+
+    expect(prepared.immediateResult).toBeUndefined();
+  });
+
+  it('treats a named remote profile as explicit remote intent for trivial remote file writes', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'printf "ok\\n" > tmp/profile-pinned.txt',
+      },
+      requestText: 'Using the Daytona profile for this coding session, create tmp/profile-pinned.txt in the remote sandbox.',
+      referenceTime: Date.now(),
+      intentDecision: complexPlanningDecision(),
+    });
+
+    expect(prepared.immediateResult).toBeUndefined();
+    expect(prepared.args).toEqual({
+      command: 'printf "ok\\n" > tmp/profile-pinned.txt',
+      profile: 'Daytona',
+    });
   });
 });

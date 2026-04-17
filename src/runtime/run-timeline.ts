@@ -122,6 +122,16 @@ export interface DashboardRunTimelineContextAssembly {
   preservedExecutionState?: DashboardRunTimelinePreservedExecutionState;
 }
 
+export interface DashboardRunLiveSummaryItem {
+  title: string;
+  detail?: string;
+}
+
+export interface DashboardRunLiveSummary {
+  label: string;
+  items: DashboardRunLiveSummaryItem[];
+}
+
 export interface DashboardRunSummary {
   runId: string;
   parentRunId?: string;
@@ -148,6 +158,7 @@ export interface DashboardRunSummary {
 export interface DashboardRunDetail {
   summary: DashboardRunSummary;
   items: DashboardRunTimelineItem[];
+  liveSummary: DashboardRunLiveSummary;
 }
 
 export interface DashboardRunListResponse {
@@ -540,6 +551,14 @@ export class RunTimelineStore {
         durationMs,
       },
       items,
+      liveSummary: buildRunLiveSummary(
+        overlayStatus(
+          baseStatus,
+          nextSummary.pendingApprovalCount ?? 0,
+          nextSummary.verificationPendingCount ?? 0,
+        ),
+        items,
+      ),
     };
 
     const signature = JSON.stringify(detail);
@@ -621,6 +640,134 @@ function cloneDetail(detail: DashboardRunDetail): DashboardRunDetail {
           }
         : {}),
     })),
+    liveSummary: {
+      label: detail.liveSummary.label,
+      items: detail.liveSummary.items.map((item) => ({
+        title: item.title,
+        ...(nonEmptyText(item.detail) ? { detail: item.detail } : {}),
+      })),
+    },
+  };
+}
+
+function humanizeLiveSummaryStatus(status: DashboardRunStatus): string {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'running':
+      return 'Working…';
+    case 'awaiting_approval':
+      return 'Waiting for approval';
+    case 'verification_pending':
+      return 'Verification pending';
+    case 'blocked':
+      return 'Blocked';
+    case 'interrupted':
+      return 'Interrupted';
+    case 'completed':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Working…';
+  }
+}
+
+function isMeaningfulLiveSummaryItem(item: DashboardRunTimelineItem | undefined): boolean {
+  const type = nonEmptyText(item?.type);
+  return type !== 'run_queued'
+    && type !== 'run_started'
+    && type !== 'run_completed';
+}
+
+function isGenericWorkingLiveSummaryTitle(title: string | undefined): boolean {
+  const normalized = nonEmptyText(title)?.toLowerCase();
+  return normalized === 'agent is working'
+    || normalized === 'working…'
+    || normalized === 'working...';
+}
+
+function isLowSignalLiveSummaryItem(item: DashboardRunTimelineItem | undefined): boolean {
+  const title = nonEmptyText(item?.title)?.toLowerCase() ?? '';
+  if (!title) return true;
+  if (isGenericWorkingLiveSummaryTitle(title)) return true;
+  if (title === 'prepared request' || title === 'agent is working' || title === 'retrying with fallback') {
+    return true;
+  }
+  if (title === 'assembled context' || title.startsWith('model response')) {
+    return true;
+  }
+  if (title === 'handoff: delegated follow-up'
+    || title === 'handoff blocked: delegated follow-up'
+    || title === 'handoff completed: delegated follow-up') {
+    return true;
+  }
+  return false;
+}
+
+function buildRunLiveSummary(
+  status: DashboardRunStatus,
+  items: DashboardRunTimelineItem[],
+): DashboardRunLiveSummary {
+  const recentItems: DashboardRunLiveSummaryItem[] = [];
+  const seenKeys = new Set<string>();
+  for (let index = items.length - 1; index >= 0 && recentItems.length < 8; index -= 1) {
+    const item = items[index];
+    if (!isMeaningfulLiveSummaryItem(item)) continue;
+    const title = nonEmptyText(item.title);
+    if (!title) continue;
+    const detail = nonEmptyText(item.detail);
+    const key = `${title}\n${detail ?? ''}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    recentItems.unshift({
+      title,
+      ...(detail ? { detail } : {}),
+    });
+  }
+
+  const meaningfulSourceItems = items.filter(isMeaningfulLiveSummaryItem);
+  const hasHighSignalItems = meaningfulSourceItems.some((item) => !isLowSignalLiveSummaryItem(item));
+  const filteredItems = hasHighSignalItems
+    ? recentItems.filter((item) => {
+        const sourceItem = meaningfulSourceItems.find((candidate) => (
+          nonEmptyText(candidate.title) === item.title
+          && nonEmptyText(candidate.detail) === nonEmptyText(item.detail)
+        ));
+        return sourceItem ? !isLowSignalLiveSummaryItem(sourceItem) : true;
+      })
+    : recentItems;
+
+  const normalizedItems = filteredItems.length > 0 ? filteredItems : recentItems;
+  const terminalStatus = status === 'completed'
+    || status === 'failed'
+    || status === 'blocked'
+    || status === 'awaiting_approval'
+    || status === 'verification_pending'
+    || status === 'interrupted';
+
+  if (terminalStatus) {
+    while (normalizedItems.length > 0 && isGenericWorkingLiveSummaryTitle(normalizedItems[normalizedItems.length - 1]?.title)) {
+      normalizedItems.pop();
+    }
+    const terminalLabel = humanizeLiveSummaryStatus(status);
+    if (normalizedItems.length === 0) {
+      normalizedItems.push({ title: terminalLabel });
+    } else if (normalizedItems[normalizedItems.length - 1]?.title !== terminalLabel) {
+      normalizedItems.push({ title: terminalLabel });
+    }
+  }
+
+  if (normalizedItems.length === 0) {
+    return {
+      label: humanizeLiveSummaryStatus(status),
+      items: [],
+    };
+  }
+
+  return {
+    label: normalizedItems[normalizedItems.length - 1]?.title ?? humanizeLiveSummaryStatus(status),
+    items: normalizedItems.slice(-6),
   };
 }
 

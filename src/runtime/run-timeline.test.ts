@@ -551,4 +551,80 @@ describe('RunTimelineStore', () => {
       'req-delegated-worker',
     ]);
   });
+
+  it('prefers delegated-worker live commentary over generic orchestrator tail items', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-live-summary',
+      runId: 'req-live-summary',
+      status: 'running',
+      completedAt: undefined,
+      responsePreview: undefined,
+      steps: [{
+        name: 'message_built',
+        status: 'succeeded',
+        startedAt: 110,
+        completedAt: 110,
+        durationMs: 0,
+      }, {
+        name: 'runtime_dispatch_message',
+        status: 'running',
+        startedAt: 111,
+      }],
+      nodes: [{
+        id: 'provider-1',
+        kind: 'provider_call',
+        name: 'Model response: ollama_cloud • glm-5.1',
+        startedAt: 160,
+        completedAt: 160,
+        status: 'succeeded',
+      }, {
+        id: 'context-1',
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt: 165,
+        completedAt: 165,
+        status: 'succeeded',
+      }],
+    }));
+
+    store.ingestDelegatedWorkerProgress({
+      id: 'delegated-live-1',
+      kind: 'started',
+      requestId: 'req-live-summary',
+      codeSessionId: 'code-1',
+      agentId: 'agent-1',
+      agentName: 'Workspace Implementer',
+      orchestrationLabel: 'Coding Workspace',
+      originChannel: 'web',
+      requestPreview: 'Inspect the repo and produce the review.',
+      continuityKey: 'continuity-live',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      timestamp: 130,
+      detail: 'Brokered worker dispatch started.',
+    });
+    store.ingestDelegatedWorkerProgress({
+      id: 'delegated-live-2',
+      kind: 'running',
+      requestId: 'req-live-summary',
+      codeSessionId: 'code-1',
+      agentId: 'agent-1',
+      agentName: 'Workspace Implementer',
+      orchestrationLabel: 'Coding Workspace',
+      originChannel: 'web',
+      requestPreview: 'Inspect the repo and produce the review.',
+      continuityKey: 'continuity-live',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      timestamp: 140,
+      detail: 'Reviewing source files and approvals.',
+    });
+
+    const run = store.getRun('req-live-summary');
+    expect(run?.liveSummary.label).toBe('Workspace Implementer is working');
+    expect(run?.liveSummary.items.some((item) => item.title === 'Delegated to Workspace Implementer')).toBe(true);
+    expect(run?.liveSummary.items.some((item) => item.title === 'Workspace Implementer is working' && item.detail === 'Reviewing source files and approvals.')).toBe(true);
+    expect(run?.liveSummary.items.some((item) => item.title === 'Prepared request')).toBe(false);
+    expect(run?.liveSummary.items.some((item) => item.title === 'Assembled context')).toBe(false);
+    expect(run?.liveSummary.items.some((item) => item.title.startsWith('Model response'))).toBe(false);
+  });
 });

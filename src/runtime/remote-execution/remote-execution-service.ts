@@ -101,6 +101,31 @@ function normalizeLeaseMode(value: RemoteExecutionLeaseMode | undefined): Remote
   return value === 'managed' ? 'managed' : 'ephemeral';
 }
 
+function extractLeaseStateLabel(state: unknown): string | undefined {
+  if (typeof state === 'string') {
+    const trimmed = state.trim();
+    return trimmed || undefined;
+  }
+  if (!state || typeof state !== 'object') {
+    return undefined;
+  }
+  const record = state as { state?: unknown; status?: unknown };
+  for (const candidate of [record.state, record.status]) {
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isStoppedLeaseState(state: unknown): boolean {
+  const label = extractLeaseStateLabel(state);
+  return !!label && /\b(stopped|stopping)\b/i.test(label);
+}
+
 function toHealthSummary(input: {
   state: RemoteExecutionTargetHealthSummary['state'];
   reason: string;
@@ -216,8 +241,6 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       );
     }
 
-    await this.ensureTargetHealthy(provider, request.target);
-
     const workspaceRoot = resolve(request.localWorkspaceRoot);
     const normalizedCodeSessionId = request.codeSessionId?.trim() || undefined;
     const leaseKey = normalizedCodeSessionId
@@ -230,10 +253,17 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       await this.releaseLease(provider, lease, leaseKey);
       lease = undefined;
     }
+    const existingLease = request.existingLease && this.isLeaseCreateCompatible(request.existingLease, request, workspaceRoot)
+      ? request.existingLease
+      : undefined;
+
+    if (!lease && !existingLease) {
+      await this.ensureTargetHealthy(provider, request.target);
+    }
 
     if (!lease) {
-      lease = request.existingLease
-        ? await this.resumeLease(request.target, request.existingLease, {
+      lease = existingLease
+        ? await this.resumeLease(request.target, existingLease, {
           ...request,
           localWorkspaceRoot: workspaceRoot,
           codeSessionId: normalizedCodeSessionId,
@@ -328,14 +358,28 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       );
     }
 
-    await this.ensureTargetHealthy(provider, request.target);
-
     const prepared = await this.prepareRequest(request);
     const normalizedCodeSessionId = request.codeSessionId?.trim() || undefined;
     const leaseKey = normalizedCodeSessionId
       ? buildLeaseKey(request.target.id, prepared.workspaceRoot, normalizedCodeSessionId)
       : null;
     const requestedLeaseMode = normalizeLeaseMode(request.preferredLease?.leaseMode ?? request.leaseMode);
+    const leaseCreateRequest: RemoteExecutionLeaseCreateRequest = {
+      target: request.target,
+      localWorkspaceRoot: prepared.workspaceRoot,
+      codeSessionId: normalizedCodeSessionId,
+      timeoutMs: request.timeoutMs,
+      vcpus: request.vcpus,
+      runtime: request.runtime,
+      leaseMode: requestedLeaseMode,
+    };
+    const preferredLease = request.preferredLease && this.isLeaseCompatible(
+      request.preferredLease,
+      request,
+      prepared.workspaceRoot,
+    )
+      ? request.preferredLease
+      : undefined;
 
     let lease = leaseKey ? this.leasesByKey.get(leaseKey) : undefined;
     let leaseReused = false;
@@ -345,31 +389,48 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       lease = undefined;
     }
 
+    if (!lease && !preferredLease) {
+      await this.ensureTargetHealthy(provider, request.target);
+    }
+
+    const preferredLeaseStateHint = preferredLease && lease && preferredLease.id === lease.id
+      ? preferredLease
+      : undefined;
+    if (lease && (isStoppedLeaseState(lease.state) || isStoppedLeaseState(preferredLeaseStateHint?.state))) {
+      const leaseToResume = preferredLeaseStateHint ?? lease;
+      try {
+        lease = await this.resumeLease(request.target, leaseToResume, leaseCreateRequest);
+        leaseReused = true;
+        if (leaseKey) {
+          this.leasesByKey.set(leaseKey, lease);
+        }
+      } catch (error) {
+        if (normalizeLeaseMode(leaseToResume.leaseMode) === 'managed') {
+          throw error;
+        }
+        if (leaseKey) {
+          this.leasesByKey.delete(leaseKey);
+        }
+        lease = undefined;
+      }
+    }
+
     if (!lease) {
-      if (request.preferredLease && this.isLeaseCompatible(request.preferredLease, request, prepared.workspaceRoot)) {
-        lease = await this.resumeLease(request.target, request.preferredLease, {
-          target: request.target,
-          localWorkspaceRoot: prepared.workspaceRoot,
-          codeSessionId: normalizedCodeSessionId,
-          timeoutMs: request.timeoutMs,
-          vcpus: request.vcpus,
-          runtime: request.runtime,
-          leaseMode: requestedLeaseMode,
-        }).catch(() => undefined);
+      if (preferredLease) {
+        try {
+          lease = await this.resumeLease(request.target, preferredLease, leaseCreateRequest);
+          leaseReused = true;
+        } catch (error) {
+          if (normalizeLeaseMode(preferredLease.leaseMode) === 'managed') {
+            throw error;
+          }
+        }
         if (lease && leaseKey) {
           this.leasesByKey.set(leaseKey, lease);
         }
       }
       if (!lease) {
-        lease = await this.createLease(provider, {
-          target: request.target,
-          localWorkspaceRoot: prepared.workspaceRoot,
-          codeSessionId: normalizedCodeSessionId,
-          timeoutMs: request.timeoutMs,
-          vcpus: request.vcpus,
-          runtime: request.runtime,
-          leaseMode: requestedLeaseMode,
-        });
+        lease = await this.createLease(provider, leaseCreateRequest);
         if (leaseKey) {
           this.leasesByKey.set(leaseKey, lease);
         }

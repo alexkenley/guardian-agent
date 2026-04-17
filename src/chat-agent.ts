@@ -41,6 +41,12 @@ import type { ContextCompactionResult } from './util/context-budget.js';
 import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
+  buildAnswerFirstSkillFallbackResponse,
+  buildAnswerFirstSkillCorrectionPrompt,
+  isAnswerFirstSkillResponseSufficient as isAnswerFirstSkillResponseSufficientForSkills,
+  shouldUseAnswerFirstForSkills,
+} from './util/answer-first-skills.js';
+import {
   isDirectMemorySaveRequest,
   shouldAllowModelMemoryMutation,
 } from './util/memory-intent.js';
@@ -2329,11 +2335,11 @@ type DirectIntentShadowCandidate =
   }
 
   private shouldPreferAnswerFirstForSkills(skills: readonly ResolvedSkill[]): boolean {
-    return skills.some((skill) => (
-      skill.id === 'writing-plans'
-      || skill.id === 'verification-before-completion'
-      || skill.id === 'code-review'
-    ));
+    return shouldUseAnswerFirstForSkills(skills);
+  }
+
+  private isAnswerFirstSkillResponseSufficient(skills: readonly ResolvedSkill[], content: string): boolean {
+    return isAnswerFirstSkillResponseSufficientForSkills(skills, content);
   }
 
   private async tryRecoverDirectAnswerAfterTools(
@@ -3807,21 +3813,43 @@ type DirectIntentShadowCandidate =
       const pendingIds: string[] = [];
       const contextBudget = this.contextBudget;
       let forcedPolicyRetryUsed = false;
+      let forcedSkillShapeRetryCount = 0;
+      let forcedSkillGroundingUsed = false;
       let currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel = 'trusted';
       const currentTaintReasons = new Set<string>();
+      let seededAnswerFirstResponse: import('./llm/types.js').ChatResponse | null = null;
+      const answerFirstCorrectionPrompt = this.shouldPreferAnswerFirstForSkills(activeSkills)
+        ? buildAnswerFirstSkillCorrectionPrompt(activeSkills, stripLeadingContextPrefix(requestIntentContent))
+        : undefined;
+      const answerFirstFallbackResponse = this.shouldPreferAnswerFirstForSkills(activeSkills)
+        ? buildAnswerFirstSkillFallbackResponse(activeSkills, stripLeadingContextPrefix(requestIntentContent))
+        : undefined;
       if (this.shouldPreferAnswerFirstForSkills(activeSkills)) {
         try {
-          const answerFirstResponse = await chatFn(
+          let answerFirstResponse = await chatFn(
             withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
             { tools: [] },
           );
+          if (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0) {
+            const recoveredToolCalls = recoverToolCallsFromStructuredText(answerFirstResponse.content ?? '', llmToolDefs);
+            if (recoveredToolCalls?.toolCalls.length) {
+              answerFirstResponse = {
+                ...answerFirstResponse,
+                toolCalls: recoveredToolCalls.toolCalls,
+                finishReason: 'tool_calls',
+                content: '',
+              };
+            }
+          }
           const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
           if (
             answerFirstContent
-            && !this.isResponseDegraded(answerFirstContent)
+            && this.isAnswerFirstSkillResponseSufficient(activeSkills, answerFirstContent)
             && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
           ) {
             finalContent = answerFirstContent;
+          } else if (answerFirstResponse.toolCalls?.length) {
+            seededAnswerFirstResponse = answerFirstResponse;
           }
         } catch {
           finalContent = '';
@@ -3841,7 +3869,10 @@ type DirectIntentShadowCandidate =
           currentTaintReasons,
         );
 
-        let response = await chatFn(plannerMessages, { tools: llmToolDefs });
+        let response = rounds === 0 && seededAnswerFirstResponse
+          ? seededAnswerFirstResponse
+          : await chatFn(plannerMessages, { tools: llmToolDefs });
+        seededAnswerFirstResponse = null;
         finalContent = response.content;
         if (
           !forcedPolicyRetryUsed
@@ -3882,6 +3913,116 @@ type DirectIntentShadowCandidate =
               finishReason: 'tool_calls',
             };
             finalContent = '';
+          }
+        }
+        if (
+          forcedSkillShapeRetryCount < 2
+          && (!response.toolCalls || response.toolCalls.length === 0)
+          && answerFirstCorrectionPrompt
+          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '')
+        ) {
+          forcedSkillShapeRetryCount += 1;
+          response = await chatFn(
+            [
+              ...plannerMessages,
+              { role: 'assistant', content: response.content ?? '' },
+              { role: 'user', content: answerFirstCorrectionPrompt },
+            ],
+            { tools: llmToolDefs },
+          );
+          finalContent = response.content;
+          if (!response.toolCalls || response.toolCalls.length === 0) {
+            const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+            if (recoveredToolCalls?.toolCalls.length) {
+              response = {
+                ...response,
+                toolCalls: recoveredToolCalls.toolCalls,
+                finishReason: 'tool_calls',
+              };
+              finalContent = '';
+            }
+          }
+        }
+        if (
+          !forcedSkillGroundingUsed
+          && (!response.toolCalls || response.toolCalls.length === 0)
+          && this.shouldPreferAnswerFirstForSkills(activeSkills)
+          && !this.isAnswerFirstSkillResponseSufficient(activeSkills, response.content ?? '')
+          && llmToolDefs.some((definition) => definition.name === 'fs_read')
+        ) {
+          const skillSourcePaths = [...new Set(
+            activeSkills
+              .filter((skill) => shouldUseAnswerFirstForSkills([skill]))
+              .map((skill) => skill.sourcePath?.trim() ?? '')
+              .filter((value) => value.length > 0),
+          )].slice(0, 2);
+          if (skillSourcePaths.length > 0) {
+            forcedSkillGroundingUsed = true;
+            for (const [index, skillPath] of skillSourcePaths.entries()) {
+              const prefetched = await this.tools.executeModelTool(
+                'fs_read',
+                { path: skillPath },
+                {
+                  origin: 'assistant',
+                  agentId: this.id,
+                  userId: conversationUserId,
+                  principalId: message.principalId ?? conversationUserId,
+                  principalRole: message.principalRole ?? 'owner',
+                  channel: conversationChannel,
+                  requestId: message.id,
+                  agentContext: { checkAction: ctx.checkAction },
+                  codeContext: effectiveCodeContext,
+                },
+              );
+              const scannedToolResult = this.sanitizeToolResultForLlm(
+                'fs_read',
+                prefetched,
+                toolResultProviderKind,
+              );
+              if (scannedToolResult.trustLevel === 'quarantined') {
+                currentContextTrustLevel = 'quarantined';
+              } else if (scannedToolResult.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
+                currentContextTrustLevel = 'low_trust';
+              }
+              for (const reason of scannedToolResult.taintReasons) {
+                currentTaintReasons.add(reason);
+              }
+              const toolCallId = `skill-grounding-${index + 1}`;
+              llmMessages.push({
+                role: 'assistant',
+                content: '',
+                toolCalls: [{
+                  id: toolCallId,
+                  name: 'fs_read',
+                  arguments: JSON.stringify({ path: skillPath }),
+                }],
+              });
+              llmMessages.push({
+                role: 'tool',
+                toolCallId,
+                content: formatToolResultForLLM(
+                  'fs_read',
+                  scannedToolResult.sanitized,
+                  scannedToolResult.threats,
+                ),
+              });
+            }
+            response = await chatFn(
+              withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
+              { tools: llmToolDefs },
+            );
+            finalContent = response.content;
+            if (!response.toolCalls || response.toolCalls.length === 0) {
+              const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+              if (recoveredToolCalls?.toolCalls.length) {
+                response = {
+                  ...response,
+                  toolCalls: recoveredToolCalls.toolCalls,
+                  finishReason: 'tool_calls',
+                };
+                finalContent = '';
+              }
+            }
           }
         }
         if (!response.toolCalls || response.toolCalls.length === 0) {
@@ -4441,6 +4582,14 @@ type DirectIntentShadowCandidate =
           log.warn({ agent: this.id, error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
             'Fallback chain also failed');
         }
+      }
+
+      if (
+        answerFirstFallbackResponse
+        && lastToolRoundResults.length === 0
+        && !this.isAnswerFirstSkillResponseSufficient(activeSkills, finalContent ?? '')
+      ) {
+        finalContent = answerFirstFallbackResponse;
       }
 
       // Store pending approvals for this user so they can be approved/denied explicitly
@@ -6075,9 +6224,10 @@ type DirectIntentShadowCandidate =
       || lower.includes('i can, however, save it to')
       || lower.includes('i can however save it to')
       || lower.includes('instead save it to');
+    const asksForPolicyConfirmation = /\b(?:if you(?:['’]d)? like me to add|would you like me to add|please confirm(?: that)? you want me to add|i can request that approval now|we need policy approval to add)\b/.test(lower);
     const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains|outside allowed paths|outside the authorized workspace root|outside the authorized workspace)/.test(`${latestUser}\n${lower}`);
 
-    return isPolicyScoped && (claimsToolMissing || pushesManualConfig);
+    return isPolicyScoped && (claimsToolMissing || pushesManualConfig || asksForPolicyConfirmation);
   }
 
   private buildPolicyUpdateCorrectionPrompt(): string {

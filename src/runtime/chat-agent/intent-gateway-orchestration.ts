@@ -25,7 +25,8 @@ import {
 } from './orchestration-state.js';
 
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
-const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated)\b/i;
+const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated|started|restarted|running)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated|started|restarted)\b/i;
+const STATUS_CHECK_FOLLOW_UP_PATTERN = /^(?:did\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task))(?:\s+\w+){0,3}\s+work|what happened(?:\s+(?:with|to|about)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)))?)\??$/i;
 
 export interface IntentGatewayClarificationResponseInput {
   gateway: IntentGatewayRecord | null;
@@ -503,6 +504,9 @@ export function findLatestActionableUserRequest(
     if (/^(?:no|yes|yeah|yep|gmail|outlook|codex|claude code|gemini|aider)\b/i.test(text)) {
       continue;
     }
+    if (isStatusCheckFollowUp(text)) {
+      continue;
+    }
     return text;
   }
   return null;
@@ -519,7 +523,8 @@ function isRetryableProviderFailureMessage(content: string): boolean {
   if (!normalized) return false;
   return /^Could not reach Ollama(?: Cloud)?\b/i.test(normalized)
     || /\brate limit exceeded or quota depleted\. Please try again shortly\./i.test(normalized)
-    || /\b(?:internal server error|service unavailable|gateway timeout|bad gateway)\b/i.test(normalized)
+    || /\b(?:internal server error|service(?: temporarily)? unavailable|gateway timeout|bad gateway)\b/i.test(normalized)
+    || /\bollama cloud api error\b/i.test(normalized)
     || /\bnot authenticated\b/i.test(normalized)
     || /\bplease connect your\b/i.test(normalized)
     || /\b(?:integration|provider).*\b(?:isn['’]?t|is not)\b.*\bconnected\b/i.test(normalized)
@@ -527,5 +532,13 @@ function isRetryableProviderFailureMessage(content: string): boolean {
     || /\baccess denied\b/i.test(normalized)
     || /\bdisconnected\b/i.test(normalized)
     || /\bmodel not found\b/i.test(normalized)
-    || /\bmodel\b.+\bnot available\b/i.test(normalized);
+    || /\bmodel\b.+\bnot available\b/i.test(normalized)
+    || /\bremote execution failed\b/i.test(normalized)
+    || /\bsandbox is currently stopped\b/i.test(normalized)
+    || /\bcannot accept commands until restarted\b/i.test(normalized)
+    || /\breturned a 502 error\b/i.test(normalized);
+}
+
+function isStatusCheckFollowUp(content: string): boolean {
+  return STATUS_CHECK_FOLLOW_UP_PATTERN.test(content.trim());
 }
