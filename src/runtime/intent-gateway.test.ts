@@ -278,6 +278,57 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('navigate');
   });
 
+  it('recovers malformed route-only fallback JSON so workload-derived routing stays available', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Act as my executive assistant and brief me on what I should do first today.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        if (callCount === 2) {
+          expect(options?.responseFormat).toEqual({ type: 'json_object' });
+          return {
+            content: 'I am not sure.',
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: [
+            '{',
+            '  "route": "personal_assistant_task",',
+            '  "operation": "inspect",',
+            '  "confidence": "high",',
+            '  "summary": "Prepares a daily executive briefing.",',
+            '  "turnRelation": "new_request",',
+            '  "resolution": "ready"',
+          ].join('\n'),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.mode).toBe('route_only_fallback');
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.executionClass).toBe('direct_assistant');
+    expect(result.decision.preferredTier).toBe('local');
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
   it('keeps explicit complex-planning requests on the JSON fallback path', async () => {
     const gateway = new IntentGateway();
     const request = 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.';
@@ -516,6 +567,29 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('run');
     expect(result.decision.entities.codingBackend).toBeUndefined();
     expect(result.decision.entities.sessionTarget).toBeUndefined();
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('recovers explicit scratch-file create requests with .txt paths into the filesystem lane', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Also create tmp/followup-queue-test.txt listing the top 3 files you consulted.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '{',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('filesystem_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.path).toBe('tmp/followup-queue-test.txt');
     expect(result.decision.requiresRepoGrounding).toBe(true);
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });

@@ -7,9 +7,10 @@ const AUTOMATION_AUTHORING_WORKFLOW_HINT_PATTERN = /\b(?:deterministic scheduled
 const AUTOMATION_CONTROL_VERB_PATTERN = /\b(?:disable|enable|run|inspect|show|read|delete|remove|rename|edit|update|change|modify|clone|list)\b/i;
 const AUTOMATION_OUTPUT_ANALYSIS_PATTERN = /\b(analy[sz]e|summari[sz]e|explain|review|compare|investigate|interpret|what did(?:\s+it)?\s+find)\b/i;
 const AUTOMATION_OUTPUT_CONTEXT_PATTERN = /\b(output|outputs|result|results|findings|history|timeline|step output|run output)\b/i;
+const INJECTED_SKILL_CATALOG_PATTERN = /\brelevant skills(?: when useful)?:[\s\S]*$/i;
 
 export function isExplicitAutomationAuthoringRequest(content: string | undefined): boolean {
-  const normalized = collapseIntentGatewayWhitespace(content ?? '');
+  const normalized = normalizeAutomationIntentSource(content);
   if (!normalized) return false;
   if (isExplicitAutomationOutputRequest(normalized)) return false;
   if (isExplicitAutomationControlRequest(normalized)) return false;
@@ -21,7 +22,7 @@ export function isExplicitAutomationAuthoringRequest(content: string | undefined
 }
 
 export function isExplicitAutomationControlRequest(content: string | undefined): boolean {
-  const normalized = collapseIntentGatewayWhitespace(content ?? '');
+  const normalized = normalizeAutomationIntentSource(content);
   if (!normalized) return false;
   if (/\b(?:what|which|kind|kinds|sort|sorts|examples?|capabilities?|support|supported|how)\b/i.test(normalized)) {
     return false;
@@ -33,7 +34,7 @@ export function isExplicitAutomationControlRequest(content: string | undefined):
 }
 
 export function isExplicitAutomationOutputRequest(content: string | undefined): boolean {
-  const normalized = collapseIntentGatewayWhitespace(content ?? '');
+  const normalized = normalizeAutomationIntentSource(content);
   if (!normalized) return false;
   if (!/\b(automation|automations|workflow|workflows|assistant automation|scheduled task|task|run)\b/i.test(normalized)) {
     return false;
@@ -51,7 +52,7 @@ export function inferAutomationControlOperation(
     || fallback === 'read' || fallback === 'clone' || fallback === 'update') {
     return fallback;
   }
-  const normalized = collapseIntentGatewayWhitespace(content ?? '').toLowerCase();
+  const normalized = normalizeAutomationIntentSource(content).toLowerCase();
   if (!normalized) return 'unknown';
   if (/\b(?:disable|enable)\b/.test(normalized)) return 'toggle';
   if (/\b(?:run)\b/.test(normalized)) return 'run';
@@ -63,7 +64,7 @@ export function inferAutomationControlOperation(
 }
 
 export function inferAutomationEnabledState(content: string | undefined): boolean | undefined {
-  const normalized = collapseIntentGatewayWhitespace(content ?? '').toLowerCase();
+  const normalized = normalizeAutomationIntentSource(content).toLowerCase();
   if (!normalized) return undefined;
   if (/\bdisable\b/.test(normalized)) return false;
   if (/\benable\b/.test(normalized)) return true;
@@ -77,7 +78,7 @@ export function inferAutomationOutputOperation(
   if (fallback === 'inspect' || fallback === 'read' || fallback === 'search') {
     return fallback;
   }
-  const normalized = collapseIntentGatewayWhitespace(content ?? '').toLowerCase();
+  const normalized = normalizeAutomationIntentSource(content).toLowerCase();
   if (!normalized) return 'unknown';
   if (/\bsearch\b/.test(normalized)) return 'search';
   if (/\bread\b/.test(normalized)) return 'read';
@@ -124,4 +125,8 @@ function cleanAutomationNameCandidate(value: string | undefined): string | undef
     .replace(/\b(?:for me|please|now)\b$/i, '')
     .trim();
   return cleaned || undefined;
+}
+
+function normalizeAutomationIntentSource(content: string | undefined): string {
+  return collapseIntentGatewayWhitespace((content ?? '').replace(INJECTED_SKILL_CATALOG_PATTERN, ' '));
 }

@@ -7,8 +7,12 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 Before assuming a harness failure needs more verbose runtime logging, inspect Guardian's durable trace files first.
 
 - The low-level routing/debug trace is persisted by default through `routing.intentTrace` and usually lives at `~/.guardianagent/routing/intent-routing.jsonl`.
+- On Unix-hosted runs, that usually means a path such as `/home/<user>/.guardianagent/routing/intent-routing.jsonl`.
 - On Windows-hosted runs, that routing trace path is typically `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`.
+- From WSL, inspect `~/.guardianagent/routing/intent-routing.jsonl` when Guardian is running inside the distro, or `/mnt/c/Users/<user>/.guardianagent/routing/intent-routing.jsonl` when Guardian is actually running on the Windows host.
 - The persistent audit log is separate and usually lives at `~/.guardianagent/audit/audit.jsonl`.
+- Brokered delegation now writes `delegated_worker_started`, `delegated_worker_running`, `delegated_worker_completed`, and `delegated_worker_failed` rows into the routing trace, so use that file first when you need to confirm whether Guardian handed work to another agent, whether the worker ever started, and whether it blocked on approval or failed outright.
+- The web `System > Runtime Execution` view should also show matching live handoff entries such as `Delegated to …`, `… is working`, and the final blocked/completed status for the same run.
 - These traces are always-on runtime artifacts and are more useful for agent debugging than the normal console log level.
 - This is distinct from harness temp logs such as `guardian.log` and `guardian.log.err`, and distinct from `runtime.logLevel`, which may still be set to `warn` on Windows-oriented dev flows.
 

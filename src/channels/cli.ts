@@ -5112,6 +5112,12 @@ export class CLIChannel implements ChannelAdapter {
     const parts = [
       ...(typeof details?.route === 'string' ? [`route ${details.route}`] : []),
       ...(typeof details?.tier === 'string' ? [`tier ${details.tier}`] : []),
+      ...(typeof details?.agentName === 'string' ? [`worker ${details.agentName}`] : []),
+      ...(typeof details?.orchestrationLabel === 'string' ? [`role ${details.orchestrationLabel}`] : []),
+      ...(typeof details?.lifecycle === 'string' ? [`lifecycle ${details.lifecycle}`] : []),
+      ...(typeof details?.reportingMode === 'string' ? [`handoff ${details.reportingMode}`] : []),
+      ...(typeof details?.unresolvedBlockerKind === 'string' ? [`blocker ${details.unresolvedBlockerKind}`] : []),
+      ...(typeof details?.approvalCount === 'number' ? [`approvals ${details.approvalCount}`] : []),
       ...(typeof details?.continuityKey === 'string' ? [`continuity ${details.continuityKey}`] : []),
       ...(Array.isArray(details?.activeExecutionRefs) && details.activeExecutionRefs.length > 0
         ? [`exec ${(details.activeExecutionRefs as unknown[])

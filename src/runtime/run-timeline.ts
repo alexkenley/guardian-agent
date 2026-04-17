@@ -179,6 +179,28 @@ export interface RunTimelineStoreOptions {
   now?: () => number;
 }
 
+export interface DelegatedWorkerProgressEvent {
+  id: string;
+  kind: 'started' | 'running' | 'completed' | 'blocked' | 'failed';
+  requestId?: string;
+  runId?: string;
+  codeSessionId?: string;
+  agentId: string;
+  agentName?: string;
+  orchestrationLabel?: string;
+  originChannel?: string;
+  runClass?: string;
+  unresolvedBlockerKind?: string;
+  approvalCount?: number;
+  reportingMode?: string;
+  workerId?: string;
+  requestPreview?: string;
+  detail?: string;
+  continuityKey?: string;
+  activeExecutionRefs?: string[];
+  timestamp: number;
+}
+
 interface RunTimelineRecord {
   baseStatus: DashboardRunStatus;
   detail: DashboardRunDetail;
@@ -373,6 +395,39 @@ export class RunTimelineStore {
         tags: ['coding-backend', event.backendId],
       },
       items: [buildCodingBackendProgressItem(runId, event)],
+    });
+  }
+
+  ingestDelegatedWorkerProgress(event: DelegatedWorkerProgressEvent): void {
+    const runId = nonEmptyText(event.runId)
+      ?? nonEmptyText(event.requestId)
+      ?? (event.codeSessionId ? resolveRunId(event.codeSessionId, undefined) : undefined);
+    if (!runId) return;
+    const existing = this.runs.get(runId);
+    const shouldSetBaseStatus = shouldUseCodeSessionBaseStatus(existing);
+    const summary = existing?.detail.summary;
+
+    this.commitRun(runId, {
+      ...(shouldSetBaseStatus
+        ? { baseStatus: mapDelegatedWorkerProgressStatus(event) }
+        : {}),
+      summary: {
+        ...(event.codeSessionId ? { codeSessionId: event.codeSessionId } : {}),
+        groupId: summary?.groupId ?? (event.codeSessionId ? `code-session:${event.codeSessionId}` : runId),
+        kind: summary?.kind ?? (event.codeSessionId ? 'code_session' : 'assistant_dispatch'),
+        title: summary?.title ?? `Delegated worker: ${describeDelegatedWorkerTarget(event)}`,
+        subtitle: summary?.subtitle ?? truncateText(nonEmptyText(event.requestPreview), 160),
+        agentId: summary?.agentId ?? event.agentId,
+        channel: summary?.channel ?? event.originChannel,
+        startedAt: summary?.startedAt ?? event.timestamp,
+        tags: [
+          'delegated-worker',
+          event.agentId,
+          ...(event.originChannel ? [event.originChannel] : []),
+          ...(event.runClass ? [event.runClass] : []),
+        ],
+      },
+      items: [buildDelegatedWorkerProgressItem(runId, event)],
     });
   }
 
@@ -778,6 +833,74 @@ function buildCodingBackendProgressItem(runId: string, event: CodingBackendProgr
         title: `${event.backendName} failed`,
         detail: nonEmptyText(event.detail),
         toolName: 'coding_backend_run',
+      };
+  }
+}
+
+function buildDelegatedWorkerProgressItem(runId: string, event: DelegatedWorkerProgressEvent): DashboardRunTimelineItem {
+  const targetName = describeDelegatedWorkerTarget(event);
+  const contextAssembly = buildDelegatedWorkerContextAssembly(event);
+  switch (event.kind) {
+    case 'started':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'handoff_started',
+        status: 'running',
+        source: 'system',
+        title: `Delegated to ${targetName}`,
+        detail: nonEmptyText(event.detail),
+        ...(contextAssembly ? { contextAssembly } : {}),
+      };
+    case 'running':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'note',
+        status: 'running',
+        source: 'system',
+        title: `${targetName} is working`,
+        detail: nonEmptyText(event.detail),
+        ...(contextAssembly ? { contextAssembly } : {}),
+      };
+    case 'blocked':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'handoff_completed',
+        status: 'blocked',
+        source: 'system',
+        title: `${targetName} is waiting`,
+        detail: nonEmptyText(event.detail),
+        ...(contextAssembly ? { contextAssembly } : {}),
+      };
+    case 'completed':
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'handoff_completed',
+        status: 'succeeded',
+        source: 'system',
+        title: `${targetName} completed`,
+        detail: nonEmptyText(event.detail),
+        ...(contextAssembly ? { contextAssembly } : {}),
+      };
+    case 'failed':
+    default:
+      return {
+        id: event.id,
+        runId,
+        timestamp: event.timestamp,
+        type: 'handoff_completed',
+        status: 'failed',
+        source: 'system',
+        title: `${targetName} failed`,
+        detail: nonEmptyText(event.detail),
+        ...(contextAssembly ? { contextAssembly } : {}),
       };
   }
 }
@@ -1400,10 +1523,48 @@ function nonEmptyText(value: string | null | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function describeDelegatedWorkerTarget(event: DelegatedWorkerProgressEvent): string {
+  return nonEmptyText(event.agentName)
+    ?? nonEmptyText(event.orchestrationLabel)
+    ?? nonEmptyText(event.agentId)
+    ?? 'Delegated worker';
+}
+
+function buildDelegatedWorkerContextAssembly(
+  event: DelegatedWorkerProgressEvent,
+): DashboardRunTimelineContextAssembly | undefined {
+  const continuityKey = nonEmptyText(event.continuityKey);
+  const activeExecutionRefs = Array.isArray(event.activeExecutionRefs)
+    ? event.activeExecutionRefs
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim())
+    : [];
+  if (!continuityKey && activeExecutionRefs.length === 0) return undefined;
+  return {
+    ...(continuityKey ? { continuityKey } : {}),
+    ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
+  };
+}
+
 function truncateText(value: string | undefined, maxLength: number): string | undefined {
   if (!value) return undefined;
   if (value.length <= maxLength) return value;
   return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function mapDelegatedWorkerProgressStatus(event: DelegatedWorkerProgressEvent): DashboardRunStatus {
+  switch (event.kind) {
+    case 'started':
+    case 'running':
+      return 'running';
+    case 'blocked':
+      return event.unresolvedBlockerKind === 'approval' ? 'awaiting_approval' : 'blocked';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+    default:
+      return 'failed';
+  }
 }
 
 function mergeTags(left: string[], right: string[]): string[] {

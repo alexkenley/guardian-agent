@@ -488,6 +488,7 @@ Guardian treats Layer 1.5 as a capability-driven execution boundary, not as a si
 - local process sandboxing for managed child processes
 - stronger local virtualized execution for hostile or semi-trusted jobs when available
 - remote virtualized execution for bounded jobs when an operator has configured a trusted provider-backed sandbox
+- built-in control-plane allowances for the shipped remote sandbox endpoints (`api.vercel.com` and `app.daytona.io`) so sandbox routing does not depend on chat-driven `allowedDomains` widening; custom endpoints remain policy-gated
 
 Regardless of backend, Guardian keeps ownership of:
 

@@ -168,6 +168,10 @@ const MAX_SEARCH_RESULTS = 200;
 const MAX_SEARCH_FILES = 100_000;
 const MAX_SEARCH_FILE_BYTES = 1_000_000;
 const SEARCH_CACHE_TTL_MS = 300_000; // 5 minutes
+const BUILTIN_REMOTE_SANDBOX_CONTROL_PLANE_HOSTS = new Set([
+  'api.vercel.com',
+  'app.daytona.io',
+]);
 const MAX_TOOL_ARG_BYTES = 128_000;
 const TOOL_CHAIN_TTL_MS = 10 * 60_000;
 const MAX_TOOL_CALLS_PER_CHAIN = 24;
@@ -6248,7 +6252,7 @@ export class ToolExecutor {
     } catch {
       throw new Error(`Vercel profile '${id}' has an invalid apiBaseUrl.`);
     }
-    if (!this.isHostAllowed(baseUrl.hostname)) {
+    if (!this.isRemoteSandboxControlPlaneHostAllowed(baseUrl.hostname)) {
       throw new Error(`Host '${baseUrl.hostname}' is not in allowedDomains.`);
     }
 
@@ -6327,7 +6331,7 @@ export class ToolExecutor {
     } catch {
       throw new Error(`Daytona profile '${id}' has an invalid apiUrl.`);
     }
-    if (!this.isHostAllowed(apiUrl.hostname)) {
+    if (!this.isRemoteSandboxControlPlaneHostAllowed(apiUrl.hostname)) {
       throw new Error(`Host '${apiUrl.hostname}' is not in allowedDomains.`);
     }
 
@@ -6638,6 +6642,14 @@ export class ToolExecutor {
       const allowed = allowedHost.trim().toLowerCase();
       return normalized === allowed || normalized.endsWith(`.${allowed}`);
     });
+  }
+
+  private isBuiltinRemoteSandboxControlPlaneHost(host: string): boolean {
+    return BUILTIN_REMOTE_SANDBOX_CONTROL_PLANE_HOSTS.has(host.trim().toLowerCase());
+  }
+
+  private isRemoteSandboxControlPlaneHostAllowed(host: string): boolean {
+    return this.isBuiltinRemoteSandboxControlPlaneHost(host) || this.isHostAllowed(host);
   }
 
   /** Execute a command through the OS-level sandbox. */

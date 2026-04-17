@@ -17,6 +17,7 @@ describe('buildTaintedContentSystemPrompt', () => {
   it('adds stronger wording for quarantined content', () => {
     const prompt = buildTaintedContentSystemPrompt('quarantined', ['prompt_injection_signals']);
     expect(prompt).toContain('Quarantined raw content');
+    expect(prompt).toContain('do not infer or fabricate a summary');
   });
 });
 

@@ -21,6 +21,7 @@ Current as-built deltas:
 - Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
 - System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
 - delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
+- delegated worker lifecycle is now also projected live into the global execution timeline as `handoff_started`, live `note`, and terminal `handoff_completed` items so operators can watch brokered workers start, run, block, complete, or fail without waiting for the final reply
 - assistant-dispatch runs now project bounded `provider_call` nodes so operators can see final model provenance, model id, duration, and token/cache usage without exposing raw prompts
 - context-assembly nodes now carry bounded compaction diagnostics, including pre/post prompt size, applied stages, and compacted-summary preview when context had to be shortened for budget
 
@@ -84,6 +85,7 @@ Current delegation-related sources of truth also include:
 - [worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
   - delegated lineage metadata
   - bounded handoff summaries for brokered worker completions and failures
+  - live delegated-worker lifecycle updates that feed the shared run timeline and routing trace
   - server-owned delegated follow-up policy (`inline_response`, `held_for_approval`, `status_only`)
   - held-result replay, keep-held, and dismiss controls for operator-held delegated completions
 

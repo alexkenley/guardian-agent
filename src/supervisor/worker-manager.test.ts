@@ -552,6 +552,160 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('publishes delegated worker observability into the shared routing trace and run timeline', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'Waiting for approval to write the final report.',
+      metadata: {
+        pendingAction: {
+          blocker: {
+            kind: 'approval',
+            approvalSummaries: [
+              { id: 'approval-write-1', toolName: 'fs_write', argsPreview: '{"path":"./report.md"}' },
+            ],
+          },
+        },
+      },
+    });
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Local Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'coordinator',
+                    label: 'Primary Coordinator',
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 123_456,
+      },
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-observe',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Continue the report export.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-observe',
+        originChannel: 'web',
+        originSurfaceId: 'web-chat',
+        continuityKey: 'continuity-1',
+        activeExecutionRefs: ['code_session:Repo Fix'],
+        pendingActionId: 'pending-1',
+        codeSessionId: 'code-1',
+      },
+    });
+
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_completed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[0]?.[0]).toMatchObject({
+      stage: 'delegated_worker_started',
+      requestId: 'm-observe',
+      channel: 'web',
+      details: {
+        originSurfaceId: 'web-chat',
+        continuityKey: 'continuity-1',
+        activeExecutionRefs: ['code_session:Repo Fix'],
+        pendingActionId: 'pending-1',
+        codeSessionId: 'code-1',
+        agentName: 'Local Agent',
+        orchestrationLabel: 'Primary Coordinator',
+        lifecycle: 'running',
+      },
+    });
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_completed',
+      requestId: 'm-observe',
+      details: {
+        lifecycle: 'blocked',
+        unresolvedBlockerKind: 'approval',
+        approvalCount: 1,
+        reportingMode: 'held_for_approval',
+      },
+    });
+
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls.map(([event]) => event.kind)).toEqual([
+      'started',
+      'running',
+      'blocked',
+    ]);
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[1]?.[0]).toMatchObject({
+      id: expect.stringMatching(/^delegated-worker:job-[^:]+:running$/),
+      kind: 'running',
+      requestId: 'm-observe',
+      runId: 'm-observe',
+      codeSessionId: 'code-1',
+      agentId: 'local',
+      agentName: 'Local Agent',
+      orchestrationLabel: 'Primary Coordinator',
+      originChannel: 'web',
+      continuityKey: 'continuity-1',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      timestamp: 123_456,
+    });
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[2]?.[0]).toMatchObject({
+      id: expect.stringMatching(/^delegated-worker:job-[^:]+:completed$/),
+      kind: 'blocked',
+      reportingMode: 'held_for_approval',
+      unresolvedBlockerKind: 'approval',
+      approvalCount: 1,
+      detail: 'Resolve the pending approval(s) to continue the delegated run.',
+    });
+
+    manager.shutdown();
+  });
+
   it('normalizes clarification-blocked delegated responses into status-only output', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 

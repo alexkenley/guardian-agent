@@ -87,6 +87,8 @@ Guardian owns:
 - audit metadata
 - final answer composition
 
+The shipped provider adapters also reserve native connectivity to their default control-plane hosts (`api.vercel.com` for Vercel sandboxing and `app.daytona.io` for Daytona sandboxing). That native allowance is only for the built-in backend endpoints used to acquire and manage remote sandboxes. Custom or self-hosted control-plane URLs still have to pass the ordinary `allowedDomains` policy.
+
 Remote providers own only:
 
 - sandbox lifecycle primitives

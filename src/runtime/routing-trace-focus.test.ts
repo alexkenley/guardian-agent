@@ -125,4 +125,45 @@ describe('pickRoutingTraceFocusItem', () => {
       nodeId: 'approval-1',
     });
   });
+
+  it('prefers delegated-worker lifecycle items for delegated worker stages', () => {
+    const run = makeRun([
+      {
+        id: 'handoff-started',
+        runId: 'run-1',
+        timestamp: 2,
+        type: 'handoff_started',
+        status: 'running',
+        source: 'system',
+        title: 'Delegated to Workspace Implementer',
+      },
+      {
+        id: 'handoff-running',
+        runId: 'run-1',
+        timestamp: 3,
+        type: 'note',
+        status: 'running',
+        source: 'system',
+        title: 'Workspace Implementer is working',
+      },
+      {
+        id: 'handoff-completed',
+        runId: 'run-1',
+        timestamp: 4,
+        type: 'handoff_completed',
+        status: 'succeeded',
+        source: 'system',
+        title: 'Workspace Implementer completed',
+      },
+    ]);
+
+    expect(pickRoutingTraceFocusItem({ stage: 'delegated_worker_running', details: {} }, run)).toEqual({
+      itemId: 'handoff-running',
+      title: 'Workspace Implementer is working',
+    });
+    expect(pickRoutingTraceFocusItem({ stage: 'delegated_worker_completed', details: {} }, run)).toEqual({
+      itemId: 'handoff-completed',
+      title: 'Workspace Implementer completed',
+    });
+  });
 });

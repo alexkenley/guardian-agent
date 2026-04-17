@@ -350,6 +350,7 @@ This bypass is narrower than the Coding Assistant command surface. For the main 
   - `allowedCommands`
   - `allowedDomains`
 - Tool handlers must reject requests outside configured allowlists.
+- The built-in remote sandbox adapters may reserve narrow native access to their shipped control-plane hosts (`api.vercel.com` and `app.daytona.io`) so sandbox acquisition does not rely on chat-time policy widening. Custom endpoints still remain subject to `allowedDomains`.
 - High-risk external posting is disabled by default unless explicitly allowed.
 - Path compatibility:
   - `allowedPaths` and tool path args accept both native and Windows/WSL formats.

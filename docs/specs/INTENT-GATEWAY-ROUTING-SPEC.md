@@ -133,6 +133,7 @@ Primary prompt profiles:
 
 Shared recovery rules:
 - fenced JSON, malformed object text, and tool-call argument blobs flow through the shared structured JSON recovery helpers
+- truncated or partially malformed flat JSON objects can still recover bounded scalar fields such as `route`, `operation`, `confidence`, and `resolution` so workload derivation and downstream provider-role selection keep the intended route signal
 - the repair path is bounded and schema-shaped; it exists to recover a valid structured decision, not to reinterpret the user turn heuristically
 - recovered results keep their source mode visible in routing metadata and tests instead of pretending the primary path succeeded
 
@@ -492,7 +493,7 @@ Relevant diagnostics:
 
 The durable routing trace is distinct from the existing run timeline:
 - the run timeline is the operator UI story for queueing, approvals, tool progress, verification, and completion
-- the routing trace is the low-level decision log for gateway classification, clarification prompts, tier selection, direct-intent candidates, direct tool execution, and final response locality
+- the routing trace is the low-level decision log for gateway classification, clarification prompts, tier selection, direct-intent candidates, delegated-worker lifecycle, direct tool execution, and final response locality
 - `gateway_classified` entries now carry structured provenance such as route source, operation source, workload-source attribution, and per-entity sources when those were repaired or derived after the initial classifier output
 - `direct_candidates_evaluated` entries are the current capability-resolution trace point for direct lanes and record the routed candidates alongside the gateway provenance that shaped them
 - `clarification_requested` entries now include the routed decision provenance that produced the blocker so operators can correlate the pending field with its route and entity sources
@@ -502,7 +503,13 @@ Current routing trace stages include:
 - `gateway_classified`
 - `clarification_requested`
 - `tier_routing_decided`
+- `profile_selection_decided`
+- `context_budget_decided`
 - `pre_routed_metadata_attached`
+- `delegated_worker_started`
+- `delegated_worker_running`
+- `delegated_worker_completed`
+- `delegated_worker_failed`
 - `direct_candidates_evaluated`
 - `direct_tool_call_started`
 - `direct_tool_call_completed`
@@ -511,6 +518,8 @@ Current routing trace stages include:
 
 Persistence:
 - default path: `~/.guardianagent/routing/intent-routing.jsonl`
+- common Windows-hosted path: `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`
+- common WSL view of a Windows-hosted trace: `/mnt/c/Users/<user>/.guardianagent/routing/intent-routing.jsonl`
 - rotation defaults: 5 MB active file, 5 retained files total
 - config knob: `routing.intentTrace`
 

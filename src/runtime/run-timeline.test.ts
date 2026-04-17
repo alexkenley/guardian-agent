@@ -450,4 +450,105 @@ describe('RunTimelineStore', () => {
       && item.detail === 'Resolve the pending approval(s) to continue the delegated run.'
     )).toBe(true);
   });
+
+  it('projects delegated worker lifecycle updates into the correlated run timeline', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-delegated-worker',
+      runId: 'req-delegated-worker',
+      status: 'running',
+      completedAt: undefined,
+      responsePreview: undefined,
+      nodes: [],
+    }));
+
+    store.ingestDelegatedWorkerProgress({
+      id: 'delegated-1',
+      kind: 'started',
+      requestId: 'req-delegated-worker',
+      codeSessionId: 'code-1',
+      agentId: 'agent-1',
+      agentName: 'Workspace Implementer',
+      orchestrationLabel: 'Coding Workspace',
+      originChannel: 'web',
+      requestPreview: 'Create the fix and verify the result.',
+      continuityKey: 'continuity-1',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      timestamp: 120,
+      detail: 'Brokered worker dispatch started.',
+    });
+    store.ingestDelegatedWorkerProgress({
+      id: 'delegated-2',
+      kind: 'running',
+      requestId: 'req-delegated-worker',
+      codeSessionId: 'code-1',
+      agentId: 'agent-1',
+      agentName: 'Workspace Implementer',
+      orchestrationLabel: 'Coding Workspace',
+      originChannel: 'web',
+      requestPreview: 'Create the fix and verify the result.',
+      continuityKey: 'continuity-1',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      timestamp: 130,
+      detail: 'Worker worker-1 is processing the delegated request in code session code-1.',
+    });
+    store.ingestDelegatedWorkerProgress({
+      id: 'delegated-3',
+      kind: 'blocked',
+      requestId: 'req-delegated-worker',
+      codeSessionId: 'code-1',
+      agentId: 'agent-1',
+      agentName: 'Workspace Implementer',
+      orchestrationLabel: 'Coding Workspace',
+      originChannel: 'web',
+      requestPreview: 'Create the fix and verify the result.',
+      continuityKey: 'continuity-1',
+      activeExecutionRefs: ['code_session:Repo Fix'],
+      unresolvedBlockerKind: 'approval',
+      approvalCount: 1,
+      reportingMode: 'held_for_approval',
+      timestamp: 140,
+      detail: 'Resolve the pending approval(s) to continue the delegated run.',
+    });
+
+    const run = store.getRun('req-delegated-worker');
+    expect(run?.summary.codeSessionId).toBe('code-1');
+    expect(run?.summary.status).toBe('running');
+    expect(run?.items.some((item) =>
+      item.type === 'handoff_started'
+      && item.title === 'Delegated to Workspace Implementer'
+    )).toBe(true);
+    const progressItem = run?.items.find((item) => item.id === 'delegated-2');
+    expect(progressItem).toMatchObject({
+      type: 'note',
+      status: 'running',
+      title: 'Workspace Implementer is working',
+      detail: 'Worker worker-1 is processing the delegated request in code session code-1.',
+      contextAssembly: {
+        continuityKey: 'continuity-1',
+        activeExecutionRefs: ['code_session:Repo Fix'],
+      },
+    });
+    expect(run?.items.some((item) =>
+      item.type === 'handoff_completed'
+      && item.status === 'blocked'
+      && item.title === 'Workspace Implementer is waiting'
+    )).toBe(true);
+    expect(run?.items.find((item) => item.id === 'delegated-3')).toMatchObject({
+      type: 'handoff_completed',
+      status: 'blocked',
+      title: 'Workspace Implementer is waiting',
+      detail: 'Resolve the pending approval(s) to continue the delegated run.',
+      contextAssembly: {
+        continuityKey: 'continuity-1',
+        activeExecutionRefs: ['code_session:Repo Fix'],
+      },
+    });
+    expect(store.listRuns({ continuityKey: 'continuity-1' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+    ]);
+    expect(store.listRuns({ activeExecutionRef: 'repo fix' }).map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+    ]);
+  });
 });

@@ -1,6 +1,8 @@
 import {
+  extractExplicitRepoFilePath,
   extractCodingWorkspaceTarget,
   extractExplicitRemoteExecCommand,
+  inferExplicitFilesystemTaskOperation,
   inferExplicitCodingBackendRequest,
   inferExplicitCodingTaskOperation,
 } from './entity-resolvers/coding.js';
@@ -140,6 +142,21 @@ export function repairUnavailableIntentGatewayDecision(
       codingBackendRequested: true,
       ...(inferredCodingBackendRequest.sessionTarget
         ? { sessionTarget: inferredCodingBackendRequest.sessionTarget }
+        : {}),
+    }, repairContext, { classifierSource: 'repair.unstructured' });
+  }
+  const inferredFilesystemOperation = inferExplicitFilesystemTaskOperation(sourceContent, parsedOperation);
+  if (inferredFilesystemOperation) {
+    return normalizeIntentGatewayDecision({
+      ...(parsed ?? {}),
+      route: 'filesystem_task',
+      operation: inferredFilesystemOperation,
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : 'Recovered filesystem intent from an explicit file-path request after an unstructured gateway response.',
+      ...(extractExplicitRepoFilePath(rawSourceContent)
+        ? { path: extractExplicitRepoFilePath(rawSourceContent) }
         : {}),
     }, repairContext, { classifierSource: 'repair.unstructured' });
   }

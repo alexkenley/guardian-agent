@@ -126,4 +126,57 @@ describe('IntentRoutingTraceLog', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('accepts delegated worker stages for filtered reads', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'guardian-intent-trace-'));
+    try {
+      const trace = new IntentRoutingTraceLog({
+        directory: dir,
+        maxFileSizeBytes: 10_000,
+      });
+      await trace.init();
+      trace.record({
+        stage: 'delegated_worker_started',
+        requestId: 'req-delegated',
+        userId: 'user-1',
+        channel: 'web',
+        agentId: 'agent-1',
+        contentPreview: 'Do the repo fix.',
+        details: {
+          agentName: 'Workspace Implementer',
+          lifecycle: 'running',
+        },
+      });
+      trace.record({
+        stage: 'delegated_worker_completed',
+        requestId: 'req-delegated',
+        userId: 'user-1',
+        channel: 'web',
+        agentId: 'agent-1',
+        contentPreview: 'Do the repo fix.',
+        details: {
+          agentName: 'Workspace Implementer',
+          lifecycle: 'completed',
+        },
+      });
+      await trace.flush();
+
+      const entries = await trace.listRecent({
+        limit: 10,
+        requestId: 'req-delegated',
+        stage: 'delegated_worker_completed',
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        stage: 'delegated_worker_completed',
+        requestId: 'req-delegated',
+        details: {
+          agentName: 'Workspace Implementer',
+          lifecycle: 'completed',
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -16,6 +16,7 @@ import { applyInputTooltips } from '../tooltip.js';
 let currentContainer = null;
 let runTimelineHandler = null;
 let runTimelineRefreshTimer = null;
+let automationsRenderSequence = 0;
 const automationUiState = {
   placement: null,
   activeTab: 'catalog',
@@ -105,7 +106,7 @@ function buildAssistantRunQueryParams(limit = 15) {
 async function renderAutomationsPreserveScroll(container) {
   const scrollParent = document.getElementById('content') || container.parentElement || document.documentElement;
   const savedScroll = scrollParent.scrollTop;
-  await renderAutomations(container);
+  await renderAutomations(container, { preserveExisting: true });
   requestAnimationFrame(() => { scrollParent.scrollTop = savedScroll; });
 }
 
@@ -129,9 +130,16 @@ function requireAutomationMutationSuccess(result, fallbackMessage) {
   return result;
 }
 
-export async function renderAutomations(container) {
+export async function renderAutomations(container, options = {}) {
   currentContainer = container;
-  container.innerHTML = '<div class="loading">Loading...</div>';
+  const preserveExisting = options?.preserveExisting === true;
+  const renderSequence = ++automationsRenderSequence;
+  if (!preserveExisting || !container.hasChildNodes()) {
+    container.innerHTML = '<div class="loading">Loading...</div>';
+  } else {
+    container.setAttribute('aria-busy', 'true');
+    container.dataset.liveRefreshing = 'true';
+  }
 
   try {
     const [connState, toolsState, automationCatalog, automationHistory, agentsState, assistantRuns] = await Promise.all([
@@ -171,6 +179,10 @@ export async function renderAutomations(container) {
       : requestedAssistantRunId
         ? 'history'
       : normalizeAutomationTab(automationUiState.activeTab);
+
+    if (renderSequence !== automationsRenderSequence || currentContainer !== container) {
+      return;
+    }
 
     container.innerHTML = `
       ${renderGuidancePanel({
@@ -265,12 +277,25 @@ export async function renderAutomations(container) {
     enhanceSectionHelp(container, AUTOMATION_HELP, createGenericHelpFactory('Automations'));
     activateContextHelp(container);
   } catch (err) {
+    if (renderSequence !== automationsRenderSequence || currentContainer !== container) {
+      return;
+    }
+    if (preserveExisting && container.hasChildNodes()) {
+      console.warn('Failed to refresh Automations page live view:', err);
+      return;
+    }
     container.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  } finally {
+    if (renderSequence === automationsRenderSequence && currentContainer === container) {
+      container.removeAttribute('aria-busy');
+      delete container.dataset.liveRefreshing;
+    }
   }
 }
 
-export async function updateAutomations() {
-  if (currentContainer) await renderAutomations(currentContainer);
+export async function updateAutomations(container = currentContainer, options = {}) {
+  const target = container || currentContainer;
+  if (target) await renderAutomations(target, { ...options, preserveExisting: true });
 }
 
 function renderCatalogTabContent({

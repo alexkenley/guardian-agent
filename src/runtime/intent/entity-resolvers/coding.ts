@@ -120,6 +120,23 @@ export function extractCodingWorkspaceTarget(rawContent: string): string | undef
   return undefined;
 }
 
+export function extractExplicitRepoFilePath(rawContent: string): string | undefined {
+  if (!rawContent) return undefined;
+  const patterns = [
+    /\b([A-Za-z]:\\(?:[^\\\s"'`]+\\)*[^\\\s"'`]+\.[A-Za-z0-9]+)\b/,
+    /\b((?:\.{1,2}\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)\b/,
+    /\b([A-Za-z0-9_.-]+\.[A-Za-z0-9]+)\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = rawContent.match(pattern);
+    const candidate = match?.[1]?.trim();
+    if (candidate) {
+      return candidate.replace(/[.,;:!?]+$/, '');
+    }
+  }
+  return undefined;
+}
+
 export function extractExplicitRemoteExecCommand(
   rawContent: string,
   normalized: string,
@@ -163,6 +180,15 @@ export function inferExplicitCodingTaskOperation(
 ): IntentGatewayOperation | null {
   if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
   if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+  if (/\b(?:create|add|make|write|generate|touch)\b/.test(normalized)) {
+    return 'create';
+  }
+  if (/\b(?:update|edit|change|modify|fix|patch|rewrite|append)\b/.test(normalized)) {
+    return 'update';
+  }
+  if (/\b(?:delete|remove)\b/.test(normalized)) {
+    return 'delete';
+  }
   if (
     /\b(?:run|execute|start|watch)\b/.test(normalized)
     && /\b(?:tests?|test suite|unit tests?|build|compile|lint|check)\b/.test(normalized)
@@ -191,6 +217,30 @@ export function inferExplicitCodingTaskOperation(
   return null;
 }
 
+export function inferExplicitFilesystemTaskOperation(
+  normalized: string,
+  parsedOperation: IntentGatewayOperation,
+): IntentGatewayOperation | null {
+  if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
+  if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+  if (/\b(?:create|add|make|write|save|store|put|touch|mkdir)\b/.test(normalized)) {
+    return 'create';
+  }
+  if (/\b(?:update|edit|change|modify|append|rename|move|copy)\b/.test(normalized)) {
+    return 'update';
+  }
+  if (/\b(?:delete|remove)\b/.test(normalized)) {
+    return 'delete';
+  }
+  if (/\b(?:search|find|locate|grep|rg)\b/.test(normalized)) {
+    return 'search';
+  }
+  if (/\b(?:read|open|show|list|display|cat)\b/.test(normalized)) {
+    return 'read';
+  }
+  return null;
+}
+
 export function hasExplicitRepoFileReference(normalized: string): boolean {
-  return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
+  return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
 }

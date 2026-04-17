@@ -675,6 +675,123 @@ describe('ToolExecutor', () => {
     }));
   });
 
+  it('allows the built-in Vercel remote sandbox control-plane host without widening allowedDomains', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: ['localhost'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+    });
+
+    const target = await executor.resolveRemoteExecutionTarget('vercel-main');
+
+    expect(target).toMatchObject({
+      backendKind: 'vercel_sandbox',
+      profileId: 'vercel-main',
+    });
+    expect(target?.apiBaseUrl).toContain('api.vercel.com');
+  });
+
+  it('allows the built-in Daytona remote sandbox control-plane host without widening allowedDomains', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: ['localhost'],
+      cloudConfig: {
+        enabled: true,
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+    });
+
+    const target = await executor.resolveRemoteExecutionTarget('daytona-main');
+
+    expect(target).toMatchObject({
+      backendKind: 'daytona_sandbox',
+      profileId: 'daytona-main',
+    });
+    expect(target?.apiUrl).toContain('app.daytona.io');
+  });
+
+  it('keeps custom remote sandbox control-plane hosts behind allowedDomains', async () => {
+    const root = createExecutorRoot();
+    const vercelExecutor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: ['localhost'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          apiBaseUrl: 'https://sandbox-api.example.com',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+    });
+    const daytonaExecutor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: ['localhost'],
+      cloudConfig: {
+        enabled: true,
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          apiUrl: 'https://sandbox.daytona.example/api',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+    });
+
+    await expect(vercelExecutor.resolveRemoteExecutionTarget('vercel-main')).rejects.toThrow(
+      "Host 'sandbox-api.example.com' is not in allowedDomains.",
+    );
+    await expect(daytonaExecutor.resolveRemoteExecutionTarget('daytona-main')).rejects.toThrow(
+      "Host 'sandbox.daytona.example' is not in allowedDomains.",
+    );
+  });
+
   it('creates and releases managed sandboxes for a code session', async () => {
     const root = createExecutorRoot();
     const codeSessionStore = new CodeSessionStore({

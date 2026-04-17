@@ -477,6 +477,36 @@ body {
   padding: 0.95rem 1.25rem 1.25rem;
   overflow-y: auto;
   max-height: calc(100vh - 50px);
+  position: relative;
+}
+
+.content[data-live-refreshing='true']::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(120, 180, 255, 0.95), transparent);
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.content[data-live-refreshing='true']::after {
+  content: 'Updating live';
+  position: absolute;
+  top: 0.7rem;
+  right: 1.25rem;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid rgba(120, 180, 255, 0.35);
+  background: rgba(9, 14, 24, 0.82);
+  color: var(--accent);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 3;
 }
 
 /* ─── Status Cards ───────────────────────────────────────── */

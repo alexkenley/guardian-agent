@@ -36,6 +36,8 @@ import type {
 } from '../runtime/context-assembly.js';
 import type { SelectedExecutionProfile } from '../runtime/execution-profiles.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
+import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
+import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
 
 const log = createLogger('worker-manager');
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
@@ -83,6 +85,12 @@ export interface WorkerDelegationMetadata {
   runClass?: DelegatedWorkerRunClass;
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
+}
+
+export interface WorkerManagerObservability {
+  intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
+  runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress'>;
+  now?: () => number;
 }
 
 interface ResolvedDelegatedTargetMetadata {
@@ -154,6 +162,7 @@ export class WorkerManager {
   private readonly runtime: Runtime;
   private readonly config: AgentIsolationConfig;
   private readonly sandboxConfig: SandboxConfig;
+  private readonly observability: WorkerManagerObservability;
   private readonly delegatedJobTracker = new AssistantJobTracker({ maxJobs: 200 });
   private readonly reapInterval: NodeJS.Timeout;
 
@@ -162,11 +171,13 @@ export class WorkerManager {
     runtime: Runtime,
     config: AgentIsolationConfig,
     sandboxConfig?: SandboxConfig,
+    observability: WorkerManagerObservability = {},
   ) {
     this.tools = tools;
     this.runtime = runtime;
     this.config = config;
     this.sandboxConfig = sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
+    this.observability = observability;
     this.tokenManager = new CapabilityTokenManager(config.capabilityTokenTtlMs);
     this.reapInterval = setInterval(() => this.reapIdleWorkers(), 60_000);
   }
@@ -187,14 +198,27 @@ export class WorkerManager {
     }
 
     const delegatedTarget = resolveDelegatedTargetMetadata(this.runtime, input);
+    const requestId = input.delegation?.requestId ?? input.message.id;
+    const delegatedJobDetail = describeDelegatedJob(input);
 
     const delegatedJob = this.delegatedJobTracker.start({
       type: 'delegated_worker',
       source: 'system',
-      detail: describeDelegatedJob(input),
+      detail: delegatedJobDetail,
       metadata: {
         delegation: buildDelegationJobMetadata(input, { lifecycle: 'running', target: delegatedTarget }),
       },
+    });
+    this.recordDelegatedWorkerTrace('delegated_worker_started', input, delegatedTarget, {
+      requestId,
+      lifecycle: 'running',
+      reason: delegatedJobDetail,
+    });
+    this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+      id: `delegated-worker:${delegatedJob.id}:started`,
+      kind: 'started',
+      requestId,
+      detail: delegatedJobDetail,
     });
     this.runtime.auditLog.record({
       type: 'broker_action',
@@ -206,7 +230,7 @@ export class WorkerManager {
       details: {
         actionType: 'delegated_worker_started',
         sessionId: input.sessionId,
-        requestId: input.delegation?.requestId ?? input.message.id,
+        requestId,
         continuityKey: input.delegation?.continuityKey,
         codeSessionId: input.delegation?.codeSessionId,
       },
@@ -228,6 +252,19 @@ export class WorkerManager {
             target: delegatedTarget,
           }),
         },
+      });
+      this.recordDelegatedWorkerTrace('delegated_worker_running', input, delegatedTarget, {
+        requestId,
+        lifecycle: 'running',
+        workerId: worker.id,
+        reason: `Worker ${worker.id} is processing the delegated request.`,
+      });
+      this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+        id: `delegated-worker:${delegatedJob.id}:running`,
+        kind: 'running',
+        requestId,
+        workerId: worker.id,
+        detail: buildDelegatedWorkerRunningDetail(worker.id, input.delegation?.codeSessionId),
       });
 
       // LLM calls are proxied through the broker — the worker no longer needs the provider config.
@@ -272,6 +309,27 @@ export class WorkerManager {
           }),
         },
       });
+      this.recordDelegatedWorkerTrace('delegated_worker_completed', input, delegatedTarget, {
+        requestId,
+        lifecycle: handoff.unresolvedBlockerKind ? 'blocked' : 'completed',
+        workerId: worker.id,
+        unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+        approvalCount: handoff.approvalCount,
+        reportingMode: handoff.reportingMode,
+        runClass: handoff.runClass,
+        reason: handoff.unresolvedBlockerKind ? handoff.nextAction : 'Delegated worker completed.',
+      });
+      this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+        id: `delegated-worker:${delegatedJob.id}:completed`,
+        kind: handoff.unresolvedBlockerKind ? 'blocked' : 'completed',
+        requestId,
+        workerId: worker.id,
+        runClass: handoff.runClass,
+        unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+        approvalCount: handoff.approvalCount,
+        reportingMode: handoff.reportingMode,
+        detail: handoff.unresolvedBlockerKind ? handoff.nextAction : handoff.summary,
+      });
       this.runtime.auditLog.record({
         type: 'broker_action',
         severity: handoff.unresolvedBlockerKind ? 'warn' : 'info',
@@ -282,7 +340,7 @@ export class WorkerManager {
         details: {
           actionType: 'delegated_worker_completed',
           sessionId: input.sessionId,
-          requestId: input.delegation?.requestId ?? input.message.id,
+          requestId,
           continuityKey: input.delegation?.continuityKey,
           codeSessionId: input.delegation?.codeSessionId,
           unresolvedBlockerKind: handoff.unresolvedBlockerKind,
@@ -305,6 +363,17 @@ export class WorkerManager {
           }),
         },
       });
+      this.recordDelegatedWorkerTrace('delegated_worker_failed', input, delegatedTarget, {
+        requestId,
+        lifecycle: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+        id: `delegated-worker:${delegatedJob.id}:failed`,
+        kind: 'failed',
+        requestId,
+        detail: error instanceof Error ? error.message : String(error),
+      });
       this.runtime.auditLog.record({
         type: 'broker_action',
         severity: 'warn',
@@ -315,7 +384,7 @@ export class WorkerManager {
         details: {
           actionType: 'delegated_worker_failed',
           sessionId: input.sessionId,
-          requestId: input.delegation?.requestId ?? input.message.id,
+          requestId,
           continuityKey: input.delegation?.continuityKey,
           codeSessionId: input.delegation?.codeSessionId,
           reason: error instanceof Error ? error.message : String(error),
@@ -323,6 +392,72 @@ export class WorkerManager {
       });
       throw error;
     }
+  }
+
+  private recordDelegatedWorkerTrace(
+    stage: Extract<
+      IntentRoutingTraceStage,
+      'delegated_worker_started' | 'delegated_worker_running' | 'delegated_worker_completed' | 'delegated_worker_failed'
+    >,
+    input: WorkerMessageRequest,
+    target: ResolvedDelegatedTargetMetadata,
+    options: {
+      requestId: string;
+      lifecycle?: 'running' | 'completed' | 'blocked' | 'failed';
+      workerId?: string;
+      unresolvedBlockerKind?: string;
+      approvalCount?: number;
+      reportingMode?: string;
+      runClass?: DelegatedWorkerRunClass;
+      reason?: string;
+    },
+  ): void {
+    this.observability.intentRoutingTrace?.record({
+      stage,
+      requestId: options.requestId,
+      messageId: input.message.id,
+      userId: input.userId,
+      channel: input.delegation?.originChannel ?? input.message.channel,
+      agentId: target.agentId,
+      contentPreview: input.message.content,
+      details: {
+        ...(input.delegation?.originSurfaceId ? { originSurfaceId: input.delegation.originSurfaceId } : {}),
+        ...(input.delegation?.continuityKey ? { continuityKey: input.delegation.continuityKey } : {}),
+        ...(input.delegation?.activeExecutionRefs?.length ? { activeExecutionRefs: [...input.delegation.activeExecutionRefs] } : {}),
+        ...(input.delegation?.pendingActionId ? { pendingActionId: input.delegation.pendingActionId } : {}),
+        ...(input.delegation?.codeSessionId ? { codeSessionId: input.delegation.codeSessionId } : {}),
+        ...(target.agentName ? { agentName: target.agentName } : {}),
+        ...(target.orchestration?.role ? { orchestrationRole: target.orchestration.role } : {}),
+        ...(target.orchestration?.label ? { orchestrationLabel: target.orchestration.label } : {}),
+        ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
+        ...(options.workerId ? { workerId: options.workerId } : {}),
+        ...(options.unresolvedBlockerKind ? { unresolvedBlockerKind: options.unresolvedBlockerKind } : {}),
+        ...(typeof options.approvalCount === 'number' ? { approvalCount: options.approvalCount } : {}),
+        ...(options.reportingMode ? { reportingMode: options.reportingMode } : {}),
+        ...(options.runClass ? { runClass: options.runClass } : {}),
+        ...(options.reason ? { reason: options.reason } : {}),
+      },
+    });
+  }
+
+  private publishDelegatedWorkerProgress(
+    input: WorkerMessageRequest,
+    target: ResolvedDelegatedTargetMetadata,
+    event: Omit<DelegatedWorkerProgressEvent, 'agentId' | 'agentName' | 'orchestrationLabel' | 'originChannel' | 'requestPreview' | 'continuityKey' | 'activeExecutionRefs' | 'codeSessionId' | 'timestamp' | 'runId'>,
+  ): void {
+    this.observability.runTimeline?.ingestDelegatedWorkerProgress({
+      ...event,
+      runId: event.requestId,
+      codeSessionId: input.delegation?.codeSessionId,
+      agentId: target.agentId,
+      ...(target.agentName ? { agentName: target.agentName } : {}),
+      ...(target.orchestration?.label ? { orchestrationLabel: target.orchestration.label } : {}),
+      originChannel: input.delegation?.originChannel ?? input.message.channel,
+      requestPreview: input.message.content,
+      continuityKey: input.delegation?.continuityKey,
+      activeExecutionRefs: input.delegation?.activeExecutionRefs,
+      timestamp: this.observability.now?.() ?? Date.now(),
+    });
   }
 
   shutdown(): void {
@@ -1237,6 +1372,11 @@ function describeDelegatedJob(input: WorkerMessageRequest): string {
   const codeSessionId = input.delegation?.codeSessionId?.trim();
   const base = `Brokered worker dispatch for ${input.agentId}`;
   return codeSessionId ? `${base} in code session ${codeSessionId}` : base;
+}
+
+function buildDelegatedWorkerRunningDetail(workerId: string, codeSessionId?: string): string {
+  const sessionSuffix = codeSessionId?.trim() ? ` in code session ${codeSessionId.trim()}` : '';
+  return `Worker ${workerId} is processing the delegated request${sessionSuffix}.`;
 }
 
 function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined): number {

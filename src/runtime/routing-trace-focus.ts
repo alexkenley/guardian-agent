@@ -64,6 +64,12 @@ export function pickRoutingTraceFocusItem(
     (item) => item.title === 'Assembled context' || !!item.contextAssembly,
   );
   const approvalItem = reverseFindItem(items, (item) => item.type === 'approval_requested');
+  const startedHandoffItem = reverseFindItem(items, (item) => item.type === 'handoff_started');
+  const completedHandoffItem = reverseFindItem(items, (item) => item.type === 'handoff_completed');
+  const delegatedWorkingItem = reverseFindItem(
+    items,
+    (item) => item.source === 'system' && item.type === 'note',
+  );
   const startedToolItem = reverseFindItem(
     items,
     (item) => item.type === 'tool_call_started' && itemMatchesTool(item, toolName),
@@ -87,6 +93,13 @@ export function pickRoutingTraceFocusItem(
       return toFocusItem(contextItem ?? preparedItem ?? startedItem ?? latestItem);
     case 'clarification_requested':
       return toFocusItem(approvalItem ?? contextItem ?? latestItem);
+    case 'delegated_worker_started':
+      return toFocusItem(startedHandoffItem ?? delegatedWorkingItem ?? latestItem);
+    case 'delegated_worker_running':
+      return toFocusItem(delegatedWorkingItem ?? startedHandoffItem ?? latestItem);
+    case 'delegated_worker_completed':
+    case 'delegated_worker_failed':
+      return toFocusItem(completedHandoffItem ?? delegatedWorkingItem ?? latestItem);
     case 'direct_tool_call_started':
       return toFocusItem(startedToolItem ?? contextItem ?? latestItem);
     case 'direct_tool_call_completed':

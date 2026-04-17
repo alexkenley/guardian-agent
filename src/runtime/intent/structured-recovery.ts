@@ -35,7 +35,8 @@ export function parseIntentGatewayDecision(
 ): { decision: IntentGatewayDecision; available: boolean } {
   const classifierSource = classifierProvenanceSourceForMode(options?.mode ?? 'primary');
   const parsed = parseStructuredToolArguments(response)
-    ?? parseStructuredContent(response.content);
+    ?? parseStructuredContent(response.content)
+    ?? recoverMalformedStructuredContent(response);
   if (!parsed) {
     const repaired = repairUnavailableIntentGatewayDecision(
       repairContext,
@@ -101,6 +102,46 @@ export function parseStructuredToolArguments(response: ChatResponse): Record<str
 
 export function parseStructuredContent(content: string): Record<string, unknown> | null {
   return parseStructuredJsonObject<Record<string, unknown>>(content);
+}
+
+function recoverMalformedStructuredContent(response: ChatResponse): Record<string, unknown> | null {
+  return recoverStructuredGatewayPreview(response.toolCalls?.[0]?.arguments)
+    ?? recoverStructuredGatewayPreview(response.content);
+}
+
+function recoverStructuredGatewayPreview(content: string | undefined): Record<string, unknown> | null {
+  if (typeof content !== 'string' || !content.trim()) return null;
+  const normalized = content
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, '\'');
+  const recovered: Record<string, unknown> = {};
+  const matcher = /"([A-Za-z][A-Za-z0-9_]*)"\s*:\s*("(?:\\.|[^"\\])*"|\[[^\]]*\]|true|false|null|-?\d+(?:\.\d+)?)/g;
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(normalized)) !== null) {
+    const key = match[1]?.trim();
+    const rawValue = match[2]?.trim();
+    if (!key || !rawValue) continue;
+    const parsedValue = parseRecoveredStructuredScalar(rawValue);
+    if (parsedValue === undefined) continue;
+    recovered[key] = parsedValue;
+  }
+  return Object.keys(recovered).length > 0 ? recovered : null;
+}
+
+function parseRecoveredStructuredScalar(rawValue: string): unknown {
+  try {
+    return JSON.parse(rawValue) as unknown;
+  } catch {
+    if (rawValue.startsWith('\'') && rawValue.endsWith('\'')) {
+      try {
+        return JSON.parse(`"${rawValue.slice(1, -1).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`) as unknown;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
 }
 
 export function normalizeIntentGatewayDecision(

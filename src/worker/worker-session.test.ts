@@ -173,6 +173,108 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.metadata).not.toHaveProperty('pendingApprovals');
   });
 
+  it('marks quarantined tool results so the worker can explain inspection limits instead of inventing a summary', async () => {
+    let assistantCallCount = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the requested repository file.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+
+      assistantCallCount += 1;
+      if (assistantCallCount === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-1',
+            name: 'fs_read',
+            arguments: JSON.stringify({ path: 'SECURITY.md' }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      }
+
+      const toolMessage = messages.findLast((message) => message.role === 'tool');
+      const systemMessage = messages.findLast((message) => message.role === 'system');
+      expect(typeof toolMessage?.content).toBe('string');
+      expect(String(toolMessage?.content)).toContain('inspectionRestricted');
+      expect(String(toolMessage?.content)).toContain('safeHandlingNote');
+      expect(String(toolMessage?.content)).toContain('Do not claim you inspected or summarized the quarantined raw content');
+      expect(typeof systemMessage?.content).toBe('string');
+      expect(String(systemMessage?.content)).toContain('do not infer or fabricate a summary');
+      return {
+        content: 'I could not safely inspect the quarantined raw content.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_read',
+        description: 'Read a file.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+        },
+        risk: 'read_only',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-read-1',
+        message: 'Read SECURITY.md.',
+        output: {
+          quarantined: true,
+          trustLevel: 'quarantined',
+          taintReasons: ['prompt_injection_signals'],
+          preview: 'Raw content withheld.',
+        },
+        trustLevel: 'quarantined',
+        taintReasons: ['prompt_injection_signals'],
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-quarantined-inspect',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect SECURITY.md and summarize it.',
+        timestamp: Date.now(),
+        metadata: {
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-1',
+          },
+        },
+      },
+    });
+
+    expect(result.content).toBe('I could not safely inspect the quarantined raw content.');
+  });
+
   it('resumes suspended approval-backed runs through structured continuation metadata without reclassifying the turn', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

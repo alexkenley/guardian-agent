@@ -447,6 +447,23 @@ class BrokeredToolExecutor {
       });
     }
 
+    if (result.trustLevel === 'quarantined') {
+      const resultRecord = result as unknown as Record<string, unknown>;
+      const output = isRecord(resultRecord.output) ? resultRecord.output : null;
+      return {
+        ...resultRecord,
+        message: typeof resultRecord.message === 'string' && resultRecord.message.trim().length > 0
+          ? resultRecord.message
+          : `Raw ${toolName} content was quarantined before reinjection.`,
+        output: {
+          ...(output ?? {}),
+          rawContentAvailable: false,
+          inspectionRestricted: true,
+          safeHandlingNote: 'Do not claim you inspected or summarized the quarantined raw content. Explain the limitation instead.',
+        },
+      };
+    }
+
     return result as unknown as Record<string, unknown>;
   }
 }

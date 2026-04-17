@@ -3371,6 +3371,7 @@ async function main(): Promise<void> {
   let secondBrainSyncService: SyncService | undefined;
   secondBrainBriefingService.start();
   const runTimeline = new RunTimelineStore();
+  const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
   let refreshRunTimelineSnapshots: () => void = () => {};
   codeSessionStore.subscribe((event) => {
     if (event.type === 'created' || event.type === 'updated') {
@@ -5180,6 +5181,10 @@ async function main(): Promise<void> {
       runtime,
       config.runtime.agentIsolation,
       DEFAULT_SANDBOX_CONFIG,
+      {
+        intentRoutingTrace,
+        runTimeline,
+      },
     );
   } else {
     runtime.workerManager = undefined;
@@ -5639,7 +5644,6 @@ async function main(): Promise<void> {
     ? [...TRUST_PRESETS[presetName].capabilities]
     : DEFAULT_AGENT_CAPABILITIES;
   const chatAgents = new Map<string, ChatAgentInstance>();
-  const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
   const routingIntentGateway = new IntentGateway();
 
   const defaultOrchestrationForRoutingRole = (

@@ -17,6 +17,7 @@ let metricsHandler = null;
 let runTimelineHandler = null;
 let runTimelineRefreshTimer = null;
 let currentContainer = null;
+let systemRenderSequence = 0;
 const systemUiState = {
   routingTraceFilters: {
     continuityKey: '',
@@ -160,7 +161,7 @@ function normalizeRequestedRunCollection(runs, requestedRun, kind) {
 async function renderSystemPreserveScroll(container) {
   const scrollParent = document.getElementById('content') || container.parentElement || document.documentElement;
   const savedScroll = scrollParent.scrollTop;
-  await renderSystem(container);
+  await renderSystem(container, { preserveExisting: true });
   requestAnimationFrame(() => { scrollParent.scrollTop = savedScroll; });
 }
 
@@ -439,10 +440,17 @@ function createPendingApprovalsSection(approvalsPayload) {
   return section;
 }
 
-export async function renderSystem(container) {
+export async function renderSystem(container, options = {}) {
   currentContainer = container;
+  const preserveExisting = options?.preserveExisting === true;
+  const renderSequence = ++systemRenderSequence;
   cards = {};
-  container.innerHTML = '<h2 class="page-title">System</h2><div class="loading">Loading...</div>';
+  if (!preserveExisting || !container.hasChildNodes()) {
+    container.innerHTML = '<h2 class="page-title">System</h2><div class="loading">Loading...</div>';
+  } else {
+    container.setAttribute('aria-busy', 'true');
+    container.dataset.liveRefreshing = 'true';
+  }
 
   try {
     const requestedAssistantRunId = getRequestedAssistantRunId();
@@ -494,6 +502,9 @@ export async function renderSystem(container) {
       api.assistantRuns({ ...runtimeTimelineParams, kind: 'code_session' }).catch(() => ({ runs: [] })),
       requestedAssistantRunId ? api.assistantRun(requestedAssistantRunId).catch(() => null) : Promise.resolve(null),
     ]);
+    if (renderSequence !== systemRenderSequence || currentContainer !== container) {
+      return;
+    }
 
     const defaultProviderName = assistantState?.defaultProvider || null;
     const primaryProvider = defaultProviderName
@@ -722,13 +733,26 @@ export async function renderSystem(container) {
     };
     onSSE('metrics', metricsHandler);
   } catch (err) {
+    if (renderSequence !== systemRenderSequence || currentContainer !== container) {
+      return;
+    }
+    if (preserveExisting && container.hasChildNodes()) {
+      console.warn('Failed to refresh System page live view:', err);
+      return;
+    }
     container.innerHTML = `<h2 class="page-title">System</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  } finally {
+    if (renderSequence === systemRenderSequence && currentContainer === container) {
+      container.removeAttribute('aria-busy');
+      delete container.dataset.liveRefreshing;
+    }
   }
 }
 
-export function updateSystem() {
-  if (currentContainer) {
-    void renderSystem(currentContainer);
+export function updateSystem(container = currentContainer, options = {}) {
+  const target = container || currentContainer;
+  if (target) {
+    void renderSystem(target, { ...options, preserveExisting: true });
   }
 }
 
@@ -1253,6 +1277,13 @@ function formatRoutingTraceDetail(entry) {
       : '',
     typeof details.route === 'string' ? `route ${details.route}` : '',
     typeof details.tier === 'string' ? `tier ${details.tier}` : '',
+    typeof details.agentName === 'string' ? `worker ${details.agentName}` : '',
+    typeof details.orchestrationLabel === 'string' ? `role ${details.orchestrationLabel}` : '',
+    typeof details.lifecycle === 'string' ? `lifecycle ${details.lifecycle}` : '',
+    typeof details.reportingMode === 'string' ? `handoff ${details.reportingMode}` : '',
+    typeof details.unresolvedBlockerKind === 'string' ? `blocker ${details.unresolvedBlockerKind}` : '',
+    typeof details.approvalCount === 'number' ? `approvals ${details.approvalCount}` : '',
+    typeof details.runClass === 'string' ? `run ${details.runClass}` : '',
     typeof details.reason === 'string' ? details.reason : '',
     typeof details.continuityKey === 'string' ? `continuity ${details.continuityKey}` : '',
     Array.isArray(details.activeExecutionRefs) && details.activeExecutionRefs.length > 0
