@@ -451,7 +451,18 @@ function startClock() {
   if (!el) return;
   const tick = () => {
     const now = new Date();
-    el.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const timeLabel = now.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const dateLabel = now.toLocaleDateString([], {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    }).replace(',', '');
+    el.textContent = `${timeLabel} · ${dateLabel}`;
   };
   tick();
   setInterval(tick, 1000);
@@ -481,16 +492,18 @@ function startApp() {
   const sidebarToggle = document.getElementById('sidebar-toggle');
   const sidebar = document.getElementById('app-sidebar');
   const SIDEBAR_COLLAPSED_KEY = 'guardianagent_sidebar_collapsed';
+  const SIDEBAR_EXPANDED_WIDTH = '220px';
+  const SIDEBAR_COLLAPSED_WIDTH = '60px';
   if (sidebarToggle && sidebar) {
     if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true') {
       sidebar.classList.add('is-collapsed');
-      layout?.style.setProperty('--sidebar-width', '48px');
+      layout?.style.setProperty('--sidebar-width', SIDEBAR_COLLAPSED_WIDTH);
       sidebarToggle.innerHTML = '&#x276F;';
       sidebarToggle.title = 'Expand sidebar';
     }
     sidebarToggle.addEventListener('click', () => {
       const isCollapsed = sidebar.classList.toggle('is-collapsed');
-      layout?.style.setProperty('--sidebar-width', isCollapsed ? '48px' : '200px');
+      layout?.style.setProperty('--sidebar-width', isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH);
       sidebarToggle.innerHTML = isCollapsed ? '&#x276F;' : '&#x276E;';
       sidebarToggle.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
       localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(isCollapsed));

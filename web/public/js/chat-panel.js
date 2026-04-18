@@ -38,6 +38,10 @@ import {
   findTargetCodeSession,
   normalizeCodeSessionId,
 } from './chat-code-sessions.js';
+import {
+  canClearPendingActionFromChat,
+  describePendingActionClearLabel,
+} from './chat-pending-actions.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
 
@@ -59,6 +63,7 @@ let refreshChatPanelChrome = null;
 let activeChatIndicator = null;
 let activeRequestController = null;
 let externalPendingClearHandler = null;
+let clearPendingUiHandler = null;
 
 function persistActiveRequest(request) {
   if (!request || typeof request !== 'object') return;
@@ -186,19 +191,26 @@ export async function initChatPanel(container) {
   const wrapper = document.createElement('div');
   wrapper.className = 'chat-container';
   wrapper.style.height = '100%';
-  wrapper.style.padding = '1rem';
+  wrapper.style.padding = '0';
 
   // Header
   const header = document.createElement('div');
   header.className = 'chat-panel-header';
-  header.style.marginBottom = '1rem';
-  header.innerHTML = '<h3 style="font-size:0.9rem;color:var(--accent);font-family:var(--font-display);">&#x1F6E1; Guardian Assistant</h3>';
+  header.innerHTML = `
+    <div class="chat-panel-header__brand">
+      <span class="chat-panel-header__mark" aria-hidden="true"></span>
+      <div class="chat-panel-header__copy">
+        <div class="chat-panel-header__eyebrow">Persistent Chat Rail</div>
+        <h3 class="chat-panel-header__title">Assistant</h3>
+      </div>
+    </div>
+    <div class="chat-panel-header__meta">Request-scoped provider</div>
+  `;
   wrapper.appendChild(header);
 
   // Toolbar
   const toolbar = document.createElement('div');
   toolbar.className = 'chat-toolbar';
-  toolbar.style.gap = '0.5rem';
 
   const primaryControls = document.createElement('div');
   primaryControls.style.cssText = 'display:flex;align-items:center;gap:0.5rem;width:100%;min-width:0;';
@@ -423,7 +435,7 @@ export async function initChatPanel(container) {
 
   const input = document.createElement('textarea');
   input.rows = 2;
-  input.placeholder = 'Ask the agent...';
+  input.placeholder = 'Message Guardian - security-first, sandboxed tooling';
   input.id = 'chat-input';
   input.style.fontSize = '0.75rem';
 
@@ -753,7 +765,12 @@ export async function initChatPanel(container) {
       progress?.finish();
     }
   };
+  const handleClearPending = async () => {
+    await api.resetPendingAction(webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
+    window.dispatchEvent(new CustomEvent(CHAT_PENDING_CLEARED_EVENT));
+  };
   approvalHandler = handleApproval;
+  clearPendingUiHandler = handleClearPending;
   renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
 
   /**
@@ -776,6 +793,7 @@ export async function initChatPanel(container) {
       responseSource,
       activitySummary: normalizedActivitySummary,
       onApproval: handleApproval,
+      onClearPending: handleClearPending,
     }));
   };
 
@@ -1022,8 +1040,32 @@ export async function initChatPanel(container) {
     autoResizeChatInput(input);
   });
 
+  const composeMeta = document.createElement('div');
+  composeMeta.className = 'chat-compose-meta';
+  composeMeta.innerHTML = `
+    <span class="chat-compose-meta__hint">Enter to send · Shift+Enter for newline</span>
+    <span class="chat-compose-meta__context" data-role="context">request-scoped</span>
+  `;
+  wrapper.appendChild(composeMeta);
+
   inputArea.append(input, sendBtn);
   wrapper.appendChild(inputArea);
+
+  const admissionBar = document.createElement('div');
+  admissionBar.className = 'chat-admission-bar';
+  admissionBar.setAttribute('aria-label', 'Guardian runtime pipeline');
+  admissionBar.innerHTML = `
+    <span class="chat-admission-bar__step"><span class="chat-admission-bar__dot"></span>Admission</span>
+    <span class="chat-admission-bar__sep">›</span>
+    <span class="chat-admission-bar__step"><span class="chat-admission-bar__dot"></span>Sandbox</span>
+    <span class="chat-admission-bar__sep">›</span>
+    <span class="chat-admission-bar__step"><span class="chat-admission-bar__dot"></span>Guardian</span>
+    <span class="chat-admission-bar__sep">›</span>
+    <span class="chat-admission-bar__step"><span class="chat-admission-bar__dot"></span>Output</span>
+    <span class="chat-admission-bar__sep">›</span>
+    <span class="chat-admission-bar__step"><span class="chat-admission-bar__dot"></span>Sentinel</span>
+  `;
+  wrapper.appendChild(admissionBar);
 
   container.appendChild(wrapper);
   autoResizeChatInput(input);
@@ -1169,9 +1211,11 @@ function renderHistory(historyEl, agentId, onApproval) {
   for (const msg of chatHistory) {
     historyEl.appendChild(createMessageEl(msg.role, msg.content, {
       pendingAction: msg.pendingAction,
+      syntheticPendingAction: msg.syntheticPendingAction === true,
       responseSource: msg.responseSource,
       activitySummary: msg.activitySummary,
       onApproval,
+      onClearPending: clearPendingUiHandler,
     }));
   }
   syncActiveChatIndicator(historyEl, agentId);
@@ -1478,8 +1522,9 @@ function isMeaningfulLiveItem(item) {
 /**
  * Create a chat message element.
  *
- * opts.pendingAction — structured object from response.metadata.pendingAction
- * opts.onApproval       — callback(ids[], decision) for button clicks
+ * opts.pendingAction  — structured object from response.metadata.pendingAction
+ * opts.onApproval     — callback(ids[], decision) for button clicks
+ * opts.onClearPending — callback() for clearing a blocking pending request
  */
 function createMessageEl(role, content, opts) {
   const msg = document.createElement('div');
@@ -1509,6 +1554,10 @@ function createMessageEl(role, content, opts) {
   const approvals = extractPendingActionApprovals(opts?.pendingAction);
   if (approvals?.length && opts?.onApproval) {
     body.appendChild(buildApprovalButtons(approvals, opts.onApproval));
+  } else if (canClearPendingActionFromChat(opts?.pendingAction, {
+    syntheticPendingAction: opts?.syntheticPendingAction === true,
+  }) && opts?.onClearPending) {
+    body.appendChild(buildPendingActionClearControls(opts.pendingAction, opts.onClearPending));
   }
 
   msg.appendChild(body);
@@ -1655,6 +1704,50 @@ function buildApprovalButtons(approvals, onApproval) {
 
   btnRow.append(approveBtn, denyBtn, statusEl);
   applyUiState(uiState);
+  container.appendChild(btnRow);
+  return container;
+}
+
+function buildPendingActionClearControls(pendingAction, onClearPending) {
+  const container = document.createElement('div');
+  container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);';
+
+  const summary = document.createElement('div');
+  summary.style.cssText = 'font-size:0.65rem;color:var(--text-muted);margin-bottom:0.4rem;';
+  summary.textContent = 'This request is blocking the chat. Clear it if you want to move on.';
+  container.appendChild(summary);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:0.5rem;align-items:center;';
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'btn btn-secondary';
+  clearBtn.textContent = describePendingActionClearLabel(pendingAction);
+  clearBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.7rem;';
+
+  const statusEl = document.createElement('span');
+  statusEl.style.cssText = 'font-size:0.65rem;color:var(--text-muted);';
+
+  clearBtn.addEventListener('click', async () => {
+    clearBtn.disabled = true;
+    clearBtn.style.opacity = '0.5';
+    statusEl.textContent = 'Clearing…';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      await onClearPending();
+      statusEl.textContent = 'Cleared';
+      statusEl.style.color = 'var(--success)';
+    } catch (error) {
+      clearBtn.disabled = false;
+      clearBtn.style.opacity = '1';
+      statusEl.textContent = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to clear blocked request';
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  btnRow.append(clearBtn, statusEl);
   container.appendChild(btnRow);
   return container;
 }
