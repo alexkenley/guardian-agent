@@ -5,6 +5,7 @@ import {
   isExplicitAutomationControlRequest,
   isExplicitAutomationOutputRequest,
 } from './automation.js';
+import { isConversationTranscriptReferenceRequest } from '../request-patterns.js';
 import type {
   IntentGatewayEntities,
   IntentGatewayOperation,
@@ -87,6 +88,9 @@ export function inferSecondBrainPersonalItemTypeFromText(
   operation: IntentGatewayOperation,
 ): IntentGatewayEntities['personalItemType'] | undefined {
   if (!normalized) return undefined;
+  if (isConversationTranscriptReferenceRequest(normalized)) {
+    return undefined;
+  }
   if (isExplicitFilesystemResourceRequest(normalized)) {
     return undefined;
   }
@@ -306,6 +310,9 @@ export function isExplicitSecondBrainRoutineRequest(
 ): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
+  if (isConversationTranscriptReferenceRequest(normalized)) {
+    return false;
+  }
   if (containsSecondBrainRoutineConcept(normalized)) {
     return true;
   }
@@ -331,6 +338,9 @@ export function isExplicitSecondBrainEntityRequest(
 ): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
+  if (isConversationTranscriptReferenceRequest(normalized)) {
+    return false;
+  }
   if (isExplicitFilesystemResourceRequest(normalized)) {
     return false;
   }

@@ -35,6 +35,7 @@ export interface LlmLoopOutcome {
   roundCount: number;
   toolCallCount: number;
   toolResultCount: number;
+  successfulToolResultCount: number;
 }
 
 // Extracted LLM loop, which can run either in-process or in an isolated worker
@@ -53,6 +54,7 @@ export async function runLlmLoop(
   let completionReason: WorkerExecutionCompletionReason = 'model_response';
   let toolCallCount = 0;
   let toolResultCount = 0;
+  let successfulToolResultCount = 0;
   let forcedPolicyRetryUsed = false;
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
@@ -162,6 +164,7 @@ export async function runLlmLoop(
       const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
       if (
         answerFirstContent
+        && !options?.toolExecutionCorrectionPrompt?.trim()
         && (options?.answerFirstResponseIsSufficient?.(answerFirstContent) ?? !isResponseDegraded(answerFirstContent))
         && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
       ) {
@@ -337,6 +340,10 @@ export async function runLlmLoop(
       })
     );
     toolResultCount += toolResults.length;
+    successfulToolResultCount += toolResults.reduce((count, settled) => {
+      if (settled.status !== 'fulfilled') return count;
+      return count + (isSuccessfulToolResult(settled.value.result as unknown as Record<string, unknown>) ? 1 : 0);
+    }, 0);
     lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
       if (settled.status !== 'fulfilled') return acc;
       acc.push({
@@ -489,6 +496,7 @@ export async function runLlmLoop(
       roundCount: rounds,
       toolCallCount,
       toolResultCount,
+      successfulToolResultCount,
     },
   };
 }
@@ -497,6 +505,30 @@ function classifyLlmLoopResponseQuality(content: string | undefined): WorkerExec
   if (isResponseDegraded(content)) return 'degraded';
   if (isIntermediateStatusResponse(content)) return 'intermediate';
   return 'final';
+}
+
+function isSuccessfulToolResult(result: Record<string, unknown>): boolean {
+  const status = typeof result.status === 'string' ? result.status.trim().toLowerCase() : '';
+  if (
+    status === 'pending_approval'
+    || status === 'pending'
+    || status === 'denied'
+    || status === 'failed'
+    || status === 'error'
+    || status === 'blocked'
+  ) {
+    return false;
+  }
+  if (result.success === false) {
+    return false;
+  }
+  if (result.success === true) {
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(result, 'output')) {
+    return true;
+  }
+  return status === 'success' || status === 'completed' || status === 'ok';
 }
 
 async function tryRecoverDirectAnswer(

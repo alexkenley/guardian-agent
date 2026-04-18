@@ -33,6 +33,8 @@ npx tsx examples/llm-chat.ts         # LLM provider demo
 
 **Integration Testing (CRITICAL):** Review `docs/guides/INTEGRATION-TEST-HARNESS.md` for full-stack API regression testing, including guidance for cross-platform (Windows/Ubuntu/WSL) execution and detailed Ollama configurations (Local vs. Managed Cloud).
 
+**Startup/Test Script Maintenance (CRITICAL):** When a change materially affects startup behavior, orchestration, delegation, approvals, resume flow, provider/profile selection, routing, progress/timeline rendering, tool contracts, or scripted UX copy, inspect and update the startup scripts, smoke harnesses, test scripts, and brittle test expectations in the same change. Do not leave harness or startup-script drift behind after architectural work.
+
 **Requirements:** Node.js >= 20.0.0, ESM (`"type": "module"` in package.json).
 
 ## Architecture

@@ -30,6 +30,7 @@ GuardianAgent is an event-driven AI agent orchestration system with a four-layer
 - **Unit Tests:** `npm test` (Vitest, tests are co-located with source files).
 - **Run Specific Unit Test:** `npx vitest run src/path/to.test.ts`
 - **Integration Test Harness (CRITICAL):** Refer to `docs/guides/INTEGRATION-TEST-HARNESS.md`. After any implementation touching the web UI, coding assistant, tool execution, approval flow, or security pipeline, you MUST run the relevant integration harnesses. These are self-contained `.mjs` scripts (preferred) or PowerShell scripts that exercise the full stack via the REST API.
+- **Startup/Test Script Maintenance (CRITICAL):** When a change materially affects startup behavior, orchestration, delegation, approvals, resume flow, provider/profile selection, routing, progress/timeline rendering, tool contracts, or scripted UX copy, inspect and update the startup scripts, smoke harnesses, test scripts, and brittle test expectations in the same change. Do not leave harness or startup-script drift behind after architectural work.
 - **Required Post-Implementation Smoke Tests:**
     - `node scripts/test-coding-assistant.mjs`
     - `node scripts/test-code-ui-smoke.mjs`

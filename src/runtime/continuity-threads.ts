@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { normalizeUserFacingIntentGatewaySummary } from './intent/summary.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 import {
   hasSQLiteDriver,
@@ -79,10 +80,11 @@ function buildContinuityKey(scope: ContinuityThreadScope): string {
 }
 
 function cloneExecutionRef(ref: ContinuityThreadExecutionRef): ContinuityThreadExecutionRef {
+  const label = normalizeUserFacingIntentGatewaySummary(ref.label);
   return {
     kind: ref.kind,
     id: ref.id,
-    ...(ref.label ? { label: ref.label } : {}),
+    ...(label ? { label } : {}),
   };
 }
 
@@ -100,16 +102,27 @@ function cloneContinuationState(
 }
 
 function cloneRecord(record: ContinuityThreadRecord): ContinuityThreadRecord {
+  const {
+    focusSummary: _ignoredFocusSummary,
+    activeExecutionRefs,
+    continuationState,
+    safeSummary: _ignoredSafeSummary,
+    ...rest
+  } = record;
+  const focusSummary = normalizeUserFacingIntentGatewaySummary(record.focusSummary);
+  const safeSummary = normalizeUserFacingIntentGatewaySummary(record.safeSummary);
   return {
-    ...record,
+    ...rest,
     scope: { ...record.scope },
     linkedSurfaces: record.linkedSurfaces.map(cloneSurfaceLink),
-    ...(record.activeExecutionRefs
-      ? { activeExecutionRefs: record.activeExecutionRefs.map(cloneExecutionRef) }
+    ...(focusSummary ? { focusSummary } : {}),
+    ...(activeExecutionRefs
+      ? { activeExecutionRefs: activeExecutionRefs.map(cloneExecutionRef) }
       : {}),
-    ...(record.continuationState
-      ? { continuationState: cloneContinuationState(record.continuationState) }
+    ...(continuationState
+      ? { continuationState: cloneContinuationState(continuationState) }
       : {}),
+    ...(safeSummary ? { safeSummary } : {}),
   };
 }
 
@@ -146,6 +159,9 @@ function normalizeExecutionRef(value: unknown): ContinuityThreadExecutionRef | n
   if (!isRecord(value)) return null;
   const kind = value.kind;
   const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const label = normalizeUserFacingIntentGatewaySummary(
+    typeof value.label === 'string' ? value.label : undefined,
+  );
   if (
     (
       kind !== 'code_session'
@@ -161,7 +177,7 @@ function normalizeExecutionRef(value: unknown): ContinuityThreadExecutionRef | n
   return {
     kind,
     id,
-    ...(normalizeText(value.label, 200) ? { label: normalizeText(value.label, 200) } : {}),
+    ...(label ? { label } : {}),
   };
 }
 
@@ -194,15 +210,17 @@ function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
       .filter((item): item is ContinuityThreadExecutionRef => !!item)
     : [];
   const continuationState = normalizeContinuationState(value.continuationState);
+  const focusSummary = normalizeUserFacingIntentGatewaySummary(normalizeText(value.focusSummary, 400));
+  const safeSummary = normalizeUserFacingIntentGatewaySummary(normalizeText(value.safeSummary, 500));
   return {
     continuityKey,
     scope: { assistantId, userId },
     linkedSurfaces,
-    ...(normalizeText(value.focusSummary, 400) ? { focusSummary: normalizeText(value.focusSummary, 400) } : {}),
+    ...(focusSummary ? { focusSummary } : {}),
     ...(normalizeText(value.lastActionableRequest, 800) ? { lastActionableRequest: normalizeText(value.lastActionableRequest, 800) } : {}),
     ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
     ...(continuationState ? { continuationState } : {}),
-    ...(normalizeText(value.safeSummary, 500) ? { safeSummary: normalizeText(value.safeSummary, 500) } : {}),
+    ...(safeSummary ? { safeSummary } : {}),
     createdAt: typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : Date.now(),
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
     expiresAt: typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt) ? value.expiresAt : Date.now(),

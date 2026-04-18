@@ -742,6 +742,18 @@ function deriveDelegatedExecutionDecision(input: {
   }
 }
 
+export function resolveDelegatedExecutionDecision(input: {
+  gatewayDecision?: IntentGatewayDecision | null;
+  orchestration?: OrchestrationRoleDescriptor | null;
+  parentProfile?: SelectedExecutionProfile | null;
+}): IntentGatewayDecision | null {
+  return deriveDelegatedExecutionDecision({
+    gatewayDecision: input.gatewayDecision,
+    orchestration: input.orchestration,
+    parentProfile: input.parentProfile ?? null,
+  });
+}
+
 function buildProfileShape(input: {
   tier: ProviderTier;
   expectedContextPressure: IntentGatewayExpectedContextPressure;
@@ -873,7 +885,7 @@ export function selectDelegatedExecutionProfile(input: {
     return parentProfile;
   }
 
-  const delegatedDecision = deriveDelegatedExecutionDecision({
+  const delegatedDecision = resolveDelegatedExecutionDecision({
     gatewayDecision: input.gatewayDecision,
     orchestration: input.orchestration,
     parentProfile,
@@ -901,6 +913,68 @@ export function selectDelegatedExecutionProfile(input: {
     routingMode,
     selectionSource: 'delegated_role',
     reason: `${selected.reason}; delegated workload derived for ${delegatedLabel}`,
+  };
+}
+
+export function selectEscalatedDelegatedExecutionProfile(input: {
+  config: GuardianAgentConfig;
+  currentProfile?: SelectedExecutionProfile | null;
+  parentProfile?: SelectedExecutionProfile | null;
+  gatewayDecision?: IntentGatewayDecision | null;
+  orchestration?: OrchestrationRoleDescriptor | null;
+  mode?: RoutingTierMode;
+}): SelectedExecutionProfile | null {
+  const currentProfile = input.currentProfile ?? null;
+  const parentProfile = input.parentProfile ?? currentProfile;
+  const routingMode = currentProfile?.routingMode ?? input.mode ?? 'auto';
+  if (
+    currentProfile?.selectionSource === 'request_override'
+    || routingMode === 'local-only'
+    || routingMode === 'managed-cloud-only'
+    || routingMode === 'frontier-only'
+  ) {
+    return null;
+  }
+
+  if (!findProviderByTier(input.config, 'frontier')) {
+    return null;
+  }
+
+  const delegatedDecision = resolveDelegatedExecutionDecision({
+    gatewayDecision: input.gatewayDecision,
+    orchestration: input.orchestration,
+    parentProfile,
+  });
+  if (!delegatedDecision) {
+    return null;
+  }
+
+  const selected = selectExecutionProfile({
+    config: input.config,
+    routeDecision: { tier: delegatedDecision.preferredTier },
+    gatewayDecision: delegatedDecision,
+    mode: 'frontier-only',
+  });
+  if (!selected) {
+    return null;
+  }
+
+  if (
+    currentProfile
+    && selected.providerName === currentProfile.providerName
+    && selected.providerTier === currentProfile.providerTier
+  ) {
+    return null;
+  }
+
+  const delegatedLabel = input.orchestration?.label?.trim()
+    || input.orchestration?.role
+    || 'delegated task';
+  return {
+    ...selected,
+    routingMode,
+    selectionSource: 'delegated_role',
+    reason: `${selected.reason}; escalated delegated workload for ${delegatedLabel}`,
   };
 }
 

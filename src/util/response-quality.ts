@@ -3,6 +3,7 @@ export function isResponseDegraded(content: string | undefined): boolean {
   if (!content?.trim()) return true;
   const trimmed = content.trim();
   const lower = trimmed.toLowerCase();
+  const rawToolMarkupPattern = /<\/?tool_result\b|<\/?tool_calls?\b|<\/?tool_call\b/i;
   const degradedPatterns = [
     'i could not generate',
     'i cannot generate',
@@ -14,6 +15,7 @@ export function isResponseDegraded(content: string | undefined): boolean {
     'as an ai, i cannot',
   ];
   if (degradedPatterns.some(p => lower.includes(p))) return true;
+  if (rawToolMarkupPattern.test(trimmed)) return true;
 
   // Detect raw JSON output — the model tried to "call" a tool by printing its
   // arguments as text instead of using the proper tool_use format.
@@ -41,6 +43,13 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
 
   const normalized = content.trim();
   const lower = normalized.toLowerCase();
+  const presentTenseActionStartPattern = /^(?:creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking)\b/i;
+  if (/<\/?think>/i.test(normalized)) {
+    return true;
+  }
+  if (/<details>\s*<summary>\s*(?:tool calls|raw tool results)/i.test(normalized)) {
+    return true;
+  }
   const lineCount = normalized.split(/\r?\n/).length;
   if (normalized.length > 320 || lineCount > 5) {
     return false;
@@ -49,6 +58,7 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
   const continuationMarkers = [
     /^(?:ok(?:ay)?|sure|alright|all right|right)[,:\s-]*(?:i['’]ll|i will|let me)\b/i,
     /^(?:i['’]ll|i will|let me)\b/i,
+    presentTenseActionStartPattern,
     /\b(?:now|next|first)\s+(?:i['’]ll|i will|let me)\b/i,
     /\b(?:let me|i['’]ll|i will)\s+(?:inspect|check|review|look|find|apply|restart|resume|write|create|read|use|try|run|continue|proceed)\b/i,
   ];

@@ -5,6 +5,7 @@ import type {
   PendingActionBlockerKind,
   PendingActionOption,
 } from './pending-actions.js';
+import { normalizeUserFacingIntentGatewaySummary } from './intent/summary.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 import {
   hasSQLiteDriver,
@@ -122,18 +123,27 @@ function cloneApprovalSummary(summary: PendingActionApprovalSummary): PendingAct
 }
 
 function cloneIntent(intent: ExecutionIntent): ExecutionIntent {
+  const {
+    summary: _ignoredSummary,
+    missingFields,
+    provenance,
+    entities,
+    ...rest
+  } = intent;
+  const summary = normalizeUserFacingIntentGatewaySummary(intent.summary);
   return {
-    ...intent,
-    ...(intent.missingFields ? { missingFields: [...intent.missingFields] } : {}),
-    ...(intent.provenance
+    ...rest,
+    ...(summary ? { summary } : {}),
+    ...(missingFields ? { missingFields: [...missingFields] } : {}),
+    ...(provenance
       ? {
           provenance: {
-            ...intent.provenance,
-            ...(intent.provenance.entities ? { entities: { ...intent.provenance.entities } } : {}),
+            ...provenance,
+            ...(provenance.entities ? { entities: { ...provenance.entities } } : {}),
           },
         }
       : {}),
-    ...(intent.entities ? { entities: { ...intent.entities } } : {}),
+    ...(entities ? { entities: { ...entities } } : {}),
   };
 }
 
@@ -194,11 +204,12 @@ function normalizeIntent(value: unknown): ExecutionIntent | null {
   if (!isRecord(value)) return null;
   const originalUserContent = normalizeText(value.originalUserContent, 4000);
   if (!originalUserContent) return null;
+  const summary = normalizeUserFacingIntentGatewaySummary(normalizeText(value.summary, 400));
   return {
     originalUserContent,
     ...(normalizeText(value.route, 120) ? { route: normalizeText(value.route, 120) } : {}),
     ...(normalizeText(value.operation, 120) ? { operation: normalizeText(value.operation, 120) } : {}),
-    ...(normalizeText(value.summary, 400) ? { summary: normalizeText(value.summary, 400) } : {}),
+    ...(summary ? { summary } : {}),
     ...(normalizeText(value.turnRelation, 80) ? { turnRelation: normalizeText(value.turnRelation, 80) } : {}),
     ...(normalizeText(value.resolution, 80) ? { resolution: normalizeText(value.resolution, 80) } : {}),
     ...(Array.isArray(value.missingFields)
@@ -566,6 +577,7 @@ export class ExecutionStore {
       retryOfExecutionId?: string;
       scope: ExecutionScope;
       originalUserContent: string;
+      intent?: Omit<ExecutionIntent, 'originalUserContent'>;
       lastUserContent?: string;
       status?: ExecutionStatus;
     },
@@ -587,6 +599,10 @@ export class ExecutionStore {
       intent: {
         ...(existing ? cloneIntent(existing.intent) : {}),
         originalUserContent: input.originalUserContent.trim(),
+        ...(input.intent ? cloneIntent({
+          originalUserContent: input.originalUserContent.trim(),
+          ...input.intent,
+        }) : {}),
       },
       ...(input.parentExecutionId?.trim() ? { parentExecutionId: input.parentExecutionId.trim() } : existing?.parentExecutionId ? { parentExecutionId: existing.parentExecutionId } : {}),
       ...(input.retryOfExecutionId?.trim() ? { retryOfExecutionId: input.retryOfExecutionId.trim() } : existing?.retryOfExecutionId ? { retryOfExecutionId: existing.retryOfExecutionId } : {}),

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
 import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
 
@@ -49,6 +50,111 @@ function automationAuthoringMetadata(
       entities: {},
     },
   });
+}
+
+function repoGroundedCodingMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return attachPreRoutedIntentGatewayMetadata(metadata, {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 1,
+    decision: {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspects the repository and reports grounded findings.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      requiresRepoGrounding: true,
+      entities: {},
+    },
+  });
+}
+
+function securityReviewMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return attachPreRoutedIntentGatewayMetadata(metadata, {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 1,
+    decision: {
+      route: 'security_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Reviews source files for security or control-flow risks.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'security_analysis',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'chat_synthesis',
+      entities: {},
+    },
+  });
+}
+
+function filesystemMutationMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return attachPreRoutedIntentGatewayMetadata(metadata, {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 1,
+    decision: {
+      route: 'filesystem_task',
+      confidence: 'high',
+      operation: 'save',
+      summary: 'Writes the requested file in the active workspace.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+      entities: {},
+    },
+  });
+}
+
+function createExecutionProfileTestConfig(): GuardianAgentConfig {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm['ollama-cloud-coding'] = {
+    provider: 'ollama_cloud',
+    model: 'qwen3-coder-next',
+    credentialRef: 'llm.ollama_cloud.coding',
+  };
+  config.llm['openai-frontier'] = {
+    provider: 'openai',
+    model: 'gpt-5.4',
+    apiKey: 'test-key',
+  };
+  config.assistant.tools.preferredProviders = {
+    local: 'ollama',
+    managedCloud: 'ollama-cloud-coding',
+    frontier: 'openai-frontier',
+  };
+  config.assistant.tools.modelSelection = {
+    ...(config.assistant.tools.modelSelection ?? {}),
+    autoPolicy: 'balanced',
+    preferManagedCloudForLowPressureExternal: true,
+    preferFrontierForRepoGrounded: true,
+    preferFrontierForSecurity: true,
+    managedCloudRouting: {
+      enabled: true,
+      roleBindings: {
+        coding: 'ollama-cloud-coding',
+      },
+    },
+  };
+  return config;
 }
 
 class FakeWorkerChild extends EventEmitter {
@@ -1040,6 +1146,881 @@ describe('WorkerManager', () => {
       requestId: 'm-failed-delegated',
       detail: 'Delegated worker returned a progress update instead of a terminal result.',
     });
+
+    manager.shutdown();
+  });
+
+  it('fails repo-grounded delegated runs that complete without any repo evidence or tool results', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: "I'll search the repo for the relevant files next.",
+      metadata: {
+        workerExecution: {
+          lifecycle: 'completed',
+          source: 'tool_loop',
+          completionReason: 'answer_first_response',
+          responseQuality: 'final',
+          toolCallCount: 0,
+          toolResultCount: 0,
+          successfulToolResultCount: 0,
+        },
+      },
+    });
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 123_456,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-repo-grounding-failed',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect the repo and tell me which files implement delegated worker progress.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-repo-grounding-failed',
+        originChannel: 'web',
+      },
+    });
+
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('repo-grounded answer without collecting successful tool results or evidence');
+
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_failed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_failed',
+      requestId: 'm-repo-grounding-failed',
+      details: {
+        lifecycle: 'failed',
+        reason: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+        handoffSummary: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+        handoffNextAction: 'Inspect the delegated worker failure details before retrying.',
+        workerExecutionCompletionReason: 'answer_first_response',
+        workerExecutionToolCallCount: 0,
+        workerExecutionToolResultCount: 0,
+        workerExecutionSuccessfulToolResultCount: 0,
+      },
+    });
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[2]?.[0]).toMatchObject({
+      kind: 'failed',
+      requestId: 'm-repo-grounding-failed',
+      detail: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+    });
+
+    manager.shutdown();
+  });
+
+  it('retries insufficient exact-file delegated repo inspections with an escalated frontier profile', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: [
+            'The delegated worker progress implementation lives in `src/supervisor/worker-manager.ts` and `src/runtime/run-timeline.ts`.',
+            'The web-side timeline matching/rendering path lives in `web/public/js/chat-run-tracking.js` and `web/public/js/chat-panel.js`.',
+          ].join('\n'),
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 4,
+              toolResultCount: 4,
+              successfulToolResultCount: 4,
+            },
+          },
+        };
+      }
+      return {
+        content: 'The searches confirmed the files exist, but the detailed match output was truncated so I cannot give you exact file paths with confidence. Would you like me to run narrower searches?',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'tool_result_recovery',
+            responseQuality: 'final',
+            toolCallCount: 4,
+            toolResultCount: 4,
+            successfulToolResultCount: 4,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 321_000,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-exact-files',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'qwen3-coder-next',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-exact-files',
+        executionId: 'exec-retry-exact-files',
+        rootExecutionId: 'exec-retry-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
+    expect(result.content).toContain('src/supervisor/worker-manager.ts');
+    expect(result.content).toContain('src/runtime/run-timeline.ts');
+    expect(result.content).toContain('web/public/js/chat-run-tracking.js');
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_worker_completed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_retrying',
+      requestId: 'm-retry-exact-files',
+      details: {
+        executionProfileName: 'openai-frontier',
+        executionProfileTier: 'frontier',
+      },
+    });
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls.map(([event]) => event.kind)).toEqual([
+      'started',
+      'running',
+      'running',
+      'completed',
+    ]);
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls[2]?.[0]).toMatchObject({
+      kind: 'running',
+      executionProfileName: 'openai-frontier',
+      executionProfileTier: 'frontier',
+      detail: expect.stringContaining('Retrying Workspace Explorer'),
+    });
+
+    manager.shutdown();
+  });
+
+  it('fails exact-file delegated repo inspections when no stronger escalation profile is available', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'The searches confirmed the files exist, but the detailed match output was truncated so I cannot give you exact file paths with confidence.',
+      metadata: {
+        workerExecution: {
+          lifecycle: 'completed',
+          source: 'tool_loop',
+          completionReason: 'tool_result_recovery',
+          responseQuality: 'final',
+          toolCallCount: 3,
+          toolResultCount: 3,
+          successfulToolResultCount: 3,
+        },
+      },
+    });
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => {
+          const config = createExecutionProfileTestConfig();
+          delete config.llm['openai-frontier'];
+          config.assistant.tools.preferredProviders = {
+            ...config.assistant.tools.preferredProviders,
+            frontier: '',
+          };
+          return config;
+        },
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: () => undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-fail-exact-files',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'qwen3-coder-next',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-fail-exact-files',
+        originChannel: 'web',
+      },
+    });
+
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('exact file references requested');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_failed',
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('escalates exact-file delegated repo inspections from derived workspace intent when pre-routed metadata is unavailable', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: [
+            'Delegated worker progress is implemented in `src/supervisor/worker-manager.ts` and `src/runtime/run-timeline.ts`.',
+            'Run timeline rendering is implemented in `web/public/js/chat-panel.js` and `web/public/js/chat-run-tracking.js`.',
+          ].join('\n'),
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 4,
+              toolResultCount: 4,
+              successfulToolResultCount: 4,
+            },
+          },
+        };
+      }
+      return {
+        content: 'The searches confirmed the files exist, but the detailed match output was truncated so I cannot give you exact file paths with confidence. Would you like me to run narrower searches?',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'completed',
+            source: 'tool_loop',
+            completionReason: 'tool_result_recovery',
+            responseQuality: 'final',
+            toolCallCount: 3,
+            toolResultCount: 3,
+            successfulToolResultCount: 3,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 654_321,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-derived-exact-files',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'minimax-m2.7',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-derived-exact-files',
+        executionId: 'exec-retry-derived-exact-files',
+        rootExecutionId: 'exec-retry-derived-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
+    expect(result.content).toContain('src/supervisor/worker-manager.ts');
+    expect(result.content).toContain('src/runtime/run-timeline.ts');
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(result.content).toContain('web/public/js/chat-run-tracking.js');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_worker_completed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[0]?.[0]).toMatchObject({
+      stage: 'delegated_worker_started',
+      details: {
+        delegatedIntentSource: 'delegated_derived',
+        delegatedIntentRoute: 'coding_task',
+        delegatedIntentExecutionClass: 'repo_grounded',
+        delegatedIntentRequiresRepoGrounding: true,
+      },
+    });
+
+    manager.shutdown();
+  });
+
+  it('retries non-terminal delegated workspace progress updates on a stronger frontier profile', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchProfiles: Array<string | undefined> = [];
+    workerMessageHandler = (params) => {
+      const executionProfile = params.executionProfile as { providerName?: string; providerTier?: string } | undefined;
+      dispatchProfiles.push(executionProfile?.providerName);
+      if (executionProfile?.providerTier === 'frontier') {
+        return {
+          content: 'The delegated worker progress implementation lives in `src/supervisor/worker-manager.ts`, and the run timeline rendering path lives in `web/public/js/chat-panel.js`.',
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              toolCallCount: 2,
+              toolResultCount: 2,
+              successfulToolResultCount: 2,
+            },
+          },
+        };
+      }
+      return {
+        content: 'I will inspect the repository first and then return the exact files.',
+        metadata: {
+          workerExecution: {
+            lifecycle: 'failed',
+            source: 'tool_loop',
+            completionReason: 'intermediate_response',
+            responseQuality: 'intermediate',
+            toolCallCount: 1,
+            toolResultCount: 0,
+          },
+        },
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => createExecutionProfileTestConfig(),
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'explorer',
+                    label: 'Workspace Explorer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 777_000,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-retry-terminal-result',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'glm-5.1',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding', 'openai-frontier'],
+        reason: 'delegated coding role selected managed-cloud coding profile',
+        routingMode: 'auto',
+        selectionSource: 'delegated_role',
+      },
+      delegation: {
+        requestId: 'm-retry-terminal-result',
+        executionId: 'exec-retry-terminal-result',
+        rootExecutionId: 'exec-retry-terminal-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'explorer',
+          label: 'Workspace Explorer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchProfiles).toEqual(['ollama-cloud-coding', 'openai-frontier']);
+    expect(result.content).toContain('src/supervisor/worker-manager.ts');
+    expect(result.content).toContain('web/public/js/chat-panel.js');
+    expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual([
+      'delegated_worker_started',
+      'delegated_worker_running',
+      'delegated_worker_retrying',
+      'delegated_worker_completed',
+    ]);
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_retrying',
+      details: {
+        reason: expect.stringContaining('progress update'),
+        executionProfileName: 'openai-frontier',
+        executionProfileTier: 'frontier',
+      },
+    });
+
+    manager.shutdown();
+  });
+
+  it('fails source-backed delegated security reviews that finish without any successful tool evidence', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'High: src/delegate/resume.ts allows stale approvals to resume the task.',
+      metadata: {
+        workerExecution: {
+          lifecycle: 'completed',
+          source: 'tool_loop',
+          completionReason: 'model_response',
+          responseQuality: 'final',
+          toolCallCount: 3,
+          toolResultCount: 3,
+          successfulToolResultCount: 0,
+        },
+      },
+    });
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        now: () => 123_456,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-security-evidence-failed',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Review the delegated execution, approval, and resume flow for security or control-flow risks. Cite exact files.',
+        metadata: securityReviewMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-security-evidence-failed',
+        originChannel: 'web',
+        codeSessionId: 'code-1',
+      },
+    });
+
+    expect(result.content).toContain('Delegated work failed.');
+    expect(result.content).toContain('source-backed security findings without collecting successful tool results or evidence');
+    expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
+      stage: 'delegated_worker_failed',
+      requestId: 'm-security-evidence-failed',
+      details: {
+        lifecycle: 'failed',
+        reason: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
+        handoffSummary: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
+        workerExecutionToolCallCount: 3,
+        workerExecutionToolResultCount: 3,
+        workerExecutionSuccessfulToolResultCount: 0,
+      },
+    });
+
+    manager.shutdown();
+  });
+
+  it('keeps filesystem mutation turns blocked when a real approval is pending', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'Waiting for approval to add D:\\GuardianTraceApprovalSmoke before writing notes.md.',
+      metadata: {
+        pendingAction: {
+          status: 'pending',
+          blocker: {
+            kind: 'approval',
+            prompt: 'Waiting for approval.',
+            approvalSummaries: [
+              { id: 'approval-path-1', toolName: 'update_tool_policy', argsPreview: '{"path":"D:\\\\GuardianTraceApprovalSmoke"}' },
+            ],
+          },
+        },
+        workerExecution: {
+          lifecycle: 'blocked',
+          source: 'tool_loop',
+          completionReason: 'approval_pending',
+          responseQuality: 'final',
+          blockerKind: 'approval',
+          toolCallCount: 1,
+          toolResultCount: 1,
+          successfulToolResultCount: 0,
+          pendingApprovalCount: 1,
+        },
+      },
+    });
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-filesystem-approval-pending',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Create D:\\GuardianTraceApprovalSmoke\\notes.md with 3 bullets about delegated trace troubleshooting.',
+        metadata: filesystemMutationMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-filesystem-approval-pending',
+        originChannel: 'web',
+      },
+    });
+
+    expect(result.content).toContain('Waiting for approval to add D:\\GuardianTraceApprovalSmoke');
+    expect(result.content).not.toContain('Delegated work failed.');
 
     manager.shutdown();
   });

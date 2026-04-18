@@ -32,6 +32,7 @@ Key rules:
 - in Auto tier mode, the local vs external tier decision is made from the structured gateway result, not from raw-text heuristics
 - the gateway also determines whether the current turn is a new request, follow-up, clarification answer, or correction
 - typed clarification state is resolved through the gateway, not by raw keyword interception
+- if the gateway cannot safely choose between top-level routes, it should emit an `intent_route` clarification through shared pending-action orchestration instead of silently picking the most likely route
 - pre-gateway interception is limited to slash-command parsing and real approval/continuation control-plane resumes
 - direct capability lanes only run from explicit structured gateway decisions
 - gateway-unavailable and low-confidence `general_assistant` / `unknown` results fall back to normal assistant or bounded degraded handling instead of heuristic capability capture
@@ -60,6 +61,7 @@ Key rules:
 - one active pending action per logical surface, with explicit transfer policy deciding whether the blocked work may also resolve from linked surfaces for the same assistant and user
 - pending actions are the operator-facing blocker projection over that execution state and are scoped by logical assistant, canonical user, channel, and surface
 - follow-up turns should resolve against the stored pending action and active execution before trying any continuity fallback
+- route-confirmation questions are just another shared clarification blocker; they do not create a second route-resolution subsystem
 - unrelated turns do not clear the active pending slot
 - a colliding new blocked request requires explicit switch confirmation before it replaces the current slot
 - approvals and policy mutations remain origin-surface only even when other blocker kinds are portable
@@ -144,6 +146,9 @@ Current as-built delegation foundations:
 - delegated child runs preserve execution lineage through `executionId`, `parentExecutionId`, and `rootExecutionId` correlation where available
 - delegated child work now receives a server-selected execution profile derived from the parent execution profile, the routed workload shape when present, and the target orchestration role descriptor
 - explicit request-scoped provider overrides stay sticky across delegated handoff, while auto-selected turns may specialize different child roles onto different configured providers concurrently
+- delegated retry policy now keys off the effective delegated workload, not only the happy-path handoff metadata; Guardian derives the child intent from the routed decision plus the orchestration role when needed so the coordinator can still enforce repo-grounded sufficiency and escalation rules
+- exact repo-grounded delegated inspections now pass through a server-owned sufficiency gate; if the first completed child answer still admits truncation or uncertainty without returning the exact file references requested, orchestration may retry once on a stronger eligible execution profile and otherwise fails the delegated outcome instead of accepting the weak answer
+- non-terminal delegated completions such as progress-only replies are also treated as retryable coordinator failures; Guardian may escalate those once onto a stronger eligible profile before surfacing a terminal failure to the operator
 - operator-facing assistant job views now merge primary assistant jobs with delegated-worker jobs
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
 - delegated worker setup can attach structured orchestration role descriptors such as coordinator, explorer, implementer, and verifier, and known capabilities narrow against runtime-owned contracts before the worker runs
@@ -157,6 +162,7 @@ Current as-built delegation foundations:
 
 Current limitation:
 - delegated worker completion is still normalized around bounded handoff metadata plus result content
+- the sufficiency gate and retry policy prevent weak delegated completions from being treated as success, but they do not by themselves remove upstream tool-result truncation or guarantee that the first worker picked the best possible tool plan
 - the stronger split into distinct user-facing summary, evidence bundle, and machine-readable next-action channels is still follow-on work
 
 ## 5a. System-Owned Background Maintenance
@@ -247,6 +253,7 @@ It should continue to follow these rules:
 - preserve lineage back to the originating request, continuity thread, and code session when present
 - keep delegated model-profile selection server-owned and deterministic instead of letting workers self-select providers or infer them from prose
 - allow child tasks to use different configured providers when the request is in auto-selection mode and the structured child workload meaningfully differs from the parent
+- let the coordinator promote a delegated task onto a stronger eligible profile when the first child run returns a non-terminal progress update or an insufficient exact-file repo answer
 - keep completion handoff state bounded and structured instead of treating delegated outcome as arbitrary prose
 - surface delegated status through the same operator views that already expose assistant jobs, traces, and timeline state
 - normalize delegated follow-up policy on the server so clarification/workspace blockers can downgrade to status-only operator messaging while approval blockers stay approval-held

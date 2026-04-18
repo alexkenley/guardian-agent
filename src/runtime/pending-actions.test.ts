@@ -455,6 +455,8 @@ describe('PendingActionStore', () => {
     expect(gatewaySummary).toMatchObject({
       prompt: 'I need a bit more detail before I can continue with that request.',
     });
+    expect(created.intent).not.toHaveProperty('summary');
+    expect(store.get(created.id)?.intent).not.toHaveProperty('summary');
     expect(gatewaySummary).not.toHaveProperty('summary');
     expect(clientMetadata).toMatchObject({
       blocker: {

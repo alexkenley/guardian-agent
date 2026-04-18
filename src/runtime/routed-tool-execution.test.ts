@@ -51,6 +51,50 @@ function complexPlanningDecision(
   };
 }
 
+function filesystemDecision(
+  overrides: Partial<IntentGatewayDecision> = {},
+): IntentGatewayDecision {
+  return {
+    route: 'filesystem_task',
+    confidence: 'high',
+    operation: 'save',
+    summary: 'Write a file in the active workspace.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'repo_grounded',
+    preferredTier: 'external',
+    requiresRepoGrounding: true,
+    requiresToolSynthesis: true,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'tool_loop',
+    entities: {},
+    ...overrides,
+  };
+}
+
+function securityDecision(
+  overrides: Partial<IntentGatewayDecision> = {},
+): IntentGatewayDecision {
+  return {
+    route: 'security_task',
+    confidence: 'high',
+    operation: 'inspect',
+    summary: 'Review the relevant source files for security issues.',
+    turnRelation: 'new_request',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'security_analysis',
+    preferredTier: 'external',
+    requiresRepoGrounding: true,
+    requiresToolSynthesis: true,
+    expectedContextPressure: 'high',
+    preferredAnswerPath: 'chat_synthesis',
+    entities: {},
+    ...overrides,
+  };
+}
+
 describe('routed tool execution', () => {
   it('adds repo-grounded tool guidance for coding inspection turns', () => {
     const section = buildRoutedIntentAdditionalSection(repoDecision());
@@ -89,6 +133,38 @@ describe('routed tool execution', () => {
     expect(prompt).toContain('repo-grounded coding request');
     expect(prompt).toContain('fs_search, code_symbol_search, and fs_read');
     expect(prompt).toContain('Only ask the user for approval after a real tool result returns pending_approval');
+  });
+
+  it('adds filesystem mutation guidance for workspace write turns', () => {
+    const section = buildRoutedIntentAdditionalSection(filesystemDecision());
+
+    expect(section?.content).toContain('filesystem request anchored to the active workspace');
+    expect(section?.content).toContain('Use fs_mkdir for directory creation and fs_write for file writes or updates');
+    expect(section?.content).toContain('request the path addition through update_tool_policy');
+  });
+
+  it('builds a correction prompt for filesystem mutation turns', () => {
+    const prompt = buildToolExecutionCorrectionPrompt(filesystemDecision());
+
+    expect(prompt).toContain('workspace filesystem mutation request');
+    expect(prompt).toContain('Do not claim that a file or directory was created');
+    expect(prompt).toContain('call update_tool_policy to request the path addition');
+  });
+
+  it('adds source-backed security guidance for security review turns', () => {
+    const section = buildRoutedIntentAdditionalSection(securityDecision());
+
+    expect(section?.content).toContain('security analysis request');
+    expect(section?.content).toContain('Inspect the relevant source files before citing exact files');
+    expect(section?.content).toContain('Do not fabricate file paths, tool outputs, or security findings');
+  });
+
+  it('builds a correction prompt for source-backed security review turns', () => {
+    const prompt = buildToolExecutionCorrectionPrompt(securityDecision());
+
+    expect(prompt).toContain('source-backed security review request');
+    expect(prompt).toContain('Do not fabricate file paths, tool results, or findings');
+    expect(prompt).toContain('After collecting evidence, synthesize the findings');
   });
 
   it('denies grep-style shell inspection during repo-grounded coding review turns', () => {

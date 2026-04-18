@@ -198,6 +198,9 @@ export function createDashboardMessageDispatcher(args: {
       const existingResponseSource = metadata?.responseSource && typeof metadata.responseSource === 'object'
         ? metadata.responseSource as Record<string, unknown>
         : undefined;
+      const existingCodeContext = isRecord(metadata?.codeContext)
+        ? metadata.codeContext
+        : undefined;
       const selectedSourceRecord = selectedResponseSource
         ? selectedResponseSource as unknown as Record<string, unknown>
         : undefined;
@@ -220,6 +223,23 @@ export function createDashboardMessageDispatcher(args: {
         : undefined;
       const mergedMetadata: Record<string, unknown> = {
         ...(metadata ?? {}),
+        ...(dispatchCodeSession
+          ? {
+              codeSessionResolved: true,
+              codeSessionId: typeof metadata?.codeSessionId === 'string' && metadata.codeSessionId.trim()
+                ? metadata.codeSessionId.trim()
+                : dispatchCodeSession.session.id,
+              codeContext: {
+                ...(existingCodeContext ?? {}),
+                sessionId: typeof existingCodeContext?.sessionId === 'string' && existingCodeContext.sessionId.trim()
+                  ? existingCodeContext.sessionId.trim()
+                  : dispatchCodeSession.session.id,
+                workspaceRoot: typeof existingCodeContext?.workspaceRoot === 'string' && existingCodeContext.workspaceRoot.trim()
+                  ? existingCodeContext.workspaceRoot.trim()
+                  : dispatchCodeSession.session.resolvedRoot,
+              },
+            }
+          : {}),
         ...(mergedResponseSource
           ? {
               responseSource: mergedResponseSource,

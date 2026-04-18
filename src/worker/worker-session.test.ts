@@ -111,7 +111,7 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(seenTools).toContain('code_plan');
   });
 
-  it('uses the answer-first path for writing-plans skills before entering the brokered tool loop', async () => {
+  it('uses the tool-free writing-plans pass before entering the brokered tool loop', async () => {
     const listLoadedTools = vi.fn(async () => [
       {
         name: 'code_plan',
@@ -185,7 +185,7 @@ describe('BrokeredWorkerSession automation control', () => {
       workerExecution: {
         lifecycle: 'completed',
         source: 'tool_loop',
-        completionReason: 'answer_first_response',
+        completionReason: 'model_response',
         responseQuality: 'final',
       },
     });

@@ -65,6 +65,7 @@ describe('runLlmLoop', () => {
       responseQuality: 'final',
       toolCallCount: 1,
       toolResultCount: 1,
+      successfulToolResultCount: 1,
     });
   });
 
@@ -100,6 +101,71 @@ describe('runLlmLoop', () => {
       roundCount: 0,
       toolCallCount: 0,
       toolResultCount: 0,
+      successfulToolResultCount: 0,
+    });
+  });
+
+  it('counts only successful tool results as usable evidence', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Write the report file if policy allows it.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_write', arguments: JSON.stringify({ path: 'tmp/report.md', content: 'report' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'The write is still blocked pending policy approval.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(): Promise<ToolResult> {
+        return {
+          success: false,
+          status: 'failed',
+          message: 'Path is blocked by policy.',
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(result.outcome).toMatchObject({
+      toolCallCount: 1,
+      toolResultCount: 1,
+      successfulToolResultCount: 0,
     });
   });
 
@@ -262,6 +328,99 @@ describe('runLlmLoop', () => {
     });
     expect(calledTools).toHaveLength(2);
     expect(calledTools).toEqual(expect.arrayContaining(['fs_read', 'fs_write']));
+    expect(result.finalContent).toContain('wrote tmp/repo-summary.md');
+  });
+
+  it('does not accept tool-free answer-first replies when the turn requires repo evidence', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect src/chat-agent.ts and write tmp/repo-summary.md with a short summary.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: "I'll inspect the file and then write the requested report.",
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [
+          { id: 'call-1', name: 'fs_read', arguments: JSON.stringify({ path: 'src/chat-agent.ts' }) },
+          { id: 'call-2', name: 'fs_write', arguments: JSON.stringify({ path: 'tmp/repo-summary.md', content: 'chat-agent summary' }) },
+        ],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Done. Inspected src/chat-agent.ts and wrote tmp/repo-summary.md.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+    const calledTools: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [
+          {
+            name: 'fs_read',
+            description: 'Read a file.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+              },
+              required: ['path'],
+            },
+          },
+          {
+            name: 'fs_write',
+            description: 'Write a file.',
+            parameters: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+              },
+              required: ['path', 'content'],
+            },
+          },
+        ];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        return {
+          success: true,
+          output: { message: `Completed ${request.toolName}.` },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      4,
+      32_000,
+      undefined,
+      {
+        preferAnswerFirst: true,
+        toolExecutionCorrectionPrompt: 'System correction: this turn is a repo-grounded coding request. Use repo/filesystem tools now instead of narrating the work.',
+      },
+    );
+
+    expect(chatCalls).toHaveLength(3);
+    expect(chatCalls[0]?.options?.tools).toEqual([]);
+    expect(calledTools).toEqual(expect.arrayContaining(['fs_read', 'fs_write']));
+    expect(result.outcome.completionReason).toBe('model_response');
     expect(result.finalContent).toContain('wrote tmp/repo-summary.md');
   });
 

@@ -127,6 +127,7 @@ The gateway receives a summarized active pending action:
 - optional field
 - optional route
 - optional operation
+- optional blocker options
 - blocker prompt
 - original request
 
@@ -138,6 +139,11 @@ That allows short follow-up turns such as:
 - `okay, now do that`
 
 to be interpreted against the active blocked action instead of raw bounded history alone.
+
+Route-ambiguity clarification contract:
+- `field=intent_route` is the shared blocker field for "I am not sure which top-level route you mean"
+- when Guardian has a deterministic ambiguity pair, the pending action should also carry explicit `options` and `entities.intentRouteCandidates`
+- when the classifier asks for route clarification without a deterministic option set, the runtime still stores `field=intent_route` plus the original request so the answer can resume the same execution-backed task instead of becoming a brand-new request
 
 ### Response Metadata
 
@@ -190,6 +196,7 @@ Clarification-backed resume follows the same rule:
 - if Guardian asks a targeted clarification and offers a concrete stored fallback such as `save it inside the current workspace instead`, that fallback must be represented as pending-action state
 - a generic continuation reply such as `yes` or `okay` must resume the stored clarified request directly
 - Guardian must not force the Intent Gateway to rebuild the clarified action from bounded transcript history alone
+- route-ambiguity confirmations follow the same model: the reply should resolve against the stored `intent_route` blocker and then replay the original request on the chosen route instead of executing the short reply text as a separate task
 
 Correction-backed follow-up also follows the same rule:
 - if the user is clearly correcting the blocked request, Guardian may use gateway `resolvedContent` or execution-backed prior intent

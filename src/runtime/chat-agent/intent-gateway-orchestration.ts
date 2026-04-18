@@ -2,6 +2,7 @@ import type { AgentContext, AgentResponse, UserMessage } from '../../agent/types
 import { isAffirmativeContinuation, stripLeadingContextPrefix } from '../../chat-agent-helpers.js';
 import type { ResolvedSkill } from '../../skills/types.js';
 import { resolveAffirmativeMemoryContinuationFromHistory } from '../../util/memory-intent.js';
+import { deriveIntentRouteClarification } from '../intent/intent-route-clarification.js';
 import { looksLikePendingActionContextTurn } from '../intent/request-patterns.js';
 import {
   toIntentGatewayClientMetadata,
@@ -30,6 +31,7 @@ import {
 
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated|started|restarted|running)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated|started|restarted)\b/i;
+const EXECUTION_RESUME_PATTERN = /^(?:ok(?:ay)?[,\s]*)?(?:now\s+)?(?:please\s+)?(?:resume|continue|finish)\s+(?:the\s+)?(?:current|last|previous)\s+(?:request|task|one)\b.*$/i;
 
 function resolveExecutionBackedRequest(input: {
   activeExecution?: ExecutionRecord | null;
@@ -107,6 +109,67 @@ export function buildGatewayClarificationResponse(
   if (!decision) return null;
 
   const missingFields = new Set(decision.missingFields);
+  const needsIntentRouteClarification = decision.resolution === 'needs_clarification'
+    && missingFields.has('intent_route');
+  const intentRouteClarification = needsIntentRouteClarification
+    && missingFields.has('intent_route')
+      ? deriveIntentRouteClarification({
+          content: input.message.content,
+          decision,
+          mode: input.gateway?.mode,
+        })
+      : null;
+  if (needsIntentRouteClarification) {
+    const prompt = intentRouteClarification?.prompt
+      ?? sanitizePendingActionPrompt(decision.summary, 'clarification');
+    const pendingActionResult = deps.setClarificationPendingAction(
+      input.surfaceUserId,
+      input.surfaceChannel,
+      input.surfaceId,
+      {
+        blockerKind: 'clarification',
+        field: 'intent_route',
+        prompt,
+        originalUserContent: input.message.content,
+        summary: prompt,
+        turnRelation: decision.turnRelation,
+        resolution: decision.resolution,
+        missingFields: decision.missingFields,
+        provenance: decision.provenance,
+        entities: {
+          ...(deps.toPendingActionEntities(decision.entities) ?? {}),
+          ...(decision.route !== 'unknown' ? { intentRouteHint: decision.route } : {}),
+          ...(intentRouteClarification
+            ? { intentRouteCandidates: [...intentRouteClarification.candidateRoutes] }
+            : {}),
+        },
+        ...(intentRouteClarification
+          ? {
+              options: intentRouteClarification.options.map((option) => ({ ...option })),
+            }
+          : {}),
+      },
+    );
+    const responseContent = pendingActionResult.collisionPrompt ?? prompt;
+    deps.recordIntentRoutingTrace('clarification_requested', {
+      message: input.message,
+      details: {
+        kind: 'intent_route',
+        route: decision.route,
+        routeSource: decision.provenance?.route,
+        operation: decision.operation,
+        operationSource: decision.provenance?.operation,
+        entitySources: decision.provenance?.entities,
+        missingFields: [...missingFields],
+        ...(intentRouteClarification
+          ? { candidateRoutes: [...intentRouteClarification.candidateRoutes] }
+          : {}),
+        prompt: responseContent,
+      },
+    });
+    return buildClarificationResponseMetadata(input, responseContent, deps);
+  }
+
   const needsEmailProvider = (decision.route === 'email_task')
     && deps.enabledManagedProviders?.has('gws')
     && deps.enabledManagedProviders.has('m365')
@@ -385,7 +448,7 @@ export function resolveRetryAfterFailureContinuationContent(input: {
   activeExecution?: ExecutionRecord | null | undefined;
 }): string | null {
   const normalized = stripLeadingContextPrefix(input.content).trim();
-  if (!isRetryAfterFailureRequest(normalized)) {
+  if (!isRetryAfterFailureRequest(normalized) && !isExecutionResumeRequest(normalized)) {
     return null;
   }
   return resolveExecutionBackedRequest({
@@ -552,4 +615,8 @@ function isRetryAfterFailureRequest(content: string): boolean {
   const normalized = content.trim();
   return RETRY_AFTER_FAILURE_PATTERN.test(normalized)
     || PREREQUISITE_RECOVERY_PATTERN.test(normalized);
+}
+
+function isExecutionResumeRequest(content: string): boolean {
+  return EXECUTION_RESUME_PATTERN.test(content.trim());
 }

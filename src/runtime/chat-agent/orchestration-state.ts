@@ -123,7 +123,7 @@ function replaceContinuityExecutionRefsByKind(
 }
 
 function buildExecutionRefLabel(record: ExecutionRecord | null | undefined): string | undefined {
-  const summary = record?.intent.summary?.trim();
+  const summary = normalizeUserFacingIntentGatewaySummary(record?.intent.summary);
   if (summary) return summary;
   const content = resolveExecutionIntentContent(record);
   if (!content) return undefined;
@@ -409,6 +409,7 @@ export class ChatAgentOrchestrationState {
       failedAt: undefined,
     }, nowMs);
     if (updated) return updated;
+    const { originalUserContent: _ignoredOriginalUserContent, ...intentPatch } = cloneExecutionIntent(intent);
     return this.executionStore.begin({
       executionId: input.executionIdentity.executionId,
       requestId: input.executionIdentity.executionId,
@@ -423,6 +424,7 @@ export class ChatAgentOrchestrationState {
         input.continuityThread?.continuityKey,
       ),
       originalUserContent: intent.originalUserContent,
+      intent: intentPatch,
       lastUserContent: input.routingContent.trim(),
       status: nextStatus,
     }, nowMs);

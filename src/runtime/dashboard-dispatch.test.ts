@@ -169,6 +169,14 @@ describe('createDashboardMessageDispatcher', () => {
     });
 
     expect(result.content).toBe('Updated successfully.');
+    expect(result.metadata).toMatchObject({
+      codeSessionResolved: true,
+      codeSessionId: 'code-session-1',
+      codeContext: {
+        sessionId: 'code-session-1',
+        workspaceRoot: '/workspace',
+      },
+    });
     expect(options.orchestrator.dispatch).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'local-agent',
       userId: 'code-session:1',

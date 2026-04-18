@@ -194,6 +194,34 @@ export function buildToolExecutionCorrectionPrompt(
     return lines.join(' ');
   }
 
+  if (decision.route === 'filesystem_task') {
+    if (isReadOnlyFilesystemOperation(decision.operation)) {
+      return [
+        'System correction: this turn is a workspace filesystem inspection request.',
+        'Do not narrate future work or claim file findings before using filesystem tools.',
+        'Use fs_search and fs_read now to inspect the requested files or paths, then answer from those real tool results.',
+        'Only ask the user for approval after a real tool result returns pending_approval.',
+      ].join(' ');
+    }
+    return [
+      'System correction: this turn is a workspace filesystem mutation request.',
+      'Do not claim that a file or directory was created, updated, or saved until a real fs_write or fs_mkdir result confirms it.',
+      'Use fs_write or fs_mkdir now for the requested change.',
+      'If the requested path is blocked by allowed-path policy, call update_tool_policy to request the path addition instead of pretending the write already happened.',
+      'Only ask the user for approval after a real tool result returns pending_approval.',
+    ].join(' ');
+  }
+
+  if (decision.route === 'security_task' && (decision.requiresRepoGrounding || decision.executionClass === 'security_analysis')) {
+    return [
+      'System correction: this turn is a source-backed security review request.',
+      'Do not fabricate file paths, tool results, or findings.',
+      'Inspect the relevant files with fs_search, code_symbol_search, and fs_read before citing exact files or control-flow behavior.',
+      'After collecting evidence, synthesize the findings in plain language with exact file references.',
+      'Only ask the user for approval after a real tool result returns pending_approval.',
+    ].join(' ');
+  }
+
   return undefined;
 }
 
@@ -323,6 +351,31 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
     }
     return lines;
   }
+  if (decision.route === 'filesystem_task') {
+    const lines = [
+      'This turn is a filesystem request anchored to the active workspace.',
+    ];
+    if (isReadOnlyFilesystemOperation(decision.operation)) {
+      lines.push('Use fs_search and fs_read for inspection instead of narrating what you plan to inspect next.');
+      lines.push('Answer only from real filesystem tool results for this turn.');
+    } else {
+      lines.push('Use fs_mkdir for directory creation and fs_write for file writes or updates.');
+      lines.push('Do not claim that a file or directory changed until the filesystem tool returns a real success result.');
+      lines.push('If an allowed-path policy blocks the change, request the path addition through update_tool_policy instead of skipping straight to a conversational approval request.');
+    }
+    return lines;
+  }
+  if (decision.route === 'security_task') {
+    const lines = [
+      'This turn is a security analysis request.',
+    ];
+    if (decision.requiresRepoGrounding || decision.executionClass === 'security_analysis') {
+      lines.push('Inspect the relevant source files before citing exact files, control flow, or findings.');
+      lines.push('Do not fabricate file paths, tool outputs, or security findings.');
+    }
+    lines.push('When findings are requested, report the highest-risk findings first and anchor them to the inspected evidence.');
+    return lines;
+  }
   if (decision.route === 'personal_assistant_task') {
     const lines = [
       'This turn is already routed to Guardian Second Brain work.',
@@ -450,4 +503,8 @@ function shouldDenyTrivialFilesystemRemoteExec(
 
 function namesExplicitFilesInRequest(requestText: string): boolean {
   return /(?:^|\s)(?:[A-Za-z]:[\\/]|\/|\.\/|\.\.\/)?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]+(?:\s|$)/.test(requestText);
+}
+
+function isReadOnlyFilesystemOperation(operation: IntentGatewayDecision['operation']): boolean {
+  return operation === 'inspect' || operation === 'read' || operation === 'search';
 }

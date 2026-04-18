@@ -174,6 +174,11 @@ export interface IntentGatewayInput {
     missingFields?: string[];
     provenance?: IntentGatewayDecisionProvenance;
     entities?: Record<string, unknown>;
+    options?: Array<{
+      value: string;
+      label: string;
+      description?: string;
+    }>;
     prompt: string;
     originalRequest: string;
     transferPolicy: string;

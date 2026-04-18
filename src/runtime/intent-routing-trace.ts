@@ -24,6 +24,7 @@ export type IntentRoutingTraceStage =
   | 'pre_routed_metadata_attached'
   | 'delegated_worker_started'
   | 'delegated_worker_running'
+  | 'delegated_worker_retrying'
   | 'delegated_worker_completed'
   | 'delegated_worker_failed'
   | 'direct_candidates_evaluated'

@@ -24,6 +24,9 @@ Current as-built deltas:
 - System `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
 - delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
 - delegated worker lifecycle is now also projected live into the global execution timeline as `handoff_started`, live `note`, and terminal `handoff_completed` items so operators can watch brokered workers start, run, block, complete, or fail without waiting for the final reply
+- insufficiency-driven delegated retries now surface as a distinct retry breadcrumb between the running and terminal lifecycle events, and routing trace rows record that retry as `delegated_worker_retrying` with the stronger execution-profile details when Guardian escalates the child run
+- delegated retry breadcrumbs now cover both exact-file repo inspections that came back truncated or uncertain and progress-only delegated replies that never produced a terminal answer
+- delegated-worker trace rows now also carry the effective delegated intent metadata (`delegatedIntentSource`, route, operation, execution class, repo-grounding/tool-synthesis flags, preferred answer path, and context pressure) so operators can see why Guardian considered the child run retryable
 - delegated worker titles now prefer `orchestrationLabel` over generic `agentName` so the UI surfaces the specialist role when the backend knows it
 - assistant-dispatch runs now project bounded `provider_call` nodes so operators can see final model provenance, model id, duration, and token/cache usage without exposing raw prompts
 - context-assembly nodes now carry bounded compaction diagnostics, including pre/post prompt size, applied stages, and compacted-summary preview when context had to be shortened for budget
@@ -89,6 +92,7 @@ Current delegation-related sources of truth also include:
   - durable execution identity and root/parent lineage for request correlation
 - [worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
   - delegated lineage metadata
+  - effective delegated intent metadata for trace and retry decisions
   - bounded handoff summaries for brokered worker completions and failures
   - live delegated-worker lifecycle updates that feed the shared run timeline and routing trace
   - server-owned delegated follow-up policy (`inline_response`, `held_for_approval`, `status_only`, operator-held review)

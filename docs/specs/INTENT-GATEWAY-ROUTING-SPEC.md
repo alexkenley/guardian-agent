@@ -241,6 +241,35 @@ The gateway must classify whether the request is:
 
 When `needs_clarification` is returned, `missingFields` must identify the unresolved requirement.
 
+### Route Ambiguity Clarification
+
+Top-level route ambiguity is now a first-class clarification case.
+
+Rules:
+- if the classifier cannot confidently choose between top-level routes, it must prefer `resolution=needs_clarification` over silently guessing
+- route ambiguity uses `missingFields=["intent_route"]`
+- `summary` must become the short user-facing confirmation question
+- when the clarification is later satisfied, the runtime resumes the original stored request instead of inventing a new shadow request from transcript heuristics
+
+Current deterministic route-clarification guards cover:
+- `coding_task` vs `coding_session_control`
+- `automation_authoring` vs `automation_control`
+- `ui_control` vs `browser_task`
+
+Coding-task versus session-control note:
+- do not trigger the coding-scope clarification when the request clearly asks to do concrete repo work inside a named workspace, such as creating or editing files, writing into the top-level directory, or running a concrete coding action inside that workspace
+
+Current generic route-clarification rule:
+- if the classifier explicitly returns `missingFields=["intent_route"]` for any other route family, the shared pending-action clarification flow still handles it as an `intent_route` blocker even when there is no hard-coded option list
+- this keeps the clarification/resume contract consistent without overfitting every possible route collision into a regex-like guard
+
+Current reviewed-but-generic ambiguity families:
+- `search_task` vs `browser_task`
+- `personal_assistant_task` vs `workspace_task` or `email_task`
+- `automation_control` vs `automation_output_task`
+
+These remain classifier-led for now because the route boundary depends more heavily on richer context than the three deterministic guard pairs above.
+
 ## Pending Action And Continuity Context
 
 The gateway no longer receives a dedicated pending-clarification object. It receives:
@@ -269,6 +298,7 @@ Gateway behavior:
 - an active pending action does not automatically make the next turn a follow-up; a clearly different request such as `Check my email.` must still classify as a fresh `new_request`
 - clarification and correction repair run through the shared clarification resolver stage instead of bespoke per-route follow-up handling
 - pending-action summaries now also carry the prior intent provenance so clarification and correction turns can retain source attribution across blocked-work boundaries
+- clarification summaries may also carry blocker `options` and route-hint metadata so the gateway can resolve stored `intent_route` follow-ups instead of rebuilding them from transcript prose alone
 
 Current implementation details:
 - pending action state is a single active slot per logical assistant context, canonical user id, channel, and surface
@@ -358,6 +388,7 @@ Rules:
 - child dispatch and brokered worker handoff may derive a delegated execution profile from the parent profile, pre-routed gateway metadata, and the target orchestration role descriptor without reclassifying the user turn
 - explicit request-scoped provider overrides remain sticky across delegated profile selection
 - when the request is in normal auto-selection mode, different delegated child roles may run on different enabled provider profiles at the same time if their structured workloads differ
+- in normal auto-selection mode, a repo-grounded delegated child may be retried once on a stronger eligible profile when the first completed answer admits truncation or uncertainty instead of returning the exact file citations required by the routed ask; explicit provider overrides and forced chat modes remain hard ceilings for that retry
 - request-scoped explicit-provider turns still use the shared orchestration path, gateway trace, execution-profile metadata, and fallback-order machinery instead of bypassing dispatch
 - explicit-agent web chat dispatch still prepares and carries that execution-profile metadata so direct-handler replies can show the exact routed managed-cloud profile and model instead of collapsing to only the provider family
 
@@ -511,6 +542,8 @@ The durable routing trace is distinct from the existing run timeline:
 - `gateway_classified` entries now carry structured provenance such as route source, operation source, workload-source attribution, and per-entity sources when those were repaired or derived after the initial classifier output
 - `direct_candidates_evaluated` entries are the current capability-resolution trace point for direct lanes and record the routed candidates alongside the gateway provenance that shaped them
 - `clarification_requested` entries now include the routed decision provenance that produced the blocker so operators can correlate the pending field with its route and entity sources
+- `clarification_requested` entries for route ambiguity use `kind=intent_route` and include `candidateRoutes` when Guardian had a deterministic route-pair guard available; generic route ambiguity still records the routed hint and prompt even without explicit candidate options
+- delegated-worker lifecycle rows now include effective delegated intent metadata, including whether that child workload came from preserved pre-routed metadata or from delegated-role derivation, so retry/escalation decisions are explainable in trace instead of being inferred from child prose
 
 Current routing trace stages include:
 - `incoming_dispatch`
@@ -522,6 +555,7 @@ Current routing trace stages include:
 - `pre_routed_metadata_attached`
 - `delegated_worker_started`
 - `delegated_worker_running`
+- `delegated_worker_retrying`
 - `delegated_worker_completed`
 - `delegated_worker_failed`
 - `direct_candidates_evaluated`

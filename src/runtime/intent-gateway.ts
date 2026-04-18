@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatResponse, ToolDefinition } from '../llm/types.js';
+import { deriveIntentRouteClarification } from './intent/intent-route-clarification.js';
 import { selectIntentGatewayPromptProfile } from './intent/prompt-profiles.js';
-import { normalizeIntentGatewayPromptProfile } from './intent/normalization.js';
+import { normalizeIntentGatewayPromptProfile, normalizeRoute } from './intent/normalization.js';
 import {
   classifierProvenanceSourceForMode,
   normalizeIntentGatewayDecisionProvenance,
@@ -134,6 +135,7 @@ export class IntentGateway {
     }
     decision = repairEmailProviderDecisionIfNeeded(input, decision);
     decision = resolveSatisfiedClarificationIfNeeded(input, decision);
+    decision = applyIntentRouteClarificationGuard(input, record, decision);
     return {
       ...record,
       decision,
@@ -196,7 +198,7 @@ function resolveSatisfiedClarificationIfNeeded(
   if (!pendingAction || pendingAction.blockerKind !== 'clarification') {
     return decision;
   }
-  const satisfiedField = readSatisfiedClarificationField(decision, pendingAction.field);
+  const satisfiedField = readSatisfiedClarificationField(decision, pendingAction, pendingAction.field);
   if (!satisfiedField) {
     return decision;
   }
@@ -222,6 +224,7 @@ function resolveSatisfiedClarificationIfNeeded(
 
 function readSatisfiedClarificationField(
   decision: IntentGatewayDecision,
+  pendingAction: NonNullable<IntentGatewayInput['pendingAction']>,
   field: string | undefined,
 ): string | null {
   switch (field?.trim()) {
@@ -235,6 +238,8 @@ function readSatisfiedClarificationField(
       return decision.entities.sessionTarget?.trim() ? 'session_target' : null;
     case 'path':
       return decision.entities.path?.trim() ? 'path' : null;
+    case 'intent_route':
+      return hasSatisfiedIntentRouteClarification(decision, pendingAction) ? 'intent_route' : null;
     default:
       return null;
   }
@@ -266,9 +271,62 @@ function buildSatisfiedClarificationResolvedContent(
       return `Use ${decision.entities.sessionTarget} for this request: ${original}`;
     case 'path':
       return original;
+    case 'intent_route':
+      return original;
     default:
       return undefined;
   }
+}
+
+function applyIntentRouteClarificationGuard(
+  input: IntentGatewayInput,
+  record: IntentGatewayRecord,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  const clarification = deriveIntentRouteClarification({
+    content: input.content,
+    decision,
+    mode: record.mode,
+  });
+  if (!clarification) {
+    return decision;
+  }
+  const missingFields = new Set(decision.missingFields);
+  missingFields.add('intent_route');
+  return {
+    ...decision,
+    confidence: decision.confidence === 'high' ? 'medium' : decision.confidence,
+    resolution: 'needs_clarification',
+    missingFields: [...missingFields],
+    summary: clarification.prompt,
+  };
+}
+
+function hasSatisfiedIntentRouteClarification(
+  decision: IntentGatewayDecision,
+  pendingAction: NonNullable<IntentGatewayInput['pendingAction']>,
+): boolean {
+  const candidates = readIntentRouteCandidatesFromPendingAction(pendingAction);
+  if (candidates.length === 0) {
+    return (decision.turnRelation === 'clarification_answer' || decision.turnRelation === 'correction')
+      && decision.resolution === 'ready'
+      && decision.route !== 'unknown';
+  }
+  return candidates.includes(decision.route);
+}
+
+function readIntentRouteCandidatesFromPendingAction(
+  pendingAction: NonNullable<IntentGatewayInput['pendingAction']>,
+): IntentGatewayDecision['route'][] {
+  const rawCandidates = pendingAction.entities?.intentRouteCandidates;
+  if (!Array.isArray(rawCandidates)) {
+    return [];
+  }
+  return [...new Set(
+    rawCandidates
+      .map((value) => normalizeRoute(value))
+      .filter((value): value is IntentGatewayDecision['route'] => value !== 'unknown'),
+  )];
 }
 
 function formatCodingBackendLabel(value: string | undefined): string {

@@ -177,11 +177,20 @@ function cloneBlocker(blocker: PendingActionBlocker): PendingActionBlocker {
 }
 
 function cloneIntent(intent: PendingActionIntent): PendingActionIntent {
+  const {
+    summary: _ignoredSummary,
+    missingFields,
+    provenance,
+    entities,
+    ...rest
+  } = intent;
+  const summary = normalizeUserFacingIntentGatewaySummary(intent.summary);
   return {
-    ...intent,
-    ...(intent.missingFields ? { missingFields: [...intent.missingFields] } : {}),
-    ...(intent.provenance ? { provenance: { ...intent.provenance, ...(intent.provenance.entities ? { entities: { ...intent.provenance.entities } } : {}) } } : {}),
-    ...(intent.entities ? { entities: { ...intent.entities } } : {}),
+    ...rest,
+    ...(summary ? { summary } : {}),
+    ...(missingFields ? { missingFields: [...missingFields] } : {}),
+    ...(provenance ? { provenance: { ...provenance, ...(provenance.entities ? { entities: { ...provenance.entities } } : {}) } } : {}),
+    ...(entities ? { entities: { ...entities } } : {}),
   };
 }
 
@@ -341,6 +350,9 @@ function normalizeRecord(value: unknown): PendingActionRecord | null {
     : undefined;
 
   const blockerKind = normalizeBlockerKind(value.blocker.kind);
+  const summary = normalizeUserFacingIntentGatewaySummary(
+    typeof value.intent.summary === 'string' ? value.intent.summary : undefined,
+  );
 
   return {
     id,
@@ -378,7 +390,7 @@ function normalizeRecord(value: unknown): PendingActionRecord | null {
     intent: {
       ...(typeof value.intent.route === 'string' && value.intent.route.trim() ? { route: value.intent.route.trim() } : {}),
       ...(typeof value.intent.operation === 'string' && value.intent.operation.trim() ? { operation: value.intent.operation.trim() } : {}),
-      ...(typeof value.intent.summary === 'string' && value.intent.summary.trim() ? { summary: value.intent.summary.trim() } : {}),
+      ...(summary ? { summary } : {}),
       ...(typeof value.intent.turnRelation === 'string' && value.intent.turnRelation.trim() ? { turnRelation: value.intent.turnRelation.trim() } : {}),
       ...(typeof value.intent.resolution === 'string' && value.intent.resolution.trim() ? { resolution: value.intent.resolution.trim() } : {}),
       ...(Array.isArray(value.intent.missingFields)
@@ -431,6 +443,7 @@ export function summarizePendingActionForGateway(
   missingFields?: string[];
   provenance?: IntentGatewayDecisionProvenance;
   entities?: Record<string, unknown>;
+  options?: PendingActionOption[];
   field?: string;
   executionId?: string;
   rootExecutionId?: string;
@@ -452,6 +465,7 @@ export function summarizePendingActionForGateway(
     ...(record.intent.missingFields?.length ? { missingFields: [...record.intent.missingFields] } : {}),
     ...(record.intent.provenance ? { provenance: cloneIntent(record.intent).provenance } : {}),
     ...(record.intent.entities ? { entities: { ...record.intent.entities } } : {}),
+    ...(record.blocker.options?.length ? { options: record.blocker.options.map((option) => ({ ...option })) } : {}),
     ...(record.blocker.field ? { field: record.blocker.field } : {}),
     ...(record.executionId ? { executionId: record.executionId } : {}),
     ...(record.rootExecutionId ? { rootExecutionId: record.rootExecutionId } : {}),

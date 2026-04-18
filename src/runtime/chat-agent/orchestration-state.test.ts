@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ContinuityThreadStore } from '../continuity-threads.js';
+import { ExecutionStore } from '../executions.js';
 import { PendingActionStore } from '../pending-actions.js';
 import { ChatAgentOrchestrationState } from './orchestration-state.js';
 
@@ -17,6 +18,14 @@ function createContinuityStore(nowMs = 1_710_000_000_000): ContinuityThreadStore
     enabled: false,
     sqlitePath: '/tmp/guardianagent-continuity-state.test.sqlite',
     retentionDays: 30,
+    now: () => nowMs,
+  });
+}
+
+function createExecutionStore(nowMs = 1_710_000_000_000): ExecutionStore {
+  return new ExecutionStore({
+    enabled: false,
+    sqlitePath: '/tmp/guardianagent-execution-state.test.sqlite',
     now: () => nowMs,
   });
 }
@@ -426,5 +435,211 @@ describe('ChatAgentOrchestrationState', () => {
     });
 
     expect(updated?.lastActionableRequest).toBe('In this workspace, write a short report to C:\\Sensitive\\round2-approval.txt and continue once approval is granted.');
+  });
+
+  it('preserves the classified intent on newly created executions so continuity refs stay grounded', () => {
+    const nowMs = 1_710_000_000_000;
+    const continuityStore = createContinuityStore(nowMs);
+    const executionStore = createExecutionStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      executionStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const execution = state.updateExecutionFromIntent({
+      executionIdentity: {
+        executionId: 'exec-1',
+        rootExecutionId: 'exec-1',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      routingContent: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect the repository to identify files implementing delegated worker progress and run timeline rendering, without making edits.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          preferredAnswerPath: 'chat_synthesis',
+          expectedContextPressure: 'high',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          entities: {},
+        },
+      },
+      codeSessionId: 'code-session-1',
+      nowMs,
+    });
+
+    expect(execution?.intent).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      summary: 'Inspect the repository to identify files implementing delegated worker progress and run timeline rendering, without making edits.',
+      originalUserContent: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+    });
+
+    const continuity = state.updateContinuityThreadFromIntent({
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      executionIdentity: {
+        executionId: 'exec-1',
+        rootExecutionId: 'exec-1',
+      },
+      routingContent: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect the repository to identify files implementing delegated worker progress and run timeline rendering, without making edits.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          preferredAnswerPath: 'chat_synthesis',
+          expectedContextPressure: 'high',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          entities: {},
+        },
+      },
+      codeSessionId: 'code-session-1',
+    });
+
+    expect(executionStore.get('exec-1')?.intent).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      summary: 'Inspect the repository to identify files implementing delegated worker progress and run timeline rendering, without making edits.',
+    });
+    expect(continuity?.activeExecutionRefs).toEqual([
+      {
+        kind: 'execution',
+        id: 'exec-1',
+        label: 'Inspect the repository to identify files implementing delegated worker progress and run timeline rendering, without making edits.',
+      },
+      {
+        kind: 'code_session',
+        id: 'code-session-1',
+      },
+    ]);
+  });
+
+  it('drops internal fallback summaries from durable execution and continuity labels', () => {
+    const nowMs = 1_710_000_000_100;
+    const continuityStore = createContinuityStore(nowMs);
+    const executionStore = createExecutionStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      executionStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const routingContent = 'Inspect the repo and list the delegated worker progress files.';
+
+    const execution = state.updateExecutionFromIntent({
+      executionIdentity: {
+        executionId: 'exec-2',
+        rootExecutionId: 'exec-2',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      routingContent,
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'No direct route for this coding harness turn.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          preferredAnswerPath: 'direct',
+          expectedContextPressure: 'low',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          entities: {},
+        },
+      },
+      nowMs,
+    });
+
+    const continuity = state.updateContinuityThreadFromIntent({
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      executionIdentity: {
+        executionId: 'exec-2',
+        rootExecutionId: 'exec-2',
+      },
+      routingContent,
+      gateway: {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'No direct route for this coding harness turn.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          preferredAnswerPath: 'direct',
+          expectedContextPressure: 'low',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          entities: {},
+        },
+      },
+    });
+
+    expect(execution?.intent.summary).toBeUndefined();
+    expect(executionStore.get('exec-2')?.intent.summary).toBeUndefined();
+    expect(continuity?.focusSummary).toBeUndefined();
+    expect(continuity?.safeSummary).toBeUndefined();
+    expect(continuity?.activeExecutionRefs).toEqual([
+      {
+        kind: 'execution',
+        id: 'exec-2',
+        label: routingContent,
+      },
+    ]);
   });
 });

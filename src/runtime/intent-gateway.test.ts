@@ -2549,6 +2549,33 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredTier).toBe('external');
   });
 
+  it('repairs repo inspection requests that were misclassified as coding_session_control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_session_control',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspect repository to identify files implementing delegated worker progress and timeline rendering.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+  });
+
   it('repairs explicit remote sandbox execution requests that were misclassified as filesystem work', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -2740,6 +2767,119 @@ describe('IntentGateway', () => {
     expect(result.decision.missingFields).not.toContain('email_provider');
     expect(result.decision.entities.emailProvider).toBe('gws');
     expect(result.decision.resolvedContent).toContain('Gmail / Google Workspace');
+  });
+
+  it('asks for clarification instead of guessing between repo work and coding-session control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Inspect the Guardian workspace and tell me what matters most.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_session_control',
+          confidence: 'medium',
+          operation: 'inspect',
+          summary: 'Inspects the current coding workspace.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.summary).toContain('inspect or work inside the repo');
+  });
+
+  it('resolves intent-route clarification answers back onto the original request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Repo work.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-intent-route',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'intent_route',
+          prompt: 'Do you want me to inspect or work inside the repo, or do you want me to manage the current coding workspace/session?',
+          originalRequest: 'Inspect the Guardian workspace and tell me what matters most.',
+          entities: {
+            intentRouteCandidates: ['coding_task', 'coding_session_control'],
+          },
+          options: [
+            { value: 'coding_task', label: 'Repo work' },
+            { value: 'coding_session_control', label: 'Workspace/session control' },
+          ],
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspects the repo in the current workspace.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('intent_route');
+    expect(result.decision.resolvedContent).toBe(
+      'Inspect the Guardian workspace and tell me what matters most.',
+    );
+  });
+
+  it('resolves generic intent-route clarification answers back onto the original request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Search the web.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-generic-intent-route',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'intent_route',
+          prompt: 'Do you want me to search the web, inspect a specific website, or do something else?',
+          originalRequest: 'Look into OpenAI pricing for me.',
+          entities: {
+            intentRouteHint: 'search_task',
+          },
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'search_task',
+          confidence: 'high',
+          operation: 'search',
+          summary: 'Searches the web for the requested topic.',
+          turnRelation: 'clarification_answer',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('search_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('intent_route');
+    expect(result.decision.resolvedContent).toBe('Look into OpenAI pricing for me.');
   });
 
   it('captures mailbox read mode for latest inbox requests', async () => {

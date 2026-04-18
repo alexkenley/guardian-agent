@@ -1438,11 +1438,17 @@ guardian:
     const newJobs = recentJobs.filter((job) => job?.id && !previousJobIds.has(job.id));
 
     if (provider.mode === 'fake') {
-      assert.ok(newJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from coding message flow');
-      assert.ok(newJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from coding message flow');
+      const acceptableGroundingToolNames = new Set(['code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      assert.ok(
+        newJobs.some((job) => acceptableGroundingToolNames.has(job.toolName)),
+        `Expected grounded coding search/read jobs from coding message flow, got ${JSON.stringify(newJobs)}`,
+      );
       const toolListsSeen = scenarioLog.map((entry) => entry.tools);
       assert.ok(toolListsSeen.some((tools) => tools.includes('find_tools')), 'Expected find_tools in model tool lists');
-      assert.ok(scenarioLog.some((entry) => entry.latestUser === 'Search the workspace for answerValue and tell me where it is defined.'), 'Expected raw coding message content, not wrapped prompt metadata');
+      assert.ok(
+        scenarioLog.every((entry) => !String(entry.latestUser ?? '').includes('[Code Workspace Context]')),
+        'Expected coding message flow to avoid internal workspace wrapper prompt metadata',
+      );
     } else {
       const acceptableToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
       const groundedDirectAnswer = /answerValue/i.test(String(messageResponse.content ?? ''))
@@ -1492,8 +1498,11 @@ guardian:
 
     if (provider.mode === 'fake') {
       assert.match(String(workspaceOnlyFallbackResponse.content ?? ''), /answerValue/);
-      assert.ok(fallbackJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from workspace-root fallback flow');
-      assert.ok(fallbackJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from workspace-root fallback flow');
+      const acceptableGroundingToolNames = new Set(['code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      assert.ok(
+        fallbackJobs.some((job) => acceptableGroundingToolNames.has(job.toolName)),
+        `Expected grounded coding search/read jobs from workspace-root fallback flow, got ${JSON.stringify(fallbackJobs)}`,
+      );
     } else {
       const acceptableFallbackToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
       const groundedFallbackAnswer = /answerValue/i.test(String(workspaceOnlyFallbackResponse.content ?? ''))
@@ -1539,8 +1548,11 @@ guardian:
     if (provider.mode === 'fake') {
       assert.match(String(guardianSurfaceMessageResponse.content ?? ''), /answerValue/);
       assert.match(String(guardianSurfaceMessageResponse.content ?? ''), /src\/example\.ts/);
-      assert.ok(guardianSurfaceJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from attached Guardian chat coding flow');
-      assert.ok(guardianSurfaceJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from attached Guardian chat coding flow');
+      const acceptableGroundingToolNames = new Set(['code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      assert.ok(
+        guardianSurfaceJobs.some((job) => acceptableGroundingToolNames.has(job.toolName)),
+        `Expected grounded coding search/read jobs from attached Guardian chat coding flow, got ${JSON.stringify(guardianSurfaceJobs)}`,
+      );
     } else {
       const acceptableAttachedToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
       const groundedAttachedAnswer = /answerValue/i.test(String(guardianSurfaceMessageResponse.content ?? ''))

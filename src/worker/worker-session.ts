@@ -221,6 +221,7 @@ function buildToolLoopExecutionMetadata(
     roundCount: outcome.roundCount,
     toolCallCount: outcome.toolCallCount,
     toolResultCount: outcome.toolResultCount,
+    successfulToolResultCount: outcome.successfulToolResultCount,
   });
 }
 

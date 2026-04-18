@@ -621,6 +621,10 @@ export class Runtime {
     return undefined;
   }
 
+  getConfigSnapshot(): GuardianAgentConfig {
+    return this.config;
+  }
+
   /**
    * Apply updated LLM/default-provider configuration at runtime.
    *

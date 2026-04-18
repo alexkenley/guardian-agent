@@ -23,9 +23,12 @@ import {
 } from './entity-resolvers/provider-config.js';
 import { normalizeOperation, normalizeRoute } from './normalization.js';
 import {
+  isConversationTranscriptReferenceRequest,
   isExplicitComplexPlanningRequest,
   isExplicitCodingExecutionRequest,
+  isExplicitRepoInspectionRequest,
   isExplicitRepoPlanningRequest,
+  isExplicitWorkspaceScopedRepoWorkRequest,
 } from './request-patterns.js';
 import { collapseIntentGatewayWhitespace, normalizeIntentGatewayRepairText } from './text.js';
 import type { IntentGatewayDecision, IntentGatewayRepairContext } from './types.js';
@@ -55,10 +58,19 @@ export function repairIntentGatewayRoute(
   if (isExplicitCodingExecutionRequest(rawSourceContent)) {
     return 'coding_task';
   }
+  if (isExplicitWorkspaceScopedRepoWorkRequest(rawSourceContent)) {
+    return 'coding_task';
+  }
+  if (isExplicitRepoInspectionRequest(rawSourceContent)) {
+    return 'coding_task';
+  }
   if (isExplicitRepoPlanningRequest(rawSourceContent)) {
     return 'coding_task';
   }
   if (route === 'personal_assistant_task') {
+    return route;
+  }
+  if (route === 'general_assistant' && isConversationTranscriptReferenceRequest(rawSourceContent)) {
     return route;
   }
   const normalizedSourceContent = rawSourceContent.toLowerCase();
@@ -99,11 +111,21 @@ export function repairIntentGatewayOperation(
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
   }
+  if (route === 'coding_task' && isExplicitRepoInspectionRequest(rawSourceContent)) {
+    return /\bsearch\s+(?:this|the)?\s*(?:repo|repository|codebase|workspace)\b/.test(normalizedSourceContent)
+      || /\bfind\b.*\b(?:in|across)\s+(?:this|the)?\s*(?:repo|repository|codebase|workspace)\b/.test(normalizedSourceContent)
+      || /\b(?:grep|rg)\b/.test(normalizedSourceContent)
+      ? 'search'
+      : 'inspect';
+  }
   if (route === 'coding_task' && isExplicitRepoPlanningRequest(rawSourceContent)) {
     return 'inspect';
   }
   if (route === 'general_assistant' && isExplicitProviderConfigRequest(rawSourceContent)) {
     return inferProviderConfigOperation(rawSourceContent, operation);
+  }
+  if (route === 'general_assistant' && isConversationTranscriptReferenceRequest(rawSourceContent)) {
+    return operation;
   }
   if (route === 'automation_authoring' && isExplicitAutomationAuthoringRequest(rawSourceContent)) {
     return 'create';

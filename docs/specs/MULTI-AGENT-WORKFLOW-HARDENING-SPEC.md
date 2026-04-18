@@ -22,6 +22,9 @@ Guardian's current multi-agent / delegated-worker path is hardened around these 
 - the originating request should carry durable execution identity before or during delegation
 - delegated workers preserve lineage back to the originating assistant run, continuity key, and execution lineage where available
 - delegated workers may publish structured orchestration role identity such as coordinator, explorer, implementer, or verifier
+- the coordinator resolves an effective delegated workload contract from the routed intent plus the orchestration role, so retry/evidence policy can still apply even when the live child handoff is missing some pre-routed metadata
+- exact repo-grounded delegated inspections are subject to a server-owned sufficiency gate, so a child answer that only reports truncation or uncertainty can be retried once on a stronger eligible profile or failed instead of being treated as a successful completion
+- delegated child runs that stop at a progress-only reply are also eligible for one stronger retry instead of being accepted as terminal work
 - operator-facing follow-up is normalized server-side into bounded reporting modes instead of forcing channels to parse arbitrary worker prose
 
 Current server-owned delegated follow-up modes:
@@ -32,6 +35,7 @@ Current server-owned delegated follow-up modes:
 
 Current as-built limitation:
 - delegated completion still normalizes around worker `content` plus bounded handoff metadata
+- the current sufficiency gate improves reliability, but it does not eliminate upstream tool-result truncation or guarantee that the first delegated worker chose the strongest search strategy
 - the stronger typed return contract split into channels such as `userSummary`, `evidence`, `progressEvents`, and `nextAction` remains follow-on work
 
 ## Phases

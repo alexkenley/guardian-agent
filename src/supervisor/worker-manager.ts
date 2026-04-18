@@ -34,7 +34,11 @@ import type {
   PromptAssemblyKnowledgeBase,
   PromptAssemblyPendingAction,
 } from '../runtime/context-assembly.js';
-import type { SelectedExecutionProfile } from '../runtime/execution-profiles.js';
+import {
+  resolveDelegatedExecutionDecision,
+  selectEscalatedDelegatedExecutionProfile,
+  type SelectedExecutionProfile,
+} from '../runtime/execution-profiles.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
@@ -47,6 +51,17 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const WORKER_WORKSPACE_CLEANUP_MAX_RETRIES = 10;
 const WORKER_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 100;
+const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
+const IMPLEMENTATION_LOOKUP_PATTERN = /\b(?:implement|implements|implemented|define|defines|render|rendering|path|paths)\b/i;
+const FILE_REFERENCE_PATTERN = /\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|toml|rs|py|go|java|kt|swift|rb|php|css|html)\b|\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml|toml|rs|py|go|java|kt|swift|rb|php|css|html)\b/i;
+const INSUFFICIENT_RESULT_PATTERNS = [
+  /\btruncated\b/i,
+  /\b(?:cannot|can't)\s+(?:give|cite|identify|provide)\b.*\b(?:exact\s+files?|file\s+paths?)\b/i,
+  /\bsearch(?:es)?\s+came\s+back\s+empty\b/i,
+  /\bneed(?:ed)?\s+to\b.*\b(?:targeted|narrower|broader)\s+search/i,
+  /\bwould\s+you\s+like\s+me\s+to\s+run\b/i,
+  /\bdon't\s+have\s+enough\s+evidence\b/i,
+];
 
 const workerManagerPath = fileURLToPath(import.meta.url);
 const workerManagerDir = dirname(workerManagerPath);
@@ -100,6 +115,17 @@ interface ResolvedDelegatedTargetMetadata {
   agentId: string;
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
+}
+
+interface DelegatedEvidenceContractContext {
+  kind: 'repo_grounded' | 'filesystem_mutation' | 'security_analysis';
+  failureSummary: string;
+}
+
+interface DelegatedResultSufficiencyFailure {
+  kind: 'exact_file_references' | 'terminal_result';
+  failureSummary: string;
+  retryReason: string;
 }
 
 export interface WorkerProcess {
@@ -190,19 +216,26 @@ export class WorkerManager {
     if (approvalResponse) return approvalResponse;
 
     const preRoutedGateway = readPreRoutedIntentGatewayMetadata(input.message.metadata);
-    const canDirectAutomation = preRoutedGateway?.decision.route === 'automation_authoring'
-      && ['create', 'update', 'schedule'].includes(preRoutedGateway.decision.operation);
+    const intentDecision = preRoutedGateway?.decision;
+    const delegatedTarget = resolveDelegatedTargetMetadata(this.runtime, input);
+    const effectiveIntentDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: intentDecision,
+      orchestration: delegatedTarget.orchestration,
+      parentProfile: input.executionProfile,
+    });
+    const canDirectAutomation = intentDecision?.route === 'automation_authoring'
+      && ['create', 'update', 'schedule'].includes(intentDecision.operation);
     if (canDirectAutomation) {
       const directAutomation = await this.tryDirectAutomationAuthoring(input, {
         assumeAuthoring: true,
-        intentDecision: preRoutedGateway.decision,
+        intentDecision,
       });
       if (directAutomation) return directAutomation;
     }
 
-    const delegatedTarget = resolveDelegatedTargetMetadata(this.runtime, input);
     const requestId = input.delegation?.requestId ?? input.message.id;
     const delegatedJobDetail = describeDelegatedJob(input, delegatedTarget);
+    const evidenceContract = buildDelegatedEvidenceContractContext(input, effectiveIntentDecision ?? undefined);
 
     const delegatedJob = this.delegatedJobTracker.start({
       type: 'delegated_worker',
@@ -233,7 +266,7 @@ export class WorkerManager {
       userId: input.userId,
       channel: input.message.channel,
       controller: 'WorkerManager',
-      details: buildDelegatedAuditDetails(input, requestId, {
+      details: buildDelegatedAuditDetails(input, delegatedTarget, requestId, {
         actionType: 'delegated_worker_started',
       }),
     });
@@ -279,8 +312,7 @@ export class WorkerManager {
       // LLM calls are proxied through the broker — the worker no longer needs the provider config.
       // We only tell the worker whether a fallback provider exists for quality-based retry.
       const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
-
-      const result = await this.dispatchToWorker(worker, {
+      const baseDispatchParams = {
         message: input.message,
         systemPrompt: input.systemPrompt,
         history: input.history,
@@ -294,10 +326,108 @@ export class WorkerManager {
         pendingAction: input.pendingAction,
         pendingApprovalNotice: input.pendingApprovalNotice,
         hasFallbackProvider,
-      });
-      const handoff = buildDelegatedHandoff(result.content, result.metadata, input.delegation?.runClass);
-      const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind);
-      const normalizedResult = applyDelegatedFollowUpPolicy(result, handoff);
+      };
+      let effectiveInput = input;
+      let effectiveExecutionProfile = input.executionProfile;
+      let result = await this.dispatchToWorker(worker, baseDispatchParams);
+      let insufficiency = assessDelegatedResultSufficiency(
+        input,
+        result.content,
+        result.metadata,
+        effectiveIntentDecision ?? undefined,
+      );
+      if (insufficiency) {
+        const retryProfile = selectDelegatedRetryExecutionProfile(
+          this.runtime,
+          delegatedTarget,
+          effectiveIntentDecision ?? undefined,
+          effectiveExecutionProfile,
+        );
+        if (retryProfile) {
+          const retryDetail = buildDelegatedRetryDetail(
+            describeDelegatedTarget(delegatedTarget),
+            retryProfile,
+            insufficiency,
+            input.delegation?.codeSessionId,
+          );
+          effectiveExecutionProfile = retryProfile;
+          effectiveInput = effectiveExecutionProfile === input.executionProfile
+            ? input
+            : { ...input, executionProfile: effectiveExecutionProfile };
+          this.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
+            requestId,
+            taskRunId: delegatedTaskRunId,
+            lifecycle: 'running',
+            workerId: worker.id,
+            reason: retryDetail,
+          });
+          this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
+            id: `delegated-worker:${delegatedJob.id}:retrying`,
+            kind: 'running',
+            requestId,
+            taskRunId: delegatedTaskRunId,
+            workerId: worker.id,
+            detail: retryDetail,
+          });
+          this.runtime.auditLog.record({
+            type: 'broker_action',
+            severity: 'info',
+            agentId: input.agentId,
+            userId: input.userId,
+            channel: input.message.channel,
+            controller: 'WorkerManager',
+            details: buildDelegatedAuditDetails(effectiveInput, delegatedTarget, requestId, {
+              actionType: 'delegated_worker_retrying',
+              reason: insufficiency.retryReason,
+            }),
+          });
+          result = await this.dispatchToWorker(worker, {
+            ...baseDispatchParams,
+            additionalSections: appendDelegatedRetrySection(
+              baseDispatchParams.additionalSections,
+              insufficiency,
+            ),
+            executionProfile: retryProfile,
+          });
+          insufficiency = assessDelegatedResultSufficiency(
+            input,
+            result.content,
+            result.metadata,
+            effectiveIntentDecision ?? undefined,
+          );
+        }
+      }
+      const handoff = insufficiency
+        ? buildDelegatedInsufficientResultHandoff(
+          insufficiency,
+          effectiveInput.delegation?.runClass,
+        )
+        : buildDelegatedHandoff(
+          result.content,
+          result.metadata,
+          effectiveInput.delegation?.runClass,
+          evidenceContract,
+        );
+      const lifecycle = insufficiency
+        ? 'failed'
+        : resolveDelegatedWorkerLifecycle(
+          result.metadata,
+          handoff.unresolvedBlockerKind,
+          evidenceContract,
+        );
+      const normalizedResult = insufficiency
+        ? {
+            content: formatFailedDelegatedMessage(handoff),
+            metadata: {
+              ...(result.metadata ?? {}),
+              delegatedHandoff: handoff,
+              delegatedSufficiencyFailure: {
+                kind: insufficiency.kind,
+                reason: insufficiency.retryReason,
+              },
+            },
+          }
+        : applyDelegatedFollowUpPolicy(result, handoff, evidenceContract);
       if (handoff.reportingMode === 'held_for_operator') {
         this.delegatedFollowUpPayloads.set(delegatedJob.id, {
           content: result.content,
@@ -312,7 +442,7 @@ export class WorkerManager {
         this.delegatedJobTracker.fail(delegatedJob.id, new Error(handoff.summary), {
           detail: handoff.summary,
           metadata: {
-            delegation: buildDelegationJobMetadata(input, {
+            delegation: buildDelegationJobMetadata(effectiveInput, {
               lifecycle,
               workerId: worker.id,
               handoff,
@@ -320,7 +450,7 @@ export class WorkerManager {
             }),
           },
         });
-      this.recordDelegatedWorkerTrace('delegated_worker_failed', input, delegatedTarget, {
+      this.recordDelegatedWorkerTrace('delegated_worker_failed', effectiveInput, delegatedTarget, {
         requestId,
         taskRunId: delegatedTaskRunId,
         lifecycle,
@@ -332,9 +462,9 @@ export class WorkerManager {
         reason: handoff.summary,
         contentPreview: handoff.summary,
         handoff,
-        workerMetadata: result.metadata,
+        workerMetadata: normalizedResult.metadata,
       });
-        this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+        this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
           id: `delegated-worker:${delegatedJob.id}:failed`,
           kind: 'failed',
           requestId,
@@ -353,7 +483,7 @@ export class WorkerManager {
           userId: input.userId,
           channel: input.message.channel,
           controller: 'WorkerManager',
-          details: buildDelegatedAuditDetails(input, requestId, {
+          details: buildDelegatedAuditDetails(effectiveInput, delegatedTarget, requestId, {
             actionType: 'delegated_worker_failed',
             unresolvedBlockerKind: handoff.unresolvedBlockerKind,
             approvalCount: handoff.approvalCount,
@@ -367,7 +497,7 @@ export class WorkerManager {
       this.delegatedJobTracker.succeed(delegatedJob.id, {
         detail: handoff.summary,
         metadata: {
-          delegation: buildDelegationJobMetadata(input, {
+          delegation: buildDelegationJobMetadata(effectiveInput, {
             lifecycle,
             workerId: worker.id,
             handoff,
@@ -375,7 +505,7 @@ export class WorkerManager {
           }),
         },
       });
-      this.recordDelegatedWorkerTrace('delegated_worker_completed', input, delegatedTarget, {
+      this.recordDelegatedWorkerTrace('delegated_worker_completed', effectiveInput, delegatedTarget, {
         requestId,
         taskRunId: delegatedTaskRunId,
         lifecycle,
@@ -387,9 +517,9 @@ export class WorkerManager {
         reason: handoff.summary,
         contentPreview: lifecycle === 'blocked' ? handoff.nextAction : handoff.summary,
         handoff,
-        workerMetadata: result.metadata,
+        workerMetadata: normalizedResult.metadata,
       });
-      this.publishDelegatedWorkerProgress(input, delegatedTarget, {
+      this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:completed`,
         kind: lifecycle === 'blocked' ? 'blocked' : 'completed',
         requestId,
@@ -408,7 +538,7 @@ export class WorkerManager {
         userId: input.userId,
         channel: input.message.channel,
         controller: 'WorkerManager',
-        details: buildDelegatedAuditDetails(input, requestId, {
+        details: buildDelegatedAuditDetails(effectiveInput, delegatedTarget, requestId, {
           actionType: 'delegated_worker_completed',
           unresolvedBlockerKind: handoff.unresolvedBlockerKind,
           approvalCount: handoff.approvalCount,
@@ -451,7 +581,7 @@ export class WorkerManager {
         userId: input.userId,
         channel: input.message.channel,
         controller: 'WorkerManager',
-        details: buildDelegatedAuditDetails(input, requestId, {
+        details: buildDelegatedAuditDetails(input, delegatedTarget, requestId, {
           actionType: 'delegated_worker_failed',
           reason: error instanceof Error ? error.message : String(error),
         }),
@@ -463,7 +593,11 @@ export class WorkerManager {
   private recordDelegatedWorkerTrace(
     stage: Extract<
       IntentRoutingTraceStage,
-      'delegated_worker_started' | 'delegated_worker_running' | 'delegated_worker_completed' | 'delegated_worker_failed'
+      | 'delegated_worker_started'
+      | 'delegated_worker_running'
+      | 'delegated_worker_retrying'
+      | 'delegated_worker_completed'
+      | 'delegated_worker_failed'
     >,
     input: WorkerMessageRequest,
     target: ResolvedDelegatedTargetMetadata,
@@ -483,6 +617,7 @@ export class WorkerManager {
     },
   ): void {
     const delegatedExecution = resolveDelegatedExecutionIdentity(input, options.taskRunId);
+    const delegatedIntent = resolveDelegatedIntentContext(input, target);
     this.observability.intentRoutingTrace?.record({
       stage,
       requestId: options.requestId,
@@ -504,6 +639,7 @@ export class WorkerManager {
         ...(target.orchestration?.role ? { orchestrationRole: target.orchestration.role } : {}),
         ...(target.orchestration?.label ? { orchestrationLabel: target.orchestration.label } : {}),
         ...(target.orchestration?.lenses?.length ? { orchestrationLenses: [...target.orchestration.lenses] } : {}),
+        ...buildDelegatedIntentTraceMetadata(delegatedIntent),
         ...buildDelegatedExecutionProfileTraceMetadata(input.executionProfile),
         ...buildDelegatedHandoffTraceMetadata(options.handoff),
         ...buildDelegatedWorkerExecutionTraceMetadata(options.workerMetadata),
@@ -1548,8 +1684,62 @@ function buildDelegatedWorkerExecutionTraceMetadata(
     ...(typeof workerExecution.toolResultCount === 'number'
       ? { workerExecutionToolResultCount: workerExecution.toolResultCount }
       : {}),
+    ...(typeof workerExecution.successfulToolResultCount === 'number'
+      ? { workerExecutionSuccessfulToolResultCount: workerExecution.successfulToolResultCount }
+      : {}),
     ...(typeof workerExecution.pendingApprovalCount === 'number'
       ? { workerExecutionPendingApprovalCount: workerExecution.pendingApprovalCount }
+      : {}),
+  };
+}
+
+function resolveDelegatedIntentContext(
+  input: WorkerMessageRequest,
+  target: ResolvedDelegatedTargetMetadata,
+): {
+  decision: IntentGatewayDecision | null;
+  source: 'pre_routed' | 'delegated_derived' | 'unavailable';
+} {
+  const preRoutedDecision = readPreRoutedIntentGatewayMetadata(input.message.metadata)?.decision ?? null;
+  const decision = resolveDelegatedExecutionDecision({
+    gatewayDecision: preRoutedDecision,
+    orchestration: target.orchestration,
+    parentProfile: input.executionProfile,
+  });
+  return {
+    decision,
+    source: preRoutedDecision
+      ? 'pre_routed'
+      : decision
+        ? 'delegated_derived'
+        : 'unavailable',
+  };
+}
+
+function buildDelegatedIntentTraceMetadata(
+  context: ReturnType<typeof resolveDelegatedIntentContext>,
+): Record<string, unknown> {
+  const decision = context.decision;
+  if (!decision) {
+    return { delegatedIntentSource: context.source };
+  }
+  return {
+    delegatedIntentSource: context.source,
+    delegatedIntentRoute: decision.route,
+    ...(decision.operation ? { delegatedIntentOperation: decision.operation } : {}),
+    ...(decision.executionClass ? { delegatedIntentExecutionClass: decision.executionClass } : {}),
+    ...(decision.preferredTier ? { delegatedIntentPreferredTier: decision.preferredTier } : {}),
+    ...(typeof decision.requiresRepoGrounding === 'boolean'
+      ? { delegatedIntentRequiresRepoGrounding: decision.requiresRepoGrounding }
+      : {}),
+    ...(typeof decision.requiresToolSynthesis === 'boolean'
+      ? { delegatedIntentRequiresToolSynthesis: decision.requiresToolSynthesis }
+      : {}),
+    ...(decision.expectedContextPressure
+      ? { delegatedIntentExpectedContextPressure: decision.expectedContextPressure }
+      : {}),
+    ...(decision.preferredAnswerPath
+      ? { delegatedIntentPreferredAnswerPath: decision.preferredAnswerPath }
       : {}),
   };
 }
@@ -1593,6 +1783,120 @@ function buildDelegatedWorkerRunningDetail(
   return `${targetLabel} is working${profileSuffix}${sessionSuffix}.`;
 }
 
+function buildDelegatedRetryDetail(
+  targetLabel: string,
+  executionProfile: SelectedExecutionProfile | undefined,
+  insufficiency: DelegatedResultSufficiencyFailure,
+  codeSessionId?: string,
+): string {
+  const profileLabel = describeDelegatedExecutionProfile(executionProfile);
+  const profileSuffix = profileLabel ? ` with ${profileLabel}` : '';
+  const sessionSuffix = codeSessionId?.trim() ? ` in code session ${codeSessionId.trim()}` : '';
+  return `Retrying ${targetLabel}${profileSuffix}${sessionSuffix} because ${insufficiency.retryReason}`;
+}
+
+function appendDelegatedRetrySection(
+  sections: PromptAssemblyAdditionalSection[],
+  insufficiency: DelegatedResultSufficiencyFailure,
+): PromptAssemblyAdditionalSection[] {
+  return [
+    ...sections,
+    {
+      section: 'Delegated Retry Directive',
+      mode: 'plain',
+      content: [
+        'The previous delegated attempt was not sufficient for the user request.',
+        `Failure mode: ${insufficiency.failureSummary}`,
+        'Retry this once now using the stronger execution profile.',
+        'Do not ask the user whether to narrow the search. Narrow it yourself.',
+        'Use targeted repo inspection and return exact file paths or exact file citations in the final answer.',
+      ].join('\n'),
+    },
+  ];
+}
+
+function buildDelegatedInsufficientResultHandoff(
+  insufficiency: DelegatedResultSufficiencyFailure,
+  runClassInput?: DelegatedWorkerRunClass,
+): DelegatedWorkerHandoff {
+  return {
+    summary: insufficiency.failureSummary,
+    runClass: normalizeDelegatedRunClass(runClassInput),
+    nextAction: 'Inspect the delegated worker failure details before retrying.',
+    reportingMode: 'inline_response',
+  };
+}
+
+function assessDelegatedResultSufficiency(
+  input: WorkerMessageRequest,
+  content: string,
+  metadata: Record<string, unknown> | undefined,
+  intentDecision: IntentGatewayDecision | undefined,
+): DelegatedResultSufficiencyFailure | null {
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (!workerExecution) return null;
+  if (
+    workerExecution.completionReason === 'intermediate_response'
+    || workerExecution.responseQuality === 'intermediate'
+  ) {
+    return {
+      kind: 'terminal_result',
+      failureSummary: 'Delegated worker returned a progress update instead of a terminal result.',
+      retryReason: 'the previous attempt stopped at a progress update instead of completing the delegated task',
+    };
+  }
+  if (!intentDecision || workerExecution.lifecycle !== 'completed') return null;
+  if ((workerExecution.successfulToolResultCount ?? 0) <= 0) return null;
+  if (!requestNeedsExactFileReferences(input.message.content, intentDecision)) return null;
+  if (contentHasConcreteFileReferences(content)) return null;
+  if (!contentSignalsInsufficientGroundedLookup(content)) return null;
+  return {
+    kind: 'exact_file_references',
+    failureSummary: 'Delegated worker did not return the exact file references requested after repo inspection.',
+    retryReason: 'the previous answer admitted truncation or uncertainty instead of naming the exact files',
+  };
+}
+
+function requestNeedsExactFileReferences(
+  requestText: string,
+  intentDecision: IntentGatewayDecision,
+): boolean {
+  if (!(intentDecision.requiresRepoGrounding === true || intentDecision.executionClass === 'repo_grounded')) {
+    return false;
+  }
+  if (!isReadOnlyFilesystemOperation(intentDecision.operation) && intentDecision.route !== 'coding_task' && intentDecision.route !== 'security_task') {
+    return false;
+  }
+  return EXACT_FILE_REQUEST_PATTERN.test(requestText) && IMPLEMENTATION_LOOKUP_PATTERN.test(requestText);
+}
+
+function contentHasConcreteFileReferences(content: string): boolean {
+  return FILE_REFERENCE_PATTERN.test(content);
+}
+
+function contentSignalsInsufficientGroundedLookup(content: string): boolean {
+  const normalized = String(content ?? '');
+  return INSUFFICIENT_RESULT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function selectDelegatedRetryExecutionProfile(
+  runtime: Runtime,
+  target: ResolvedDelegatedTargetMetadata,
+  intentDecision: IntentGatewayDecision | undefined,
+  currentProfile: SelectedExecutionProfile | undefined,
+): SelectedExecutionProfile | null {
+  const config = runtime.getConfigSnapshot?.();
+  if (!config) return null;
+  return selectEscalatedDelegatedExecutionProfile({
+    config,
+    currentProfile,
+    parentProfile: currentProfile,
+    gatewayDecision: intentDecision,
+    orchestration: target.orchestration,
+    mode: currentProfile?.routingMode,
+  });
+}
+
 function readApprovalSummaryCount(metadata: Record<string, unknown> | undefined): number {
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (typeof workerExecution?.pendingApprovalCount === 'number') {
@@ -1616,10 +1920,44 @@ function readPendingActionKind(metadata: Record<string, unknown> | undefined): s
   return typeof kind === 'string' && kind.trim() ? kind.trim() : undefined;
 }
 
+function buildDelegatedEvidenceContractContext(
+  input: WorkerMessageRequest,
+  intentDecision: IntentGatewayDecision | undefined,
+): DelegatedEvidenceContractContext | undefined {
+  if (!intentDecision) return undefined;
+
+  if (intentDecision.route === 'filesystem_task' && !isReadOnlyFilesystemOperation(intentDecision.operation)) {
+    return {
+      kind: 'filesystem_mutation',
+      failureSummary: 'Delegated worker claimed a filesystem change without producing a successful tool result or a real blocker.',
+    };
+  }
+
+  if (intentDecision.route === 'security_task' && (intentDecision.requiresRepoGrounding === true || hasDelegatedWorkspaceContext(input))) {
+    return {
+      kind: 'security_analysis',
+      failureSummary: 'Delegated worker returned source-backed security findings without collecting successful tool results or evidence.',
+    };
+  }
+
+  if (intentDecision.requiresRepoGrounding === true || intentDecision.executionClass === 'repo_grounded') {
+    return {
+      kind: 'repo_grounded',
+      failureSummary: 'Delegated worker returned a repo-grounded answer without collecting successful tool results or evidence.',
+    };
+  }
+
+  return undefined;
+}
+
 function resolveDelegatedWorkerLifecycle(
   metadata: Record<string, unknown> | undefined,
   unresolvedBlockerKind?: string,
+  evidenceContract?: DelegatedEvidenceContractContext,
 ): 'completed' | 'blocked' | 'failed' {
+  if (violatesDelegatedEvidenceContract(evidenceContract, metadata)) {
+    return 'failed';
+  }
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (workerExecution?.lifecycle) {
     return workerExecution.lifecycle;
@@ -1630,7 +1968,11 @@ function resolveDelegatedWorkerLifecycle(
 function buildDelegatedFailureSummary(
   content: string,
   metadata: Record<string, unknown> | undefined,
+  evidenceContract?: DelegatedEvidenceContractContext,
 ): string | undefined {
+  if (violatesDelegatedEvidenceContract(evidenceContract, metadata)) {
+    return evidenceContract?.failureSummary;
+  }
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (!workerExecution || workerExecution.lifecycle !== 'failed') {
     return undefined;
@@ -1656,10 +1998,11 @@ function buildDelegatedHandoff(
   content: string,
   metadata: Record<string, unknown> | undefined,
   runClassInput?: DelegatedWorkerRunClass,
+  evidenceContract?: DelegatedEvidenceContractContext,
 ): DelegatedWorkerHandoff {
   const unresolvedBlockerKind = readPendingActionKind(metadata);
-  const lifecycle = resolveDelegatedWorkerLifecycle(metadata, unresolvedBlockerKind);
-  const summary = buildDelegatedFailureSummary(content, metadata)
+  const lifecycle = resolveDelegatedWorkerLifecycle(metadata, unresolvedBlockerKind, evidenceContract);
+  const summary = buildDelegatedFailureSummary(content, metadata, evidenceContract)
     ?? truncateInlineText(content, 220)
     ?? (lifecycle === 'failed' ? 'Delegated worker failed.' : 'Delegated worker completed.');
   const approvalCount = readApprovalSummaryCount(metadata);
@@ -1702,8 +2045,9 @@ function buildDelegatedHandoff(
 function applyDelegatedFollowUpPolicy(
   result: { content: string; metadata?: Record<string, unknown> },
   handoff: DelegatedWorkerHandoff,
+  evidenceContract?: DelegatedEvidenceContractContext,
 ): { content: string; metadata?: Record<string, unknown> } {
-  const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind);
+  const lifecycle = resolveDelegatedWorkerLifecycle(result.metadata, handoff.unresolvedBlockerKind, evidenceContract);
   const metadata: Record<string, unknown> = {
     ...(result.metadata ?? {}),
     delegatedHandoff: handoff,
@@ -1779,6 +2123,35 @@ function readPendingActionPrompt(metadata: Record<string, unknown> | undefined):
   return typeof prompt === 'string' && prompt.trim().length > 0 ? prompt.trim() : undefined;
 }
 
+function violatesDelegatedEvidenceContract(
+  evidenceContract: DelegatedEvidenceContractContext | undefined,
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!evidenceContract) {
+    return false;
+  }
+  if (readPendingActionKind(metadata)) {
+    return false;
+  }
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (!workerExecution || workerExecution.lifecycle !== 'completed') {
+    return false;
+  }
+  return (workerExecution.successfulToolResultCount ?? 0) <= 0;
+}
+
+function hasDelegatedWorkspaceContext(input: WorkerMessageRequest): boolean {
+  if (normalizeDelegatedIdentityValue(input.delegation?.codeSessionId)) {
+    return true;
+  }
+  return (input.delegation?.activeExecutionRefs ?? []).some((ref) =>
+    typeof ref === 'string' && ref.trim().toLowerCase().startsWith('code_session:'));
+}
+
+function isReadOnlyFilesystemOperation(operation: IntentGatewayDecision['operation']): boolean {
+  return operation === 'inspect' || operation === 'read' || operation === 'search';
+}
+
 function normalizeDelegatedRunClass(value: unknown): DelegatedWorkerRunClass {
   if (value === 'in_invocation' || value === 'short_lived' || value === 'long_running' || value === 'automation_owned') {
     return value;
@@ -1833,10 +2206,12 @@ function resolveDelegatedExecutionIdentity(
 
 function buildDelegatedAuditDetails(
   input: WorkerMessageRequest,
+  target: ResolvedDelegatedTargetMetadata,
   requestId: string,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const delegatedExecution = resolveDelegatedExecutionIdentity(input);
+  const delegatedIntent = resolveDelegatedIntentContext(input, target);
   return {
     sessionId: input.sessionId,
     requestId,
@@ -1844,6 +2219,7 @@ function buildDelegatedAuditDetails(
     ...(delegatedExecution.rootExecutionId ? { rootExecutionId: delegatedExecution.rootExecutionId } : {}),
     ...(input.delegation?.continuityKey ? { continuityKey: input.delegation.continuityKey } : {}),
     ...(input.delegation?.codeSessionId ? { codeSessionId: input.delegation.codeSessionId } : {}),
+    ...buildDelegatedIntentTraceMetadata(delegatedIntent),
     ...extra,
   };
 }

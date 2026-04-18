@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
 import {
   attachSelectedExecutionProfileMetadata,
   readSelectedExecutionProfileMetadata,
+  selectEscalatedDelegatedExecutionProfile,
   selectDelegatedExecutionProfile,
   selectExecutionProfile,
 } from './execution-profiles.js';
@@ -476,6 +477,53 @@ describe('execution profiles', () => {
       providerTier: 'frontier',
       selectionSource: 'delegated_role',
     });
+  });
+
+  it('can escalate a delegated coding-workspace workload from managed cloud to frontier', () => {
+    const config = createConfig();
+    const parentProfile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision(),
+      mode: 'auto',
+    });
+    const delegatedProfile = selectDelegatedExecutionProfile({
+      config,
+      parentProfile,
+      gatewayDecision: createGatewayDecision(),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      mode: 'auto',
+    });
+
+    const escalated = selectEscalatedDelegatedExecutionProfile({
+      config,
+      currentProfile: delegatedProfile,
+      parentProfile,
+      gatewayDecision: createGatewayDecision(),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      mode: 'auto',
+    });
+
+    expect(delegatedProfile).toMatchObject({
+      providerName: 'ollama-cloud-coding',
+      providerTier: 'managed_cloud',
+    });
+    expect(escalated).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      id: 'frontier_deep',
+      selectionSource: 'delegated_role',
+      routingMode: 'auto',
+    });
+    expect(escalated?.reason).toContain('escalated delegated workload for Workspace Explorer');
   });
 
   it('preserves explicit provider overrides across delegated profile selection', () => {

@@ -1,5 +1,13 @@
 import { normalizeIntentGatewayRepairText } from './text.js';
 
+const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|workspace|session)\b/;
+const REPO_MUTATION_PATTERN = /\b(?:create|add|make|write|generate|touch|update|edit|change|modify|fix|patch|rewrite|append|delete|remove)\b/;
+const REPO_EXECUTION_PATTERN = /\b(?:run|test|build|lint|check|debug|investigate|inspect|review|search|find|grep)\b/;
+const CODING_BACKEND_PATTERN = /\b(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/;
+const CONCRETE_REPO_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder|file|files|source|function|class|module|component|symbol|path|paths|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;
+const SOURCE_TREE_PATH_PATTERN = /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//;
+const REPO_FILE_REFERENCE_PATTERN = /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml)\b/;
+
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
   if (!normalized || normalized.length > 64) return false;
@@ -20,6 +28,15 @@ export function looksLikePendingActionContextTurn(request: string | undefined): 
     || /\bwhy (?:are you|is this)\s+blocked\b/.test(normalized)
     || /\b(?:use|switch to)\s+(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/.test(normalized)
     || /\bcoding backend\b/.test(normalized);
+}
+
+export function isConversationTranscriptReferenceRequest(request: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(request);
+  if (!normalized) return false;
+  return /\b(?:in|from|using)\s+(?:this|the)\s+(?:chat|conversation|thread)\b/.test(normalized)
+    || /\byour\s+(?:first|last|previous|earlier)\s+(?:answer|response|reply|message|turn)\b/.test(normalized)
+    || /\b(?:first|last|previous|earlier|older)\s+(?:answer|response|reply|message|turn)\b/.test(normalized)
+    || /\b(?:based on|using)\s+(?:that|the)\s+(?:answer|response|reply|message|turn)\b/.test(normalized);
 }
 
 export function looksLikeStandaloneGreetingTurn(request: string | undefined): boolean {
@@ -45,6 +62,60 @@ export function isExplicitRepoPlanningRequest(content: string | undefined): bool
     || /\bplan\b/.test(normalized) && /\bbefore editing\b/.test(normalized);
   if (!hasPlanningIntent) return false;
   return /\b(?:this app|this repo|this repository|this workspace|the codebase|the repository|the app)\b/.test(normalized);
+}
+
+export function isExplicitRepoInspectionRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+
+  const mentionsRepoScope = /\b(?:this repo|this repository|this workspace|the repo|the repository|the codebase|the workspace|repo|repository|codebase)\b/.test(normalized);
+  const mentionsCodeArtifact = /\b(?:file|files|source|function|class|module|component|symbol|path|paths)\b/.test(normalized)
+    || /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//.test(normalized)
+    || /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml)\b/.test(normalized);
+  const asksForFileOrSymbolLocation = /\btell me which files?\b/.test(normalized)
+    || /\bwhich files?\b.*\b(?:implement|define|render|handle|contain|route|wire|own|use)\b/.test(normalized)
+    || /\bwhere\b.*\bdefined\b/.test(normalized);
+  const usesPositiveInspectionVerb = /\b(?:inspect|review|scan|trace|grep)\b/.test(normalized)
+    || /\bsearch\s+(?:this|the)?\s*(?:repo|repository|codebase|workspace)\b/.test(normalized)
+    || /\bfind\b.*\b(?:in|across)\s+(?:this|the)?\s*(?:repo|repository|codebase|workspace)\b/.test(normalized)
+    || /\blook\s+(?:through|in|across|at)\b/.test(normalized);
+  const negatesRepoSearch = /\bdo\s+not\s+(?:re-?)?search\b/.test(normalized)
+    || /\bwithout\s+(?:re-?)?search(?:ing)?\b/.test(normalized);
+
+  return asksForFileOrSymbolLocation && (mentionsRepoScope || mentionsCodeArtifact)
+    || usesPositiveInspectionVerb && !negatesRepoSearch && (mentionsRepoScope || mentionsCodeArtifact);
+}
+
+export function isExplicitWorkspaceScopedRepoWorkRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized || !WORKSPACE_SCOPE_PATTERN.test(normalized)) return false;
+
+  const hasConcreteRepoTarget = CONCRETE_REPO_TARGET_PATTERN.test(normalized)
+    || SOURCE_TREE_PATH_PATTERN.test(normalized)
+    || REPO_FILE_REFERENCE_PATTERN.test(normalized);
+  if (!hasConcreteRepoTarget) return false;
+
+  return REPO_MUTATION_PATTERN.test(normalized)
+    || (CODING_BACKEND_PATTERN.test(normalized) && REPO_EXECUTION_PATTERN.test(normalized));
+}
+
+export function isExplicitCodingSessionControlRequest(content: string | undefined): boolean {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return false;
+  if (
+    isExplicitRepoInspectionRequest(normalized)
+    || isExplicitWorkspaceScopedRepoWorkRequest(normalized)
+    || isExplicitCodingExecutionRequest(normalized)
+  ) {
+    return false;
+  }
+  return /\bwhat\s+(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
+    || /\bwhich\s+(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
+    || /\b(?:current|active|attached)\s+(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
+    || /\bthis chat\b.*\battached\b/.test(normalized)
+    || /\b(?:list|show)\s+(?:my|the)?\s*(?:coding\s+)?(?:workspaces|sessions)\b/.test(normalized)
+    || /\b(?:switch|attach|detach|connect|disconnect|create)\b.*\b(?:coding\s+)?(?:workspace|session)\b/.test(normalized)
+    || /\b(?:switch|attach)\b.*\bthis chat\b/.test(normalized);
 }
 
 export function isExplicitCodingExecutionRequest(content: string | undefined): boolean {

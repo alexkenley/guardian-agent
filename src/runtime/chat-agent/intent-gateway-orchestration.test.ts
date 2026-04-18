@@ -214,6 +214,127 @@ describe('intent-gateway-orchestration', () => {
     ]);
   });
 
+  it('creates intent-route clarification pending actions with explicit route choices', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const traceCalls: Array<{ stage: string; details: Record<string, unknown> }> = [];
+    const gateway = makeGatewayRecord({
+      route: 'coding_session_control',
+      confidence: 'medium',
+      resolution: 'needs_clarification',
+      missingFields: ['intent_route'],
+      summary: 'Do you want me to inspect or work inside the repo, or do you want me to manage the current coding workspace/session?',
+      provenance: {
+        route: 'classifier.route_only_fallback',
+        operation: 'classifier.route_only_fallback',
+      },
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'web-guardian-chat',
+        message: makeMessage('Inspect the Guardian workspace and tell me what matters most.'),
+        activeSkills: [],
+      },
+      {
+        enabledManagedProviders: new Set(['gws', 'm365']),
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: (stage, input) => {
+          traceCalls.push({ stage, details: input.details });
+        },
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response?.content).toContain('inspect or work inside the repo');
+    expect(pendingActionInputs[0]).toMatchObject({
+      field: 'intent_route',
+      options: [
+        { value: 'coding_task', label: 'Repo work' },
+        { value: 'coding_session_control', label: 'Workspace/session control' },
+      ],
+      entities: {
+        intentRouteCandidates: ['coding_task', 'coding_session_control'],
+      },
+    });
+    expect(pendingActionInputs[0]?.route).toBeUndefined();
+    expect(traceCalls).toEqual([
+      {
+        stage: 'clarification_requested',
+        details: expect.objectContaining({
+          kind: 'intent_route',
+          candidateRoutes: ['coding_task', 'coding_session_control'],
+        }),
+      },
+    ]);
+  });
+
+  it('creates generic intent-route clarification pending actions when no built-in route pair matches', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const traceCalls: Array<{ stage: string; details: Record<string, unknown> }> = [];
+    const gateway = makeGatewayRecord({
+      route: 'search_task',
+      confidence: 'low',
+      resolution: 'needs_clarification',
+      missingFields: ['intent_route'],
+      summary: 'Do you want me to search the web, inspect a specific website, or do something else?',
+      provenance: {
+        route: 'classifier.primary',
+        operation: 'classifier.primary',
+      },
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'web-guardian-chat',
+        message: makeMessage('Look into OpenAI pricing for me.'),
+        activeSkills: [],
+      },
+      {
+        enabledManagedProviders: new Set(['gws', 'm365']),
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: (stage, input) => {
+          traceCalls.push({ stage, details: input.details });
+        },
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response?.content).toBe(
+      'Do you want me to search the web, inspect a specific website, or do something else?',
+    );
+    expect(pendingActionInputs[0]).toMatchObject({
+      field: 'intent_route',
+      prompt: 'Do you want me to search the web, inspect a specific website, or do something else?',
+      entities: {
+        intentRouteHint: 'search_task',
+      },
+    });
+    expect(pendingActionInputs[0]?.options).toBeUndefined();
+    expect(traceCalls).toEqual([
+      {
+        stage: 'clarification_requested',
+        details: expect.objectContaining({
+          kind: 'intent_route',
+          route: 'search_task',
+        }),
+      },
+    ]);
+  });
+
   it('falls back to generic clarification copy when the classifier omits a real summary', () => {
     const pendingActionInputs: Array<Record<string, unknown>> = [];
     const gateway = makeGatewayRecord({
@@ -392,6 +513,22 @@ describe('intent-gateway-orchestration', () => {
         lastActionableRequest: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.',
       }),
     })).toBe('In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session and report exact stdout.');
+  });
+
+  it('resolves generic resume-the-last-task requests against the active execution', () => {
+    expect(resolveRetryAfterFailureContinuationContent({
+      content: 'Resume the last task and finish it.',
+      continuityThread: makeContinuityThread({
+        lastActionableRequest: 'Tell me what coding session is currently active.',
+      }),
+      activeExecution: makeExecutionRecord({
+        intent: {
+          route: 'coding_task',
+          operation: 'inspect',
+          originalUserContent: 'Inspect src/runtime/intent-gateway.ts and summarize the orchestration changes.',
+        },
+      }),
+    })).toBe('Inspect src/runtime/intent-gateway.ts and summarize the orchestration changes.');
   });
 
   it('returns null when there is no execution-backed retry target', () => {

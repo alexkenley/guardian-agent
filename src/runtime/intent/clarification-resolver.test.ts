@@ -80,6 +80,50 @@ describe('clarification-resolver', () => {
     expect(operation).toBe('run');
   });
 
+  it('repairs repo inspection requests misclassified as coding_session_control', () => {
+    const repairContext: IntentGatewayRepairContext = {
+      sourceContent: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+    };
+
+    const route = repairIntentGatewayRoute(
+      'coding_session_control',
+      'inspect',
+      'new_request',
+      repairContext,
+    );
+    const operation = repairIntentGatewayOperation(
+      'inspect',
+      route,
+      'new_request',
+      repairContext,
+    );
+
+    expect(route).toBe('coding_task');
+    expect(operation).toBe('inspect');
+  });
+
+  it('repairs explicit workspace-scoped repo work away from coding_session_control', () => {
+    const repairContext: IntentGatewayRepairContext = {
+      sourceContent: 'Use Codex in the Test Tactical Game App coding workspace to create test-switch-a in the top-level directory.',
+    };
+
+    const route = repairIntentGatewayRoute(
+      'coding_session_control',
+      'create',
+      'new_request',
+      repairContext,
+    );
+    const operation = repairIntentGatewayOperation(
+      'create',
+      route,
+      'new_request',
+      repairContext,
+    );
+
+    expect(route).toBe('coding_task');
+    expect(operation).toBe('create');
+  });
+
   it('keeps provider inventory follow-ups in the provider-config lane', () => {
     const repairContext: IntentGatewayRepairContext = {
       sourceContent: 'Show me the configured AI providers and model catalog.',
@@ -100,6 +144,28 @@ describe('clarification-resolver', () => {
 
     expect(route).toBe('general_assistant');
     expect(operation).toBe('inspect');
+  });
+
+  it('does not rewrite transcript-reference note requests into personal-assistant work', () => {
+    const repairContext: IntentGatewayRepairContext = {
+      sourceContent: 'Using the very first answer in this chat, give me a 5-bullet handoff note for another engineer. Do not re-search the repo.',
+    };
+
+    const route = repairIntentGatewayRoute(
+      'general_assistant',
+      'create',
+      'new_request',
+      repairContext,
+    );
+    const operation = repairIntentGatewayOperation(
+      'create',
+      route,
+      'new_request',
+      repairContext,
+    );
+
+    expect(route).toBe('general_assistant');
+    expect(operation).toBe('create');
   });
 
   it('prefers explicit automation authoring over stale routine continuity', () => {

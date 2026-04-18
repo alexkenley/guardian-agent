@@ -27,6 +27,7 @@ export interface WorkerExecutionMetadata {
   roundCount?: number;
   toolCallCount?: number;
   toolResultCount?: number;
+  successfulToolResultCount?: number;
   pendingApprovalCount?: number;
 }
 
@@ -43,6 +44,9 @@ export function buildWorkerExecutionMetadata(
       ...(typeof metadata.roundCount === 'number' ? { roundCount: metadata.roundCount } : {}),
       ...(typeof metadata.toolCallCount === 'number' ? { toolCallCount: metadata.toolCallCount } : {}),
       ...(typeof metadata.toolResultCount === 'number' ? { toolResultCount: metadata.toolResultCount } : {}),
+      ...(typeof metadata.successfulToolResultCount === 'number'
+        ? { successfulToolResultCount: metadata.successfulToolResultCount }
+        : {}),
       ...(typeof metadata.pendingApprovalCount === 'number' ? { pendingApprovalCount: metadata.pendingApprovalCount } : {}),
     },
   };
@@ -70,6 +74,9 @@ export function readWorkerExecutionMetadata(
     ...(typeof workerExecution.roundCount === 'number' ? { roundCount: workerExecution.roundCount } : {}),
     ...(typeof workerExecution.toolCallCount === 'number' ? { toolCallCount: workerExecution.toolCallCount } : {}),
     ...(typeof workerExecution.toolResultCount === 'number' ? { toolResultCount: workerExecution.toolResultCount } : {}),
+    ...(typeof workerExecution.successfulToolResultCount === 'number'
+      ? { successfulToolResultCount: workerExecution.successfulToolResultCount }
+      : {}),
     ...(typeof workerExecution.pendingApprovalCount === 'number'
       ? { pendingApprovalCount: workerExecution.pendingApprovalCount }
       : {}),

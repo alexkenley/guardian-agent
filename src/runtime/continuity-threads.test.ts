@@ -119,4 +119,22 @@ describe('ContinuityThreadStore', () => {
     expect(formatContinuityThreadForPrompt(record)).toContain('<continuity-context>');
     expect(formatContinuityThreadForPrompt(record)).toContain('lastActionableRequest:');
   });
+
+  it('filters placeholder execution labels and summaries from stored continuity state', () => {
+    const store = createStore();
+    const scope = createScope();
+    const record = store.upsert(scope, {
+      touchSurface: { channel: 'web', surfaceId: 'chat-main' },
+      focusSummary: 'Intent gateway response was not structured.',
+      safeSummary: 'No direct route for this coding harness turn.',
+      activeExecutionRefs: [{ kind: 'execution', id: 'exec-1', label: 'No classification summary provided.' }],
+    });
+
+    expect(record?.focusSummary).toBeUndefined();
+    expect(record?.safeSummary).toBeUndefined();
+    expect(record?.activeExecutionRefs).toEqual([
+      { kind: 'execution', id: 'exec-1' },
+    ]);
+    expect(toContinuityThreadClientMetadata(record)).not.toHaveProperty('focusSummary');
+  });
 });
