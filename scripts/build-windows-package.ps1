@@ -125,12 +125,39 @@ function Copy-OptionalDirectory {
   return $true
 }
 
+function Invoke-DependencyContractValidation {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+    [Parameter(Mandatory = $true)]
+    [string[]]$Arguments,
+    [Parameter(Mandatory = $true)]
+    [string]$FailureMessage
+  )
+
+  & node $ScriptPath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw $FailureMessage
+  }
+}
+
 Push-Location $RepoRoot
 try {
   if (Test-Path $OutputRoot) {
     Stop-ProcessesUnderPath -RootPath $OutputRoot
     Remove-PathWithRetry -Path $OutputRoot
   }
+
+  $dependencyValidator = Join-Path $RepoRoot "scripts/validate-dependency-contract.mjs"
+  if (-not (Test-Path $dependencyValidator)) {
+    throw "Dependency contract validator was not found at $dependencyValidator."
+  }
+
+  Write-Host "Validating pinned dependency contract..." -ForegroundColor Cyan
+  Invoke-DependencyContractValidation `
+    -ScriptPath $dependencyValidator `
+    -Arguments @("--repo-root", $RepoRoot) `
+    -FailureMessage "Dependency contract validation failed for the repo root manifests."
 
   if (-not $SkipInstall) {
     Write-Host "Installing root dependencies..." -ForegroundColor Cyan
@@ -156,13 +183,19 @@ try {
   }
 
   if (Test-Path (Join-Path $RepoRoot "policies")) {
-    Copy-Item -Recurse (Join-Path $RepoRoot "policies") -Destination $StageRoot
+    Copy-Item -Path (Join-Path $RepoRoot "policies\*") -Destination $PoliciesDir -Recurse -Force
   } else {
     throw "Required policy files were not found at policies/."
   }
 
   Write-Host "Installing production dependencies into staged app..." -ForegroundColor Cyan
   npm ci --omit=dev --ignore-scripts --prefix $StageRoot
+
+  Write-Host "Validating staged package manifests..." -ForegroundColor Cyan
+  Invoke-DependencyContractValidation `
+    -ScriptPath $dependencyValidator `
+    -Arguments @("--repo-root", $RepoRoot, "--stage-root", $StageRoot, "--require-stage") `
+    -FailureMessage "Dependency contract validation failed for the staged Windows app manifests."
 
   # Ensure bundled CLI tools are available in staged app
   Write-Host "Ensuring bundled CLI tools..." -ForegroundColor Cyan

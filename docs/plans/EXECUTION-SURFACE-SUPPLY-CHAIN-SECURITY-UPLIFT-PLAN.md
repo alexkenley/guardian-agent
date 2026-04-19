@@ -1,6 +1,6 @@
 # Execution Surface Supply Chain Security Uplift Plan
 
-**Status:** Draft  
+**Status:** Draft; dependency/SDK governance pass prioritized first  
 **Date:** 2026-04-19  
 **Origins:** implementation review against the current GuardianAgent runtime after agent-era supply-chain threat modeling of hidden runtime installs, dynamic launcher resolution, credential inheritance paths, and generated-artifact dependency drift  
 **Companion specs:** [Security Policy](/mnt/s/Development/GuardianAgent/SECURITY.md), [Architecture Overview](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [Forward Architecture](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [MCP Client Spec](/mnt/s/Development/GuardianAgent/docs/specs/MCP-CLIENT-SPEC.md), [Package Install Trust Spec](/mnt/s/Development/GuardianAgent/docs/specs/PACKAGE-INSTALL-TRUST-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
@@ -11,7 +11,7 @@ Close the gap between the surface an operator reviews and the code GuardianAgent
 
 The target state is:
 
-1. every external executable/package resolution path is either pinned, locally materialized, or explicitly fingerprint-reviewed before launch
+1. every Guardian-owned external executable/package resolution path is either pinned to an exact reviewed version, locally materialized, or explicitly fingerprint-reviewed before launch
 2. assistant-launched subprocesses inherit a minimal environment by default instead of the parent shell environment
 3. approval is tied to the exact execution identity, not only to a server/tool name
 4. package-install review captures materially more than the current top-level artifact set
@@ -23,10 +23,29 @@ The target state is:
 - **Fix the boundary that owns the risk.** Use shared subprocess environment policy, MCP admission, package-install trust, and Assistant Security rather than one-off call-site patches.
 - **Separate operator-manual terminals from assistant-managed execution.** Guardian should not quietly widen assistant subprocess authority just because both surfaces currently use PTYs.
 - **Prefer fail-closed over launcher magic.** If a trusted runtime surface depends on `npx`, `npm exec`, or similar dynamic launchers, either replace it with a pinned local path or force an explicit reviewed setup step.
+- **Prefer exact pins for Guardian-owned runtime and SDK dependencies.** Lockfiles are necessary but not sufficient when repo manifests or generated package artifacts can drift independently.
 - **Bind trust to execution identity.** Approval for “the Playwright MCP server” or “this MCP config” is weaker than approval for a resolved executable, arguments, version, and env contract.
 - **Keep visibility aligned with enforcement.** Every new control in this plan must emit state that Assistant Security and operator surfaces can actually observe.
 - **Keep one source of truth for shipped dependencies.** Root manifests and lockfiles define what Guardian ships; staged packaging manifests are generated artifacts and must either be regenerated from source or removed from version control.
 - **Do not regress existing architecture invariants.** Intent routing stays in the `IntentGateway`, tool execution stays in `ToolExecutor`, and new behavior should extend shared runtime/state models instead of forking per channel.
+
+## Current Approved Scope
+
+The first implementation pass is intentionally limited to low-risk dependency, SDK, and packaging-governance work. That means:
+
+1. root-manifest and lockfile source-of-truth cleanup
+2. exact version pinning for Guardian-owned runtime/tooling dependencies and SDKs where semver ranges or generated artifacts can silently drift
+3. staged Windows packaging artifact regeneration and validation
+4. documentation and release-path updates needed to enforce that contract
+
+The following harder runtime-behavior changes remain planned but are explicitly deferred until after this pass:
+
+- shared minimal-environment policy
+- dynamic launcher removal from trusted startup paths
+- fingerprinted MCP review and drift invalidation
+- deeper package-install trust/runtime isolation changes
+- Assistant Security runtime posture wiring tied to those changes
+- coding backend trust-boundary hardening
 
 ## Current Baseline
 
@@ -203,6 +222,7 @@ Make dependency truth explicit and prevent release packaging artifacts from sile
 ### Deliver
 
 - Codify repo root `package.json` and `package-lock.json` as the source of truth for shipped Node dependencies and SDK versions
+- Pin exact versions in the authoritative repo manifests for Guardian-owned runtime/tooling dependencies and SDKs where floating semver ranges would otherwise allow silent drift across installs or packaging runs
 - Treat `build/windows/app/package.json` and `build/windows/app/package-lock.json` as generated packaging artifacts rather than independent dependency definitions
 - Choose and implement one supported model for staged Windows manifests:
   - remove them from version control entirely and regenerate on demand
@@ -226,6 +246,7 @@ Make dependency truth explicit and prevent release packaging artifacts from sile
 ### Exit criteria
 
 - root manifests are the only authoritative source for shipped Node dependency and SDK versions
+- Guardian-owned runtime/tooling dependencies and SDKs covered by this pass are pinned to exact reviewed versions in the authoritative manifests
 - staged Windows app manifests cannot remain stale after a supported packaging/build flow
 - package/release validation fails closed on unexpected staged-manifest drift
 - this uplift does not blur drift cleanup with opportunistic third-party upgrade churn
@@ -299,22 +320,29 @@ Treat external coding backends as an explicit trust boundary once enabled, not a
 
 ## Recommended Execution Order
 
+### Approved now
+
+1. **Phase 5: Dependency, SDK, and Packaging Drift Governance**
+   This is the current implementation pass and includes manifest source-of-truth cleanup, exact version pinning, and staged packaging drift validation.
+
+### Deferred until after the dependency/SDK pass
+
 1. **Phase 1: Shared Minimal-Environment Policy**
-   This removes the highest-value credential inheritance exposure across multiple surfaces.
+   Deferred because it changes subprocess behavior and credential inheritance semantics.
 2. **Phase 2: Remove Dynamic Launcher Behavior**
-   This reduces hidden execution drift and makes later fingerprinting cleaner.
+   Deferred because it can change startup behavior for currently working setups.
 3. **Phase 3: Fingerprinted MCP Review**
-   This closes the approval-vs-execution identity gap for third-party servers.
-4. **Phase 5: Dependency, SDK, and Packaging Drift Governance**
-   This closes the “reviewed repo vs shipped artifact” gap and prevents stale package state from surviving into releases.
+   Deferred because it changes approval and startup invalidation behavior.
+4. **Phase 4: Package Install Trust v2**
+   Deferred because it deepens managed install execution and review behavior.
 5. **Phase 6: Assistant Security Signal Wiring**
-   This should land early enough that remaining phases are observable while they are implemented.
-6. **Phase 4: Package Install Trust v2**
-   This is higher implementation cost and benefits from the new env policy first.
-7. **Phase 7: External Coding Backend Boundary Hardening**
-   This can partly start in parallel with Phase 1 but should finalize after the env policy is stable.
+   Deferred until the related runtime hardening surfaces are implemented.
+6. **Phase 7: External Coding Backend Boundary Hardening**
+   Deferred because it changes backend execution boundaries and operator expectations.
 
 ## Verification Plan
+
+For the current dependency/SDK governance pass, the required verification is limited to the packaging and manifest-drift cases in this section. The remaining runtime-behavior cases stay attached to the deferred phases above.
 
 ### Unit and focused tests
 
@@ -337,7 +365,8 @@ Treat external coding backends as an explicit trust boundary once enabled, not a
 6. startup scripts must no longer download Chromium implicitly
 7. staged Windows packaging manifests must either be absent from version control or match the root source-of-truth manifests after a supported packaging run
 8. packaging validation must fail on unexpected staged-manifest drift
-9. Assistant Security must report the live posture for these surfaces correctly
+9. Guardian-owned runtime/tooling dependencies and SDKs covered by this pass must be pinned to exact reviewed versions in the authoritative manifests
+10. Assistant Security must report the live posture for these surfaces correctly
 
 ### Integration harnesses
 
@@ -347,12 +376,17 @@ Treat external coding backends as an explicit trust boundary once enabled, not a
 
 ### Manual validation
 
+- run the supported Windows packaging flow and verify staged app manifests are regenerated from the root source of truth or absent from version control, with validation failing on unexpected drift
+
+### Deferred manual validation for later phases
+
 - enable a sample third-party MCP server and verify review/fingerprint invalidation behavior
 - enable a coding backend with synthetic credentials in the parent shell and verify the backend cannot read them unless explicitly allowed
 - run a managed package install with synthetic credentials in the parent shell and verify they do not reach the child install process
-- run the supported Windows packaging flow and verify staged app manifests are regenerated from the root source of truth or absent from version control, with validation failing on unexpected drift
 
 ## Documentation and Spec Updates Required In The Same Change
+
+For the current dependency/SDK governance pass, update only the docs that define manifest source-of-truth and packaging behavior. The broader spec list below applies when the deferred runtime hardening phases are implemented.
 
 - `SECURITY.md`
 - `docs/architecture/OVERVIEW.md`
@@ -368,16 +402,16 @@ Treat external coding backends as an explicit trust boundary once enabled, not a
 
 - do not widen package-install support to requirements files, editable installs, direct URLs, or local paths as part of this uplift
 - do not weaken MCP startup restrictions in order to preserve old `npx` flows
+- do not implement subprocess-env, MCP approval, browser startup, or coding-backend runtime-behavior hardening in this first dependency/SDK pass
 - do not solve general ecosystem-wide provenance for every possible external binary in one pass if the runtime does not yet own that boundary
 
 ## Immediate Implementation Slice
 
 If this work is split into a first PR, the highest-yield slice is:
 
-1. shared minimal-env policy for assistant-managed PTY launches, coding backends, and managed package installs
-2. removal of managed browser `npx` fallback
-3. removal of automatic `npx playwright install chromium` from startup scripts
-4. define root-manifest source-of-truth handling for staged Windows packaging artifacts so `build/windows/app/package*.json` cannot remain stale
-5. wiring real `usesDynamicPlaywrightPackage` posture state or removing the stale finding path if it is no longer needed
+1. define root-manifest source-of-truth handling for staged Windows packaging artifacts so `build/windows/app/package*.json` cannot remain stale
+2. pin Guardian-owned runtime/tooling dependencies and SDKs covered by this pass to exact reviewed versions in the authoritative manifests
+3. add packaging validation so staged app manifests cannot silently drift from the root source of truth
+4. update packaging/security/deployment docs to match the enforced dependency contract
 
-That slice materially reduces the credential-exposure, hidden-execution, and packaged-artifact drift risk without waiting for full MCP fingerprint review or closure-level package inspection.
+That slice materially reduces packaged-artifact and dependency-drift risk without changing the current runtime behavior of tool execution surfaces.

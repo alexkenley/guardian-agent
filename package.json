@@ -32,6 +32,8 @@
     "release:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-release.ps1",
     "start": "node dist/index.js",
     "vendor:monaco": "node scripts/vendor-monaco.mjs",
+    "validate:dependency-contract": "node scripts/validate-dependency-contract.mjs",
+    "validate:windows-package": "node scripts/validate-dependency-contract.mjs --stage-root build/windows/app",
     "postinstall": "node scripts/vendor-monaco.mjs",
     "prepublishOnly": "npm test && npm run build"
   },
@@ -60,43 +62,48 @@
     "url": "https://github.com/alexkenley/guardian-agent/issues"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^25.3.0",
-    "monaco-editor": "^0.55.1",
-    "tsx": "^4.21.0",
-    "vitest": "^4.0.18"
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "25.3.0",
+    "monaco-editor": "0.55.1",
+    "tsx": "4.21.0",
+    "vitest": "4.0.18"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
-    "@aws-sdk/client-cloudwatch": "^3.1006.0",
-    "@aws-sdk/client-cloudwatch-logs": "^3.1006.0",
-    "@aws-sdk/client-cost-explorer": "^3.1006.0",
-    "@aws-sdk/client-ec2": "^3.1006.0",
-    "@aws-sdk/client-iam": "^3.1006.0",
-    "@aws-sdk/client-lambda": "^3.1006.0",
-    "@aws-sdk/client-rds": "^3.1006.0",
-    "@aws-sdk/client-route-53": "^3.1006.0",
-    "@aws-sdk/client-s3": "^3.1006.0",
-    "@aws-sdk/client-sts": "^3.1006.0",
-    "@daytona/sdk": "^0.164.0",
-    "@playwright/mcp": "^0.0.68",
-    "@vercel/sandbox": "^1.9.3",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "ajv": "^8.18.0",
-    "croner": "^10.0.1",
-    "grammy": "^1.40.0",
-    "js-yaml": "^4.1.1",
-    "node-pty": "^1.1.0",
+    "@anthropic-ai/sdk": "0.78.0",
+    "@aws-sdk/client-cloudwatch": "3.1006.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1006.0",
+    "@aws-sdk/client-cost-explorer": "3.1006.0",
+    "@aws-sdk/client-ec2": "3.1006.0",
+    "@aws-sdk/client-iam": "3.1006.0",
+    "@aws-sdk/client-lambda": "3.1006.0",
+    "@aws-sdk/client-rds": "3.1006.0",
+    "@aws-sdk/client-route-53": "3.1006.0",
+    "@aws-sdk/client-s3": "3.1029.0",
+    "@aws-sdk/client-sts": "3.1006.0",
+    "@daytona/sdk": "0.164.0",
+    "@playwright/mcp": "0.0.68",
+    "@vercel/sandbox": "1.9.3",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "ajv": "8.18.0",
+    "croner": "10.0.1",
+    "grammy": "1.40.0",
+    "js-yaml": "4.1.1",
+    "node-pty": "1.1.0",
     "ollama": "0.6.3",
-    "openai": "^6.24.0",
-    "pino": "^10.3.1",
-    "typescript": "^5.9.3"
+    "openai": "6.24.0",
+    "pino": "10.3.1",
+    "typescript": "5.9.3"
   },
   "optionalDependencies": {
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "2.4.5"
   },
   "overrides": {
+    "dompurify": "3.4.0",
+    "follow-redirects": "1.16.0",
+    "picomatch": "4.0.4",
+    "protobufjs": "7.5.5",
+    "vite": "7.3.2",
     "@appium/logger": {
       "lodash": "4.17.23"
     }

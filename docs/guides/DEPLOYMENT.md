@@ -34,6 +34,8 @@ Run these from the repo root with `npm run <script>`.
 | `helper:windows` | PowerShell `build-windows-helper.ps1` | Build Windows sandbox helper (Rust) |
 | `installer:windows` | PowerShell `build-windows-installer.ps1` | Build Windows Inno Setup installer |
 | `release:windows` | PowerShell `build-windows-release.ps1` | Full Windows release (package + installer) |
+| `validate:dependency-contract` | `node scripts/validate-dependency-contract.mjs` | Verify exact pins and root manifest/lockfile alignment |
+| `validate:windows-package` | `node scripts/validate-dependency-contract.mjs --stage-root build/windows/app` | Verify generated staged manifests still match the root manifests |
 
 ---
 
@@ -155,6 +157,15 @@ npm publish --dry-run    # preview only
 
 All Windows scripts require PowerShell and must be run on Windows.
 
+### Dependency Contract
+
+- `package.json` and `package-lock.json` at the repo root are the only authoritative source for shipped Node dependencies and SDK versions.
+- Guardian-owned direct runtime/tooling dependencies are pinned to exact reviewed versions in `package.json`.
+- Transitive security remediations are captured as exact-version root `overrides`, rather than ad hoc staging-only changes.
+- `build/windows/app/package.json` and `build/windows/app/package-lock.json` are generated packaging copies, not an independent manifest set.
+- `build-windows-package.ps1` validates the root dependency contract before packaging and validates the staged manifests again after they are generated.
+- You can run `npm run validate:dependency-contract` manually at any time, and `npm run validate:windows-package` after staging a Windows app build.
+
 ### Portable App
 
 ```powershell
@@ -198,6 +209,8 @@ guardianagent.cmd
 ```
 
 Same as portable but stops before zipping. Output at `build/windows/app/`.
+
+The staged `package.json` and `package-lock.json` are copied from the repo root during the build and must match the root manifests exactly.
 
 **Flags:**
 - `-OutputRoot <path>` — output directory (default: `build/windows`)
@@ -271,8 +284,8 @@ build/
       npm.cmd                     # Bundled when available from local Node install
       npx.cmd                     # Bundled when available from local Node install
       corepack.cmd                # Bundled when available from local Node install
-      package.json
-      package-lock.json
+      package.json                # Generated copy of the repo-root manifest
+      package-lock.json           # Generated copy of the repo-root lockfile
     helper/
       bin/
         guardian-sandbox-win.exe  # Standalone helper build

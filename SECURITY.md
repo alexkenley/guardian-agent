@@ -91,6 +91,16 @@ The shipped security posture is intentionally restrictive on the paths that wide
 | `assistant.tools.mcp.servers[].networkAccess` | `false` unless the operator explicitly sets it | third-party MCP subprocesses do not get broad outbound egress by default |
 | `assistant.tools.mcp.servers[].inheritEnv` | `false` unless the operator explicitly sets it | third-party MCP subprocesses start from a minimal inherited environment instead of the full parent env |
 
+## Dependency And Packaging Source Of Truth
+
+GuardianAgent now treats its shipped Node dependency contract as a reviewed artifact instead of a floating semver surface.
+
+- The repo-root `package.json` and `package-lock.json` are the authoritative source for shipped GuardianAgent Node dependencies and SDK versions.
+- Guardian-owned direct runtime/tooling dependencies and SDKs are pinned to exact reviewed versions in the root manifest instead of floating semver ranges.
+- Security remediations for transitive Node dependencies are expressed through exact-version root `overrides`, so the reviewed dependency contract stays explicit.
+- The Windows staged app manifests under `build/windows/app/` are generated packaging artifacts copied from the root manifests during packaging; they are not an independent source of truth.
+- Windows packaging validates both the root dependency contract and the generated staged manifests before release artifacts are produced.
+
 ## Managed Package Install Trust
 
 GuardianAgent includes a host-level package supply-chain control for public package repositories. This capability is separate from coding-workspace repo trust. It reduces the risk of installing hijacked or malicious packages by forcing supported install commands through a managed pre-install review path.
