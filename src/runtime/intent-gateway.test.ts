@@ -2885,6 +2885,33 @@ describe('IntentGateway', () => {
     expect(result.decision.summary).toContain('inspect or work inside the repo');
   });
 
+  it('does not ask for Guardian-vs-website clarification when the request explicitly names GitHub', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Open the GitHub page for this repository.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'browser_task',
+          confidence: 'high',
+          operation: 'navigate',
+          summary: 'Open the GitHub page for the repository.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('browser_task');
+    expect(result.decision.operation).toBe('navigate');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('intent_route');
+  });
+
   it('resolves intent-route clarification answers back onto the original request', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -3122,6 +3149,40 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('automation_control');
     expect(result.decision.turnRelation).toBe('clarification_answer');
     expect(result.decision.entities.automationName).toBe('WHM Social Check Disk Quota');
+  });
+
+  it('repairs automation-name clarification answers from recent history when pending clarification metadata is missing', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'The one you just created',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Disable the weekly review automation.' },
+          { role: 'assistant', content: 'Tell me which automation you want to inspect, run, rename, enable, disable, or edit.' },
+        ],
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_control',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Select the automation to update or control.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('toggle');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.entities.automationName).toBe('The one you just created');
+    expect(result.decision.entities.enabled).toBe(false);
+    expect(result.decision.resolvedContent).toBe('Disable the weekly review automation.');
   });
 
   it('round-trips pre-routed gateway metadata for downstream reuse', () => {

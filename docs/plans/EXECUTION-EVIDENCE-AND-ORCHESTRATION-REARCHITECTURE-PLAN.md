@@ -4,6 +4,7 @@
 - Replace Guardian's current delegated-worker acceptance model with an execution-centric architecture: typed task contracts, typed evidence receipts, explicit verifier decisions, and one shared event stream projected into trace, timeline, approvals, and channel progress.
 - Treat this as the new canonical plan. Supersede `docs/plans/INTENT-GATEWAY-EXECUTION-CONTINUATION-REMEDIATION-PLAN.md`, the unfinished delegated-handoff parts of `docs/design/EXECUTION-STATE-DESIGN.md`, and the delegated-progress portions of `docs/plans/WEB-CLI-LIVE-PROGRESS-IMPLEMENTATION-PLAN.md`.
 - No backward compatibility. Use a flag-day internal cutover once the new stack is green under harnesses, then delete the old heuristic stack rather than dual-running it.
+- **Update (April 2026):** Substantial progress has been made on the Verifier, Evidence Receipts, and Intent Gateway context recovery. See `docs/plans/REMEDIATION-INTENT-AND-VERIFIER.md` for a summary of exact-file-reference enforcement, mutation-evidence filtering, and history-context amnesia fixes that have been completed.
 
 ## Design Basis
 - Adopt run-item and resumable-state patterns similar to OpenAI Agents `new_items`, `interruptions`, and `to_state()` from [Results](https://openai.github.io/openai-agents-python/results/) and trace/span observability from [Tracing](https://openai.github.io/openai-agents-python/tracing/).

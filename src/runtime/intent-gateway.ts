@@ -10,6 +10,8 @@ import {
 import { classifyIntentGatewayPass } from './intent/route-classifier.js';
 import {
   extractExplicitAutomationName,
+  inferAutomationControlOperation,
+  inferAutomationEnabledState,
 } from './intent/entity-resolvers/automation.js';
 import {
   normalizeIntentGatewayDecision,
@@ -124,6 +126,7 @@ export class IntentGateway {
         };
     workingRecord = await confirmIntentGatewayDecisionIfNeeded(input, workingRecord, chat);
     decision = workingRecord.decision;
+    decision = repairAutomationClarificationFromRecentHistory(input, decision);
     if (needsAutomationNameRepair(decision)) {
       const repairedName = await repairAutomationName(input, decision, chat);
       if (repairedName) {
@@ -350,6 +353,121 @@ function formatCodingBackendLabel(value: string | undefined): string {
     default:
       return value?.trim() ?? '';
   }
+}
+
+const AUTOMATION_NAME_CLARIFICATION_PROMPT_PATTERN = /tell me which automation you want to inspect, run, rename, enable, disable, or edit/i;
+const DEICTIC_AUTOMATION_REFERENCE_PATTERN = /\b(?:that|it|the one|just created|new one|newly created|latest|most recent)\b/i;
+const AUTOMATION_CONTROL_VERB_PATTERN = /\b(?:disable|enable|run|inspect|show|read|delete|remove|rename|edit|update|change|modify|clone|list)\b/i;
+
+function repairAutomationClarificationFromRecentHistory(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  const isAutomationControlRoute = decision.route === 'automation_control'
+    || (decision.route === 'ui_control' && decision.entities.uiSurface === 'automations');
+  if (!isAutomationControlRoute) {
+    return decision;
+  }
+  if (decision.turnRelation === 'clarification_answer' || decision.turnRelation === 'correction') {
+    return decision;
+  }
+
+  const clarificationContext = readAutomationNameClarificationContext(input.recentHistory);
+  if (!clarificationContext) {
+    return decision;
+  }
+
+  const repairedOperation = decision.operation === 'unknown'
+    ? inferAutomationControlOperation(clarificationContext.originalUserRequest, decision.operation)
+    : decision.operation;
+  if (repairedOperation === 'unknown') {
+    return decision;
+  }
+
+  const repairedAutomationName = decision.entities.automationName?.trim()
+    || extractExplicitAutomationName(input.content)
+    || readAutomationClarificationAnswerName(input.content);
+  const enabled = typeof decision.entities.enabled === 'boolean'
+    ? decision.entities.enabled
+    : inferAutomationEnabledState(clarificationContext.originalUserRequest);
+
+  return {
+    ...decision,
+    operation: repairedOperation,
+    turnRelation: 'clarification_answer',
+    resolution: 'ready',
+    missingFields: decision.missingFields.filter((field) => field !== 'automation_name'),
+    entities: {
+      ...decision.entities,
+      ...(repairedAutomationName ? { automationName: repairedAutomationName } : {}),
+      ...(typeof enabled === 'boolean' ? { enabled } : {}),
+    },
+    ...(decision.resolvedContent
+      ? {}
+      : { resolvedContent: clarificationContext.originalUserRequest }),
+    provenance: {
+      ...(decision.provenance ?? {}),
+      ...(decision.resolvedContent
+        ? {}
+        : { resolvedContent: decision.provenance?.resolvedContent ?? 'resolver.clarification' }),
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        ...(repairedAutomationName && !decision.provenance?.entities?.automationName
+          ? { automationName: 'repair.automation_name' }
+          : {}),
+        ...(typeof enabled === 'boolean' && !decision.provenance?.entities?.enabled
+          ? { enabled: 'repair.automation_name' }
+          : {}),
+      },
+    },
+  };
+}
+
+function readAutomationNameClarificationContext(
+  recentHistory: IntentGatewayInput['recentHistory'],
+): { originalUserRequest: string } | null {
+  if (!Array.isArray(recentHistory) || recentHistory.length === 0) {
+    return null;
+  }
+  for (let index = recentHistory.length - 1; index >= 0; index -= 1) {
+    const entry = recentHistory[index];
+    if (!entry || entry.role !== 'assistant') {
+      continue;
+    }
+    if (!AUTOMATION_NAME_CLARIFICATION_PROMPT_PATTERN.test(entry.content)) {
+      continue;
+    }
+    for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+      const priorEntry = recentHistory[priorIndex];
+      if (priorEntry?.role === 'user' && priorEntry.content.trim()) {
+        return {
+          originalUserRequest: priorEntry.content.trim(),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function readAutomationClarificationAnswerName(content: string | undefined): string | undefined {
+  const raw = content?.trim() ?? '';
+  if (!raw) {
+    return undefined;
+  }
+  const cleaned = raw
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/[.?!]+$/g, '')
+    .trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  if (DEICTIC_AUTOMATION_REFERENCE_PATTERN.test(cleaned)) {
+    return cleaned;
+  }
+  if (AUTOMATION_CONTROL_VERB_PATTERN.test(cleaned)) {
+    return undefined;
+  }
+  return cleaned.split(/\s+/).length <= 12 ? cleaned : undefined;
 }
 
 export function toIntentGatewayClientMetadata(

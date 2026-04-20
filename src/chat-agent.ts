@@ -1132,7 +1132,19 @@ function extractSecondBrainTextBody(text: string): string {
   if (sayingMatch?.[2]?.trim()) {
     return sayingMatch[2].trim();
   }
-  return extractQuotedText(text);
+  const quoted = extractQuotedText(text);
+  if (quoted) {
+    return quoted;
+  }
+
+  // Fallback for unquoted natural language bodies
+  // Matches "reminding me to XYZ", "saying XYZ", "about XYZ", "that XYZ"
+  const unquotedMatch = text.match(/\b(?:reminding\s+me(?:\s+to|\s+that)?|remind\s+me(?:\s+to|\s+that)?|saying(?:\s+that)?|that\s+says|about|to\s+note\s+that|that)\s+([\s\S]+?)(?:$|\n)/i);
+  if (unquotedMatch?.[1]?.trim()) {
+    return unquotedMatch[1].trim().replace(/[.!?]+$/, '');
+  }
+
+  return '';
 }
 
 function extractExplicitNamedSecondBrainTitle(text: string): string {

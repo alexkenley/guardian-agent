@@ -400,12 +400,12 @@ function disposeMonacoEditors() {
     monacoStructureSelectionEditor = null;
   }
   if (monacoDiffInstance) {
-    // Dispose the original model (modified model is managed by monacoModels)
     const diffModel = monacoDiffInstance.getModel();
+    monacoDiffInstance.setModel(null);
+    monacoDiffInstance.dispose();
     if (diffModel?.original && !diffModel.original.isDisposed()) {
       diffModel.original.dispose();
     }
-    monacoDiffInstance.dispose();
     monacoDiffInstance = null;
     monacoStructureSelectionDecorations = null;
     monacoStructureSelectionEditor = null;
@@ -957,6 +957,74 @@ function getActiveMonacoEditor() {
   return monacoDiffInstance?.getModifiedEditor?.() || monacoEditorInstance;
 }
 
+function markActiveMonacoTabDirty(editor) {
+  const session = getActiveSession();
+  if (!session) return;
+  const tab = getActiveTab(session);
+  if (!tab) return;
+  if (tab.filePath && monacoProgrammaticSyncPaths.has(tab.filePath)) {
+    monacoProgrammaticSyncPaths.delete(tab.filePath);
+    tab.content = null;
+    tab.dirty = false;
+    removeDirtyEditorIndicator();
+    return;
+  }
+  tab.content = editor.getValue();
+  tab.dirty = true;
+  scheduleStructurePreviewRefresh(session, tab.content);
+  const dirtyDot = currentContainer?.querySelector('.code-editor__dirty');
+  if (!dirtyDot) {
+    const h3 = currentContainer?.querySelector('.code-editor .panel__header h3');
+    if (h3 && !h3.querySelector('.code-editor__dirty')) {
+      const span = document.createElement('span');
+      span.className = 'code-editor__dirty';
+      span.title = 'Unsaved changes';
+      span.innerHTML = '&bull;';
+      h3.appendChild(span);
+    }
+  }
+  const actions = currentContainer?.querySelector('.code-editor .panel__actions');
+  if (actions && !actions.querySelector('[data-code-save-file]')) {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-sm';
+    btn.type = 'button';
+    btn.dataset.codeSaveFile = '';
+    btn.title = 'Save changes (Ctrl+S)';
+    btn.textContent = 'Save';
+    btn.addEventListener('click', () => saveEditorFile());
+    actions.prepend(btn);
+  }
+}
+
+function wireMonacoEditingSurface(editor) {
+  const monaco = window.monaco;
+  if (!monaco || !editor || editor.__guardianEditorWired) return;
+  editor.__guardianEditorWired = true;
+  editor.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+    () => saveEditorFile()
+  );
+  editor.addAction({
+    id: 'guardian.inspect-current-symbol',
+    label: 'Inspect Current Symbol',
+    contextMenuGroupId: 'navigation',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyI],
+    run: () => {
+      const session = getActiveSession();
+      const structureView = session?.structureView;
+      if (!session || !structureView?.supported) return null;
+      const position = editor.getPosition();
+      const symbol = findStructureSymbolByLine(structureView, position?.lineNumber || 0);
+      if (!symbol) return null;
+      focusStructureSymbol(session, symbol.id, { reveal: false, switchTab: true });
+      return null;
+    },
+  });
+  editor.onDidChangeModelContent(() => {
+    markActiveMonacoTabDirty(editor);
+  });
+}
+
 function getEditorSearchState(sessionOrId, { create = true } = {}) {
   const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId?.id;
   if (!sessionId) return null;
@@ -1381,10 +1449,11 @@ function applyMonacoStructureSelection(session = getActiveSession()) {
  * Save current editor view state (cursor, scroll, selection) for the active tab.
  */
 function saveMonacoViewState(filePath) {
-  if (!filePath || !monacoEditorInstance) return;
+  const activeEditor = getActiveMonacoEditor();
+  if (!filePath || !activeEditor) return;
   const entry = monacoModels.get(filePath);
   if (entry) {
-    entry.viewState = monacoEditorInstance.saveViewState();
+    entry.viewState = activeEditor.saveViewState();
   }
 }
 
@@ -1445,6 +1514,17 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent, op
       setModelValueFromDisk(filePath, modifiedModel, content || '');
     }
     monacoDiffInstance.setModel({ original: originalModel, modified: modifiedModel });
+    const modifiedEditor = monacoDiffInstance.getModifiedEditor?.();
+    wireMonacoEditingSurface(modifiedEditor);
+    const entry = monacoModels.get(filePath);
+    if (entry?.viewState && typeof modifiedEditor?.restoreViewState === 'function') {
+      modifiedEditor.restoreViewState(entry.viewState);
+    }
+    triggerMonacoStructureRefresh();
+    applyMonacoStructureSelection(getActiveSession());
+    if (options.shouldFocus === true) {
+      modifiedEditor?.focus?.();
+    }
     return;
   }
 
@@ -1492,74 +1572,11 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent, op
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
       padding: { top: 8 },
     });
-
-    // Ctrl+S / Cmd+S to save
-    monacoEditorInstance.addCommand(
-      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-      () => saveEditorFile()
-    );
-
-    monacoEditorInstance.addAction({
-      id: 'guardian.inspect-current-symbol',
-      label: 'Inspect Current Symbol',
-      contextMenuGroupId: 'navigation',
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyI],
-      run: () => {
-        const session = getActiveSession();
-        const structureView = session?.structureView;
-        if (!session || !structureView?.supported) return null;
-        const position = monacoEditorInstance.getPosition();
-        const symbol = findStructureSymbolByLine(structureView, position?.lineNumber || 0);
-        if (!symbol) return null;
-        focusStructureSymbol(session, symbol.id, { reveal: false, switchTab: true });
-        return null;
-      },
-    });
-
-    // Track dirty state
-    monacoEditorInstance.onDidChangeModelContent(() => {
-      const session = getActiveSession();
-      if (!session) return;
-      const tab = getActiveTab(session);
-      if (!tab) return;
-      if (tab.filePath && monacoProgrammaticSyncPaths.has(tab.filePath)) {
-        monacoProgrammaticSyncPaths.delete(tab.filePath);
-        tab.content = null;
-        tab.dirty = false;
-        removeDirtyEditorIndicator();
-        return;
-      }
-      tab.content = monacoEditorInstance.getValue();
-      tab.dirty = true;
-      scheduleStructurePreviewRefresh(session, tab.content);
-      // Update dirty indicator in header without full rerender
-      const dirtyDot = currentContainer?.querySelector('.code-editor__dirty');
-      if (!dirtyDot) {
-        const h3 = currentContainer?.querySelector('.code-editor .panel__header h3');
-        if (h3 && !h3.querySelector('.code-editor__dirty')) {
-          const span = document.createElement('span');
-          span.className = 'code-editor__dirty';
-          span.title = 'Unsaved changes';
-          span.innerHTML = '&bull;';
-          h3.appendChild(span);
-        }
-      }
-      // Show save button if not visible
-      const actions = currentContainer?.querySelector('.code-editor .panel__actions');
-      if (actions && !actions.querySelector('[data-code-save-file]')) {
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-primary btn-sm';
-        btn.type = 'button';
-        btn.dataset.codeSaveFile = '';
-        btn.title = 'Save changes (Ctrl+S)';
-        btn.textContent = 'Save';
-        btn.addEventListener('click', () => saveEditorFile());
-        actions.prepend(btn);
-      }
-    });
   } else {
     monacoEditorInstance.setModel(model);
   }
+
+  wireMonacoEditingSurface(monacoEditorInstance);
 
   // Restore view state if available
   const entry = monacoModels.get(filePath);
@@ -3531,6 +3548,7 @@ function ensureSessionRefreshLoop() {
     if (!activeSession || !currentContainer) return;
     try {
       const previousSignature = getSessionRenderSignature(activeSession);
+      const previousActivitySignature = getSessionActivityRenderSignature(activeSession);
       const previousTreeSignature = getVisibleTreeSignature(activeSession);
       const session = await refreshSessionSnapshot(activeSession.id);
       if (!session) return;
@@ -3541,7 +3559,15 @@ function ensureSessionRefreshLoop() {
       if (codeState.activePanel === 'sandboxes') {
         await refreshSessionSandboxes(session, { rerender: false });
       }
-      if (getSessionRenderSignature(session) !== previousSignature || getVisibleTreeSignature(session) !== previousTreeSignature) {
+      const activityChanged = getSessionActivityRenderSignature(session) !== previousActivitySignature;
+      const requiresFullRerender = (
+        getSessionRenderSignature(session) !== previousSignature
+        || getVisibleTreeSignature(session) !== previousTreeSignature
+        || (activityChanged && codeState.activePanel === 'sessions')
+      );
+      if (requiresFullRerender) {
+        rerenderFromState();
+      } else if (activityChanged && codeState.activePanel === 'activity' && !refreshVisibleAssistantPanel(session)) {
         rerenderFromState();
       }
     } catch {
@@ -3819,6 +3845,24 @@ function getSessionRenderSignature(session) {
     showDiff: !!session.showDiff,
     status: session.status || '',
     expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
+    workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+    workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
+    workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
+    workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
+    terminalCollapsed: !!session.terminalCollapsed,
+    terminalTabs: Array.isArray(session.terminalTabs)
+      ? session.terminalTabs.map((tab) => ({
+        id: tab.id,
+        name: tab.name,
+        shell: normalizeTerminalShell(tab.shell),
+      }))
+      : [],
+  });
+}
+
+function getSessionActivityRenderSignature(session) {
+  if (!session) return '';
+  return JSON.stringify({
     pendingApprovals: Array.isArray(session.pendingApprovals)
       ? session.pendingApprovals.map((approval) => ({
         id: approval.id,
@@ -3851,6 +3895,8 @@ function getSessionRenderSignature(session) {
         timestamp: message.timestamp || 0,
       }))
       : [],
+    verification: normalizeVerificationEntries(session.verification, session.verification),
+    timelineRuns: normalizeTimelineRuns(session.timelineRuns),
     workflow: session.workflow
       ? {
           type: session.workflow.type || '',
@@ -3872,18 +3918,6 @@ function getSessionRenderSignature(session) {
     focusSummary: session.focusSummary || '',
     planSummary: session.planSummary || '',
     compactedSummary: session.compactedSummary || '',
-    workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
-    workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
-    workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
-    workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
-    terminalCollapsed: !!session.terminalCollapsed,
-    terminalTabs: Array.isArray(session.terminalTabs)
-      ? session.terminalTabs.map((tab) => ({
-        id: tab.id,
-        name: tab.name,
-        shell: normalizeTerminalShell(tab.shell),
-      }))
-      : [],
   });
 }
 
@@ -6301,8 +6335,9 @@ function closeTab(session, index) {
 
 function syncActiveEditorStateFromMonaco(session = getActiveSession()) {
   const currentTab = getActiveTab(session);
-  if (!currentTab || !monacoEditorInstance) return;
-  const value = monacoEditorInstance.getValue();
+  const activeEditor = getActiveMonacoEditor();
+  if (!currentTab || !activeEditor) return;
+  const value = activeEditor.getValue();
   if (value !== (cachedFileView.source || '')) {
     currentTab.content = value;
     currentTab.dirty = true;

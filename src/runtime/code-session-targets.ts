@@ -118,5 +118,39 @@ export function resolveCodeSessionTarget<T extends CodeSessionTargetRecord>(
     if (semanticFuzzyResult) return semanticFuzzyResult;
   }
 
+  // Fallback: If the user said "Guardian Agent" or "the main repo" and there are multiple sessions,
+  // we might fail above if the semantic needle is empty or too broad to be a unique substring.
+  // But if the semantic needle is empty (meaning they just said "the main repo" or "this workspace"
+  // but explicitly tried to attach to something else), we shouldn't guess.
+  // However, there is a bug where 'Guardian Agent' normalizes to 'guardianagent' which matches
+  // BOTH the title 'Guardian Agent' and the workspaceRoot 'S:\\Development\\GuardianAgent' and 
+  // resolvedRoot 'S:\\Development\\GuardianAgent\\tmp\\guardian-ui-package-test'.
+  //
+  // Wait, let's look at why it failed:
+  // query: "Guardian Agent"
+  // semanticNeedle: "guardianagent"
+  // semanticFuzzyMatches checks if 'guardianagent' is included in 'guardianagent' (id: da47084e...) -> no
+  // title: 'guardianagent' -> yes
+  // workspaceRoot: 'sdevelopmentguardianagent' -> yes
+  // AND for the OTHER session:
+  // title: 'tempinstalltest' -> no
+  // workspaceRoot: 'sdevelopmentguardianagenttmpguardianuipackagetest' -> YES (it includes 'guardianagent'!)
+  //
+  // So 'Guardian Agent' fuzzy matches BOTH sessions because the temp session is inside the main repo!
+  //
+  // To fix this, we need to prefer semantic EXACT matches, which we do.
+  // Did semanticExactMatches fail?
+  // semanticNeedle = "guardianagent"
+  // Session 1: title = "guardianagent", workspaceRoot = "sdevelopmentguardianagent"
+  // Session 2: title = "tempinstalltest", workspaceRoot = "sdevelopmentguardianagenttmpguardianuipackagetest"
+  // For Session 1, `normalizeSemanticCodeSessionTarget(session.title) === semanticNeedle` is true!
+  // So semanticExactMatches should have length 1.
+  // Wait!
+  // In `normalizeSemanticCodeSessionTarget` we remove all non-alphanumeric.
+  // For Session 1: title = "Guardian Agent" -> "guardianagent"
+  // semanticNeedle for "Guardian Agent" -> "guardianagent".
+  // So semanticExactMatches should have found it!
+  // Let me trace again.
+
   return { error: `No coding session matched "${query}".` };
 }

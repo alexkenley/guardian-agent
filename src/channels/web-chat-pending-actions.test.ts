@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 describe('web chat pending action helpers', () => {
+  it('hydrates the current pending action from the store only during passive chat sync', async () => {
+    const { shouldHydratePendingActionFromStore } = await import('../../web/public/js/chat-pending-actions.js');
+
+    expect(shouldHydratePendingActionFromStore(undefined, { source: 'hydrate' })).toBe(true);
+    expect(shouldHydratePendingActionFromStore(undefined, { source: 'response' })).toBe(false);
+  });
+
+  it('does not hydrate from the store when a response already includes structured pending action metadata', async () => {
+    const { shouldHydratePendingActionFromStore } = await import('../../web/public/js/chat-pending-actions.js');
+
+    expect(shouldHydratePendingActionFromStore({
+      pendingAction: {
+        id: 'pending-clarification-1',
+      },
+    }, { source: 'hydrate' })).toBe(false);
+  });
+
   it('allows non-approval active pending actions to be cleared from chat', async () => {
     const { canClearPendingActionFromChat } = await import('../../web/public/js/chat-pending-actions.js');
 

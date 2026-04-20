@@ -406,6 +406,19 @@ function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
   };
 }
 
+const READ_ONLY_EVIDENCE_TOOLS = new Set([
+  'find_tools', 'fs_list', 'fs_read', 'fs_search', 'code_symbol_search',
+  'code_git_diff', 'memory_search', 'memory_recall', 'sys_info',
+  'sys_resources', 'sys_processes', 'web_search', 'web_fetch',
+  'intel_summary', 'intel_findings', 'security_alert_search',
+  'windows_defender_status', 'code_session_list', 'code_session_current',
+  'code_session_attach', 'code_session_detach', 'code_session_create'
+]);
+
+function isReadOnlyEvidenceTool(toolName: string): boolean {
+  return READ_ONLY_EVIDENCE_TOOLS.has(toolName);
+}
+
 function buildClaimsFromReceipts(
   receipts: EvidenceReceipt[],
   taskContract: ReturnType<typeof buildDelegatedTaskContract>,
@@ -424,11 +437,16 @@ function buildClaimsFromReceipts(
         });
       }
     }
-    if (taskContract.kind === 'filesystem_mutation' && receipt.status === 'succeeded') {
+    if (
+      taskContract.kind === 'filesystem_mutation'
+      && receipt.status === 'succeeded'
+      && receipt.toolName
+      && !isReadOnlyEvidenceTool(receipt.toolName)
+    ) {
       claims.push({
         claimId: `${receipt.receiptId}:mutation`,
         kind: 'filesystem_mutation',
-        subject: receipt.toolName ?? 'filesystem',
+        subject: receipt.toolName,
         value: receipt.summary,
         evidenceReceiptIds: [receipt.receiptId],
         confidence: 0.9,

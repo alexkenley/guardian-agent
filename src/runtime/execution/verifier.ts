@@ -180,7 +180,7 @@ export function verifyDelegatedResult(input: {
         retryable: false,
       };
     case 'filesystem_mutation':
-      if (hasFilesystemMutationEvidence(input.envelope.claims, successfulReceipts.length)) {
+      if (hasFilesystemMutationEvidence(input.envelope.claims, successfulExecutionReceipts.length)) {
         return {
           decision: 'satisfied',
           reasons: ['Delegated worker produced a successful filesystem mutation receipt.'],
@@ -195,7 +195,7 @@ export function verifyDelegatedResult(input: {
         missingEvidenceKinds: ['filesystem_mutation_receipt'],
       };
     case 'security_analysis':
-      if (successfulReceipts.length <= 0) {
+      if (successfulExecutionReceipts.length <= 0) {
         if (blockerReceipts.length > 0 && answer) {
           return {
             decision: 'blocked',
@@ -237,7 +237,7 @@ export function verifyDelegatedResult(input: {
       };
     case 'repo_inspection':
     default:
-      if (successfulReceipts.length <= 0) {
+      if (successfulExecutionReceipts.length <= 0) {
         if (blockerReceipts.length > 0 && answer) {
           return {
             decision: 'blocked',

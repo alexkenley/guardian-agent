@@ -4,6 +4,22 @@ const ACTIVE_PENDING_ACTION_STATUSES = new Set([
   'running',
 ]);
 
+function hasStructuredPendingAction(metadata) {
+  return !!metadata
+    && typeof metadata === 'object'
+    && !!metadata.pendingAction
+    && typeof metadata.pendingAction === 'object';
+}
+
+export function shouldHydratePendingActionFromStore(metadata, options = {}) {
+  if (hasStructuredPendingAction(metadata)) {
+    return false;
+  }
+
+  const source = typeof options.source === 'string' ? options.source.trim() : '';
+  return source === 'hydrate';
+}
+
 export function canClearPendingActionFromChat(pendingAction, options = {}) {
   if (!pendingAction || typeof pendingAction !== 'object') {
     return false;

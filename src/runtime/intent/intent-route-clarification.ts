@@ -22,7 +22,7 @@ const STRONG_REPO_SCOPE_PATTERN = /\b(?:repo|repository|codebase)\b/;
 
 const UI_SURFACE_SIGNAL_PATTERN = /\b(?:dashboard|page|tab|panel|screen|portal|site)\b/;
 const INTERNAL_GUARDIAN_SIGNAL_PATTERN = /\b(?:guardian|automations|config|system|control plane|guardian chat)\b/;
-const EXTERNAL_WEBSITE_SIGNAL_PATTERN = /\b(?:https?:\/\/|www\.|[a-z0-9-]+\.(?:com|org|net|io|dev|app|ai)\b|external website|website|web site|url|browser)\b/;
+const EXTERNAL_WEBSITE_SIGNAL_PATTERN = /\b(?:https?:\/\/|www\.|[a-z0-9-]+\.(?:com|org|net|io|dev|app|ai)\b|external website|website|web site|url|browser|github|gitlab|bitbucket)\b/;
 
 export interface IntentRouteClarificationOption {
   value: string;

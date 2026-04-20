@@ -41,6 +41,7 @@ import {
 import {
   canClearPendingActionFromChat,
   describePendingActionClearLabel,
+  shouldHydratePendingActionFromStore,
 } from './chat-pending-actions.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
@@ -799,9 +800,12 @@ export async function initChatPanel(container) {
     }));
   };
 
-  const resolvePendingActionForDisplay = async (metadata) => {
+  const resolvePendingActionForDisplay = async (metadata, options = {}) => {
     const direct = metadata?.pendingAction;
     if (direct && typeof direct === 'object') return direct;
+    if (!shouldHydratePendingActionFromStore(metadata, options)) {
+      return undefined;
+    }
     try {
       const current = await api.currentPendingAction(webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
       return current?.pendingAction && typeof current.pendingAction === 'object'
@@ -816,7 +820,7 @@ export async function initChatPanel(container) {
     const historyKey = getHistoryKey();
     if (!historyKey || !history || activeChatIndicator) return;
     const chatHistory = getHistory(historyKey);
-    const pendingAction = await resolvePendingActionForDisplay();
+    const pendingAction = await resolvePendingActionForDisplay(undefined, { source: 'hydrate' });
     if (syncSyntheticPendingActionEntry(chatHistory, pendingAction)) {
       commitChatHistory(historyKey, { emit: false });
       renderHistory(history, historyKey, approvalHandler);
@@ -919,7 +923,7 @@ export async function initChatPanel(container) {
         const activitySummary = captureActiveChatActivitySummary({ forcePersist: true });
         clearActiveChatIndicator();
         restoreInput();
-        Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
+        Promise.resolve(resolvePendingActionForDisplay(data?.metadata, { source: 'response' }))
           .then((pendingAction) => {
             addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource, activitySummary, data.metadata);
             notifyTouchedCodeSessions(data?.metadata);

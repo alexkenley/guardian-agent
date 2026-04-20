@@ -1048,6 +1048,53 @@ guardian:
           && candidate.getValue().includes('answerValue = 42');
       });
     }, null, { timeout: 15000 });
+    await page.evaluate(() => {
+      const models = window.monaco?.editor?.getModels() || [];
+      const model = models.find((candidate) => candidate.uri?.path?.endsWith('/src/example.ts'));
+      if (!model) throw new Error('Example Monaco model not found');
+      if (!model.getValue().includes('// diff persistence smoke')) {
+        model.setValue(`${model.getValue()}\n// diff persistence smoke\n`);
+      }
+    });
+    await page.waitForSelector('[data-code-save-file]');
+    await page.click('[data-code-toggle-diff]');
+    await page.waitForFunction(() => {
+      const toggle = document.querySelector('[data-code-toggle-diff]');
+      const diffEditor = document.querySelector('.monaco-diff-editor');
+      const models = window.monaco?.editor?.getModels() || [];
+      return (toggle?.textContent || '').includes('Source Only')
+        && !!diffEditor
+        && models.some((candidate) => {
+          return candidate.uri?.path?.endsWith('/src/example.ts')
+            && candidate.getValue().includes('// diff persistence smoke');
+        });
+    }, null, { timeout: 15000 });
+    const preRefreshChatMessageCount = await page.locator('#chat-history .chat-message').count();
+    await sendGuardianChatMessage('Search the workspace for answerValue again and tell me where it is defined.');
+    await page.waitForFunction((previousCount) => {
+      const messages = Array.from(document.querySelectorAll('#chat-history .chat-message'));
+      const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+      const hasReply = messages.some((node) => (node.textContent || '').includes('answerValue'));
+      return messages.length > previousCount && hasReply && !thinking;
+    }, preRefreshChatMessageCount, { timeout: 30000 });
+    await page.waitForTimeout(6000);
+    await page.waitForFunction(() => {
+      const toggle = document.querySelector('[data-code-toggle-diff]');
+      const diffEditor = document.querySelector('.monaco-diff-editor');
+      const models = window.monaco?.editor?.getModels() || [];
+      return (toggle?.textContent || '').includes('Source Only')
+        && !!diffEditor
+        && models.some((candidate) => {
+          return candidate.uri?.path?.endsWith('/src/example.ts')
+            && candidate.getValue().includes('// diff persistence smoke');
+        });
+    }, null, { timeout: 15000 });
+    await page.click('[data-code-toggle-diff]');
+    await page.waitForFunction(() => {
+      const toggle = document.querySelector('[data-code-toggle-diff]');
+      return (toggle?.textContent || '').includes('Split Diff')
+        && !document.querySelector('.monaco-diff-editor');
+    }, null, { timeout: 15000 });
 
     await page.evaluate(() => {
       const models = window.monaco?.editor?.getModels() || [];

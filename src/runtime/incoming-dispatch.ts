@@ -13,7 +13,6 @@ import {
   type IntentGatewayInput,
   type IntentGatewayRecord,
 } from './intent-gateway.js';
-import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
 import {
   attachSelectedExecutionProfileMetadata,
   findProviderByTier,
@@ -202,11 +201,6 @@ export function createIncomingDispatchPreparer(args: {
       agentId: stateAgentId,
       userId: canonicalUserId,
       channel,
-    }, {
-      query: buildIntentGatewayHistoryQuery({
-        content: normalizedContent,
-        continuity: args.summarizeContinuityThreadForGateway(continuity),
-      }),
     });
     const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
       if (!providerName) return null;

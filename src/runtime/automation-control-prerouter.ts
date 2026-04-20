@@ -156,7 +156,7 @@ export async function tryAutomationControlPreRoute(
       : result;
   }
 
-  if (!intent.automationName) {
+  if (!intent.automationName && !recentFollowUpSelection) {
     return buildAutomationClarificationResult(
       'Tell me which automation you want to inspect, run, rename, enable, disable, or edit.',
       {

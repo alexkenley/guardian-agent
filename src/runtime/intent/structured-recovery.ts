@@ -221,13 +221,14 @@ export function normalizeIntentGatewayDecision(
   const requiresToolSynthesis = hasParsedRequiresToolSynthesis
     ? parsed.requiresToolSynthesis as boolean
     : derivedWorkload.requiresToolSynthesis;
+  const heuristicRequiresExactFile = (
+    (requiresRepoGrounding || executionClass === 'repo_grounded' || executionClass === 'security_analysis')
+    && requestNeedsExactFileReferences(repairContext?.sourceContent)
+  );
   const hasParsedRequireExactFileReferences = typeof parsed.requireExactFileReferences === 'boolean';
-  const requireExactFileReferences = hasParsedRequireExactFileReferences
-    ? parsed.requireExactFileReferences as boolean
-    : (
-      (requiresRepoGrounding || executionClass === 'repo_grounded' || executionClass === 'security_analysis')
-      && requestNeedsExactFileReferences(repairContext?.sourceContent)
-    );
+  // Use the model's parsed value, but force it to true if the heuristic strongly believes it requires exact file references.
+  const requireExactFileReferences = (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean)
+    || heuristicRequiresExactFile;
   const expectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure)
     ?? derivedWorkload.expectedContextPressure;
   const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
@@ -264,7 +265,7 @@ export function normalizeIntentGatewayDecision(
     requiresToolSynthesis: hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
     ...(hasParsedRequireExactFileReferences || requireExactFileReferences
       ? {
-          requireExactFileReferences: hasParsedRequireExactFileReferences
+          requireExactFileReferences: (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean === requireExactFileReferences)
             ? classifierSource
             : 'derived.workload',
         }

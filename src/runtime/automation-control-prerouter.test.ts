@@ -731,6 +731,90 @@ describe('tryAutomationControlPreRoute', () => {
     expect(result?.content).toContain("Disabled 'Weekday Outlook Inbox Summary'.");
   });
 
+  it('uses the most recently created automation for automation-name clarification answers that omit an explicit name', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [
+              {
+                id: 'older-browser-read',
+                name: 'Browser Read Smoke',
+                kind: 'workflow',
+                enabled: true,
+                workflow: {
+                  id: 'older-browser-read',
+                  name: 'Browser Read Smoke',
+                  enabled: true,
+                  mode: 'sequential',
+                  steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+                },
+                task: {
+                  id: 'older-browser-read-task',
+                  name: 'Browser Read Smoke',
+                  type: 'playbook',
+                  target: 'older-browser-read',
+                  cron: '0 9 * * 1',
+                  enabled: true,
+                  createdAt: 10,
+                },
+              },
+              {
+                id: 'weekly-review',
+                name: 'Weekly Reminds Me Every Friday',
+                kind: 'assistant_task',
+                enabled: true,
+                task: {
+                  id: 'weekly-review',
+                  name: 'Weekly Reminds Me Every Friday',
+                  type: 'agent',
+                  target: 'default',
+                  cron: '0 16 * * 5',
+                  enabled: true,
+                  createdAt: 20,
+                },
+              },
+            ],
+          },
+        };
+      }
+      if (toolName === 'automation_set_enabled') {
+        expect(args).toEqual({ automationId: 'weekly-review', enabled: false });
+        return {
+          success: true,
+          message: "Disabled 'Weekly Reminds Me Every Friday'.",
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'The one you just created',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'toggle',
+        summary: 'Disable the automation that was just created.',
+        turnRelation: 'clarification_answer',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(result?.content).toContain("I used the most recently created automation from this conversation: 'Weekly Reminds Me Every Friday'.");
+    expect(result?.content).toContain("Disabled 'Weekly Reminds Me Every Friday'.");
+  });
+
   it('prepares deletion through automation_delete when approval is required', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {
