@@ -808,7 +808,13 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
       if (lines.length > 70) {
         const head = lines.slice(0, 50).join('\n');
         const tail = lines.slice(-20).join('\n');
-        return { ...obj, content: `${head}\n[... ${lines.length - 70} lines omitted ...]\n${tail}` };
+        const definitions = compactFilesystemReadDefinitionsForLLM(content);
+        return {
+          ...obj,
+          lineCount: lines.length,
+          content: `${head}\n[... ${lines.length - 70} lines omitted ...]\n${tail}`,
+          ...(definitions.length > 0 ? { definitions } : {}),
+        };
       }
     }
 
@@ -886,6 +892,44 @@ function compactFilesystemListEntriesForLLM(entries: unknown[]): string[] {
     usedChars = nextChars;
   }
   return compacted;
+}
+
+function compactFilesystemReadDefinitionsForLLM(content: string): string[] {
+  const compacted: string[] = [];
+  const seen = new Set<string>();
+  let usedChars = 0;
+  for (const line of content.split('\n')) {
+    const definition = compactFilesystemReadDefinitionForLLM(line);
+    if (!definition || seen.has(definition)) {
+      continue;
+    }
+    const nextChars = usedChars + definition.length;
+    if (compacted.length >= 40 || (compacted.length > 0 && nextChars > 3_600)) {
+      break;
+    }
+    compacted.push(definition);
+    seen.add(definition);
+    usedChars = nextChars;
+  }
+  return compacted;
+}
+
+function compactFilesystemReadDefinitionForLLM(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const definitionPatterns = [
+    /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+[A-Za-z0-9_$]+\s*\(/,
+    /^(?:export\s+)?class\s+[A-Za-z0-9_$]+\b/,
+    /^(?:export\s+)?interface\s+[A-Za-z0-9_$]+\b/,
+    /^(?:export\s+)?type\s+[A-Za-z0-9_$]+\s*=/,
+    /^(?:export\s+)?(?:const|let|var)\s+[A-Za-z0-9_$]+\s*=\s*(?:async\s*)?(?:\(|function\b|<)/,
+    /^(?:public|private|protected)\s+(?:static\s+)?(?:async\s+)?[A-Za-z0-9_$]+\s*\(/,
+  ];
+  return definitionPatterns.some((pattern) => pattern.test(trimmed))
+    ? truncateText(trimmed, 220)
+    : null;
 }
 
 function compactFilesystemSearchMatchForLLM(match: unknown): string | null {

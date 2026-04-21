@@ -4,7 +4,8 @@ const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|worksp
 const REPO_MUTATION_PATTERN = /\b(?:create|add|make|write|generate|touch|update|edit|change|modify|fix|patch|rewrite|append|delete|remove)\b/;
 const REPO_EXECUTION_PATTERN = /\b(?:run|test|build|lint|check|debug|investigate|inspect|review|search|find|grep)\b/;
 const CODING_BACKEND_PATTERN = /\b(?:codex|claude(?:\s+code)?|gemini(?:\s+cli)?|aider)\b/;
-const CONCRETE_REPO_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder|file|files|source|function|class|module|component|symbol|path|paths|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;
+const CODE_REPO_TARGET_PATTERN = /\b(?:source|function|class|module|component|symbol|tests?|test suite|unit tests?|build|compile|lint|check|readme)\b/;
+const CODING_BACKEND_SCOPE_TARGET_PATTERN = /\b(?:top-level directory|root directory|workspace root|project root|repo root|directory|folder)\b/;
 const SOURCE_TREE_PATH_PATTERN = /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//;
 const REPO_FILE_REFERENCE_PATTERN = /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml|txt|toml)\b/;
 const EXACT_FILE_REQUEST_PATTERN = /\b(?:which\s+files?|what\s+files?|exact\s+files?|exact\s+file\s+paths?|exact\s+file\s+names?|file\s+names?|code\s+paths?|client-side\s+code\s+paths?|cite\s+the\s+exact\s+files?)\b/i;
@@ -73,7 +74,7 @@ export function isExplicitRepoInspectionRequest(content: string | undefined): bo
   if (!normalized) return false;
 
   const mentionsRepoScope = /\b(?:this repo|this repository|this workspace|the repo|the repository|the codebase|the workspace|repo|repository|codebase)\b/.test(normalized);
-  const mentionsCodeArtifact = /\b(?:file|files|source|function|class|module|component|symbol|path|paths)\b/.test(normalized)
+  const mentionsCodeArtifact = /\b(?:source|function|class|module|component|symbol)\b/.test(normalized)
     || /(?:^|\s)(?:src|docs|web|scripts|native|policies|skills)\//.test(normalized)
     || /\b[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|rs|py|go|java|yml|yaml)\b/.test(normalized);
   const asksForFileOrSymbolLocation = /\btell me which files?\b/.test(normalized)
@@ -87,7 +88,7 @@ export function isExplicitRepoInspectionRequest(content: string | undefined): bo
     || /\bwithout\s+(?:re-?)?search(?:ing)?\b/.test(normalized);
 
   return asksForFileOrSymbolLocation && (mentionsRepoScope || mentionsCodeArtifact)
-    || usesPositiveInspectionVerb && !negatesRepoSearch && (mentionsRepoScope || mentionsCodeArtifact);
+    || usesPositiveInspectionVerb && !negatesRepoSearch && (mentionsCodeArtifact || asksForFileOrSymbolLocation);
 }
 
 export function requestNeedsExactFileReferences(content: string | undefined): boolean {
@@ -103,9 +104,10 @@ export function isExplicitWorkspaceScopedRepoWorkRequest(content: string | undef
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized || !WORKSPACE_SCOPE_PATTERN.test(normalized)) return false;
 
-  const hasConcreteRepoTarget = CONCRETE_REPO_TARGET_PATTERN.test(normalized)
+  const hasConcreteRepoTarget = CODE_REPO_TARGET_PATTERN.test(normalized)
     || SOURCE_TREE_PATH_PATTERN.test(normalized)
-    || REPO_FILE_REFERENCE_PATTERN.test(normalized);
+    || REPO_FILE_REFERENCE_PATTERN.test(normalized)
+    || (CODING_BACKEND_PATTERN.test(normalized) && CODING_BACKEND_SCOPE_TARGET_PATTERN.test(normalized));
   if (!hasConcreteRepoTarget) return false;
 
   return REPO_MUTATION_PATTERN.test(normalized)

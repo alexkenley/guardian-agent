@@ -170,7 +170,7 @@ export function repairUnavailableIntentGatewayDecision(
       confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
       summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
         ? parsed.summary.trim()
-        : 'Recovered filesystem intent from an explicit file-path request after an unstructured gateway response.',
+        : 'Recovered filesystem intent from an explicit workspace or path request after an unstructured gateway response.',
       ...(extractExplicitRepoFilePath(rawSourceContent)
         ? { path: extractExplicitRepoFilePath(rawSourceContent) }
         : {}),

@@ -6,6 +6,7 @@ const NAMED_REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?
 const EXPLICIT_REMOTE_PROFILE_PATTERN = /\bprofileid\s+([a-z0-9._:-]+)/i;
 const NAMED_REMOTE_PROFILE_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?([a-z0-9][a-z0-9._ -]*?)\s+profile\b/i;
 const REMOTE_SANDBOX_ACTION_PATTERN = /\b(?:run|execute|create|write|read|open|install|test|build|lint|check|restart|resume|reuse|continue|report|verify|cat|show)\b/i;
+const FILESYSTEM_SCOPE_PATTERN = /\b(?:workspace|directory|folder|path|paths|file|files|repo\s+root|project\s+root|current\s+directory)\b/i;
 
 const GENERIC_SESSION_TARGET_TOKENS = new Set([
   'a',
@@ -158,13 +159,19 @@ export function extractExplicitRepoFilePath(rawContent: string): string | undefi
   const patterns = [
     /\b([A-Za-z]:\\(?:[^\\\s"'`]+\\)*[^\\\s"'`]+\.[A-Za-z0-9]+)\b/,
     /\b((?:\.{1,2}\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)\b/,
+    /\b([A-Za-z]:\\(?:[^\\\s"'`]+\\)*[^\\\s"'`\\]+\\?)\b/,
+    /\b((?:\.{1,2}[\\/])?(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+(?:[\\/])?)\b/,
     /\b([A-Za-z0-9_.-]+\.[A-Za-z0-9]+)\b/,
   ];
   for (const pattern of patterns) {
     const match = rawContent.match(pattern);
     const candidate = match?.[1]?.trim();
     if (candidate) {
-      return candidate.replace(/[.,;:!?]+$/, '');
+      const cleaned = candidate.replace(/[.,;:!?]+$/, '');
+      if (cleaned.includes('://')) {
+        continue;
+      }
+      return cleaned;
     }
   }
   return undefined;
@@ -196,7 +203,7 @@ export function isExplicitRemoteSandboxTaskRequest(
     return false;
   }
   return REMOTE_SANDBOX_ACTION_PATTERN.test(normalized)
-    || hasExplicitRepoFileReference(normalized);
+    || hasExplicitRepoPathReference(normalized);
 }
 
 export function extractExplicitRemoteExecCommand(
@@ -316,13 +323,16 @@ export function inferExplicitFilesystemTaskOperation(
   normalized: string,
   parsedOperation: IntentGatewayOperation,
 ): IntentGatewayOperation | null {
-  if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
+  if (!normalized) return null;
+  const hasFilesystemScope = hasExplicitRepoPathReference(normalized)
+    || FILESYSTEM_SCOPE_PATTERN.test(normalized);
+  if (!hasFilesystemScope) return null;
   const inferredOperation = inferFilesystemOperationFromVerbs(normalized);
+  if (!inferredOperation) {
+    return parsedOperation && parsedOperation !== 'unknown' ? parsedOperation : null;
+  }
   if (!parsedOperation || parsedOperation === 'unknown') {
     return inferredOperation;
-  }
-  if (!inferredOperation) {
-    return parsedOperation;
   }
   const parsedIsMutating = parsedOperation === 'create'
     || parsedOperation === 'update'
@@ -338,6 +348,11 @@ export function inferExplicitFilesystemTaskOperation(
 
 export function hasExplicitRepoFileReference(normalized: string): boolean {
   return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|csv|log|toml|ini|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
+}
+
+export function hasExplicitRepoPathReference(normalized: string): boolean {
+  return hasExplicitRepoFileReference(normalized)
+    || /(?:\b[a-z]:\\(?:[^\\\s"'`]+\\)+[^\\\s"'`\\]+\b)|(?:\b(?:\.{1,2}[\\/])?(?:[a-z0-9_.-]+[\\/])+[a-z0-9_.-]+(?:[\\/])?\b)/i.test(normalized);
 }
 
 function inferFilesystemOperationFromVerbs(normalized: string): IntentGatewayOperation | null {

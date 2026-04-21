@@ -956,6 +956,51 @@ describe('ToolExecutor', () => {
     expect(refreshed?.workState.managedSandboxes[0]?.healthReason).toContain('502');
   });
 
+  it('prefers the explicit codeContext session for code_session_current lookups', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'GuardianAgent',
+      workspaceRoot: root,
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: session.id,
+      },
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.output).toMatchObject({
+      attached: true,
+      session: {
+        id: session.id,
+        workspaceRoot: root,
+      },
+    });
+  });
+
   it('allows the built-in Vercel remote sandbox control-plane host without widening allowedDomains', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -5966,9 +6011,9 @@ describe('ToolExecutor', () => {
     });
     expect(listing.success).toBe(true);
     const entries = Array.isArray((listing.output as { entries?: unknown })?.entries)
-      ? (listing.output as { entries: Array<{ name?: string; type?: string }> }).entries
+      ? (listing.output as { entries: string[] }).entries
       : [];
-    expect(entries.some((entry) => entry.name === 'Testapp' && entry.type === 'dir')).toBe(true);
+    expect(entries.some((entry) => entry === '[dir] Testapp')).toBe(true);
   });
 
   it('creates empty files with fs_write after approval', async () => {
@@ -7102,7 +7147,7 @@ describe('ToolExecutor', () => {
       allowedDomains: ['localhost'],
     });
 
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
       const result = await executor.runTool({
         toolName: 'fs_write',
         args: {
@@ -7119,8 +7164,8 @@ describe('ToolExecutor', () => {
     const blocked = await executor.runTool({
       toolName: 'fs_write',
       args: {
-        path: join(root, 'file-9.txt'),
-        content: 'content-9',
+        path: join(root, 'file-51.txt'),
+        content: 'content-51',
         append: false,
       },
       origin: 'assistant',
@@ -7250,6 +7295,37 @@ describe('ToolExecutor', () => {
     expect(run.success).toBe(true);
     const output = run.output as { content: string };
     expect(output.content).toContain('absolute windows path');
+  });
+
+  it('reads moderately large source files without requiring an explicit maxBytes override', async () => {
+    const root = createExecutorRoot();
+    const filePath = join(root, 'large-source.ts');
+    const content = Array.from(
+      { length: 7_000 },
+      (_value, index) => `line_${index.toString().padStart(4, '0')} = ${index};`,
+    ).join('\n');
+    await writeFile(filePath, content, 'utf-8');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_read',
+      args: { path: filePath },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.output).toMatchObject({
+      truncated: false,
+    });
+    expect((run.output as { content: string }).content).toContain('line_6999 = 6999;');
   });
 
   it('honors explicit deny policy overrides', async () => {

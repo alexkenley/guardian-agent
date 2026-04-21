@@ -568,6 +568,9 @@ describe('WorkerManager', () => {
       mode: 'metadata',
       itemCount: 2,
     }));
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
 
     const manager = new WorkerManager(
       {
@@ -586,6 +589,10 @@ describe('WorkerManager', () => {
         capabilityTokenTtlMs: 600_000,
         capabilityTokenMaxToolCalls: 0,
       } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+      },
     );
 
     await manager.handleMessage({
@@ -645,6 +652,19 @@ describe('WorkerManager', () => {
         itemCount: 2,
       },
     ]);
+    const runningTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_worker_running');
+    expect(runningTrace).toMatchObject({
+      stage: 'delegated_worker_running',
+      details: {
+        taskContractKind: 'general_answer',
+        promptAdditionalSectionCount: 2,
+        promptAdditionalSectionNames: ['Existing Context', 'Code Session Registry'],
+        codeSessionRegistryAttached: true,
+        codeSessionRegistryItemCount: 2,
+      },
+    });
 
     manager.shutdown();
   });
@@ -1148,6 +1168,9 @@ describe('WorkerManager', () => {
         executionProfileMaxAdditionalSections: 8,
         executionProfileMaxRuntimeNotices: 6,
         executionProfileReason: 'delegated coding role selected managed-cloud coding profile',
+        taskContractKind: 'general_answer',
+        taskContractAllowsAnswerFirst: true,
+        taskContractRequiresEvidence: false,
         taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
         lifecycle: 'running',
       },

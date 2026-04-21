@@ -43,14 +43,26 @@ export function isIntermediateStatusResponse(content: string | undefined): boole
 
   const normalized = content.trim();
   const lower = normalized.toLowerCase();
-  const presentTenseActionStartPattern = /^(?:creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking)\b/i;
+  const presentTenseActionStartPattern = /^(?:creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking|listing|appending|continuing|renaming|moving|copying|deleting|running|opening)\b/i;
   if (/<\/?think>/i.test(normalized)) {
     return true;
   }
   if (/<details>\s*<summary>\s*(?:tool calls|raw tool results)/i.test(normalized)) {
     return true;
   }
-  const lineCount = normalized.split(/\r?\n/).length;
+  const rawLines = normalized.split(/\r?\n/);
+  const lines = rawLines
+    .map((line) => line.replace(/^[>\-\d.*#\s`]+/, '').replace(/[*_`]/g, '').trim())
+    .filter(Boolean);
+  const lineCount = lines.length;
+  const finalLine = lines.at(-1) ?? '';
+  const finalLineLooksOngoing = !!finalLine
+    && finalLine.length <= 180
+    && presentTenseActionStartPattern.test(finalLine)
+    && !/\b(?:done|completed|created|wrote|written|saved|updated|ready|waiting for approval|approval required|blocked|failed|unable|cannot|can't|will not|won't|do not|don't)\b/i.test(finalLine);
+  if (finalLineLooksOngoing && lineCount <= 8) {
+    return true;
+  }
   if (normalized.length > 320 || lineCount > 5) {
     return false;
   }

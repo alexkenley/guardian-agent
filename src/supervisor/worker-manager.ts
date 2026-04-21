@@ -270,6 +270,7 @@ export class WorkerManager {
       requestId,
       taskRunId: delegatedTaskRunId,
       lifecycle: 'running',
+      taskContract,
       reason: delegatedJobDetail,
     });
     this.publishDelegatedWorkerProgress(input, delegatedTarget, {
@@ -308,6 +309,13 @@ export class WorkerManager {
           }),
         },
       });
+      // LLM calls are proxied through the broker — the worker no longer needs the provider config.
+      // We only tell the worker whether a fallback provider exists for quality-based retry.
+      const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
+      const additionalSections = appendPromptAdditionalSection(
+        input.additionalSections ?? [],
+        this.buildCodeSessionRegistrySection(input),
+      );
       const delegatedWorkerRunningDetail = buildDelegatedWorkerRunningDetail(
         describeDelegatedTarget(delegatedTarget),
         input.executionProfile,
@@ -318,6 +326,8 @@ export class WorkerManager {
         taskRunId: delegatedTaskRunId,
         lifecycle: 'running',
         workerId: worker.id,
+        taskContract,
+        additionalSections,
         reason: delegatedWorkerRunningDetail,
       });
       this.publishDelegatedWorkerProgress(input, delegatedTarget, {
@@ -329,13 +339,6 @@ export class WorkerManager {
         detail: delegatedWorkerRunningDetail,
       });
 
-      // LLM calls are proxied through the broker — the worker no longer needs the provider config.
-      // We only tell the worker whether a fallback provider exists for quality-based retry.
-      const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
-      const additionalSections = appendPromptAdditionalSection(
-        input.additionalSections ?? [],
-        this.buildCodeSessionRegistrySection(input),
-      );
       const baseDispatchParams = {
         message: input.message,
         systemPrompt: input.systemPrompt,
@@ -376,6 +379,11 @@ export class WorkerManager {
             insufficiency,
             input.delegation?.codeSessionId,
           );
+          const retryAdditionalSections = appendDelegatedRetrySection(
+            baseDispatchParams.additionalSections,
+            insufficiency,
+            { sameProfile: retryUsesSameProfile },
+          );
           effectiveExecutionProfile = retryProfile;
           effectiveInput = effectiveExecutionProfile === input.executionProfile
             ? input
@@ -385,6 +393,8 @@ export class WorkerManager {
             taskRunId: delegatedTaskRunId,
             lifecycle: 'running',
             workerId: worker.id,
+            taskContract,
+            additionalSections: retryAdditionalSections,
             reason: retryDetail,
           });
           this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
@@ -409,11 +419,7 @@ export class WorkerManager {
           });
           result = await this.dispatchToWorker(worker, {
             ...baseDispatchParams,
-            additionalSections: appendDelegatedRetrySection(
-              baseDispatchParams.additionalSections,
-              insufficiency,
-              { sameProfile: retryUsesSameProfile },
-            ),
+            additionalSections: retryAdditionalSections,
             executionProfile: retryProfile,
           });
           verifiedResult = verifyDelegatedWorkerResult({
@@ -506,7 +512,8 @@ export class WorkerManager {
         taskRunId: delegatedTaskRunId,
         lifecycle,
         workerId: worker.id,
-          unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+        taskContract,
+        unresolvedBlockerKind: handoff.unresolvedBlockerKind,
         approvalCount: handoff.approvalCount,
         reportingMode: handoff.reportingMode,
         runClass: handoff.runClass,
@@ -561,6 +568,7 @@ export class WorkerManager {
         taskRunId: delegatedTaskRunId,
         lifecycle,
         workerId: worker.id,
+        taskContract,
         unresolvedBlockerKind: handoff.unresolvedBlockerKind,
         approvalCount: handoff.approvalCount,
         reportingMode: handoff.reportingMode,
@@ -615,6 +623,7 @@ export class WorkerManager {
         requestId,
         taskRunId: delegatedTaskRunId,
         lifecycle: 'failed',
+        taskContract,
         reason: error instanceof Error ? error.message : String(error),
         contentPreview: error instanceof Error ? error.message : String(error),
       });
@@ -657,6 +666,8 @@ export class WorkerManager {
       taskRunId?: string;
       lifecycle?: 'running' | 'completed' | 'blocked' | 'failed';
       workerId?: string;
+      taskContract?: DelegatedResultEnvelope['taskContract'];
+      additionalSections?: PromptAssemblyAdditionalSection[];
       unresolvedBlockerKind?: string;
       approvalCount?: number;
       reportingMode?: string;
@@ -692,6 +703,8 @@ export class WorkerManager {
         ...(target.orchestration?.lenses?.length ? { orchestrationLenses: [...target.orchestration.lenses] } : {}),
         ...buildDelegatedIntentTraceMetadata(delegatedIntent),
         ...buildDelegatedExecutionProfileTraceMetadata(input.executionProfile),
+        ...buildDelegatedTaskContractTraceMetadata(options.taskContract),
+        ...buildPromptAdditionalSectionTraceMetadata(options.additionalSections),
         ...buildDelegatedHandoffTraceMetadata(options.handoff),
         ...buildDelegatedWorkerExecutionTraceMetadata(options.workerMetadata),
         ...(options.taskRunId ? { taskRunId: options.taskRunId } : {}),
@@ -833,6 +846,7 @@ export class WorkerManager {
           resultMessage: typeof payload.resultMessage === 'string' ? payload.resultMessage : undefined,
           errorMessage: typeof payload.errorMessage === 'string' ? payload.errorMessage : undefined,
           resultPreview: preview,
+          rawOutput: typeof payload.rawOutput === 'string' ? payload.rawOutput : undefined,
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => !!entry)
@@ -1871,6 +1885,43 @@ function buildDelegatedWorkerExecutionTraceMetadata(
       : {}),
     ...(typeof workerExecution.pendingApprovalCount === 'number'
       ? { workerExecutionPendingApprovalCount: workerExecution.pendingApprovalCount }
+      : {}),
+  };
+}
+
+function buildDelegatedTaskContractTraceMetadata(
+  taskContract: DelegatedResultEnvelope['taskContract'] | undefined,
+): Record<string, unknown> {
+  if (!taskContract) return {};
+  return {
+    taskContractKind: taskContract.kind,
+    ...(taskContract.route ? { taskContractRoute: taskContract.route } : {}),
+    ...(taskContract.operation ? { taskContractOperation: taskContract.operation } : {}),
+    taskContractRequiresEvidence: taskContract.requiresEvidence,
+    taskContractAllowsAnswerFirst: taskContract.allowsAnswerFirst,
+    taskContractRequireExactFileReferences: taskContract.requireExactFileReferences,
+    ...(taskContract.summary ? { taskContractSummary: taskContract.summary } : {}),
+  };
+}
+
+function buildPromptAdditionalSectionTraceMetadata(
+  sections: PromptAssemblyAdditionalSection[] | undefined,
+): Record<string, unknown> {
+  if (!Array.isArray(sections) || sections.length <= 0) {
+    return {};
+  }
+  const codeSessionRegistrySection = sections.find((section) => section.section === 'Code Session Registry');
+  return {
+    promptAdditionalSectionCount: sections.length,
+    promptAdditionalSectionNames: sections.map((section) => section.section),
+    promptAdditionalSectionModes: sections.map((section) => section.mode ?? 'default'),
+    ...(codeSessionRegistrySection
+      ? {
+          codeSessionRegistryAttached: true,
+          ...(typeof codeSessionRegistrySection.itemCount === 'number'
+            ? { codeSessionRegistryItemCount: codeSessionRegistrySection.itemCount }
+            : {}),
+        }
       : {}),
   };
 }

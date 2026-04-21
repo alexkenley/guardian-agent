@@ -1007,6 +1007,63 @@ guardian:
     }, terminalInsertToken);
     await waitForTerminalOutput(terminalInsertToken);
 
+    const sessionRailRefreshToken = `SESSION_RAIL_REFRESH_${Date.now()}`;
+    const sessionRailRefreshTitle = `Smoke rail ${sessionRailRefreshToken}`;
+    await openCodePanel('sessions');
+    await page.waitForFunction(() => !!document.querySelector('.code-session.is-active'));
+    await page.evaluate(async (token) => {
+      const editor = document.querySelector('.code-editor.panel');
+      const terminals = document.querySelector('.code-terminals.panel');
+      if (!(editor instanceof HTMLElement)) {
+        throw new Error('Editor panel not found');
+      }
+      if (!(terminals instanceof HTMLElement)) {
+        throw new Error('Terminal panel not found');
+      }
+      editor.setAttribute('data-smoke-sticky-editor', token);
+      terminals.setAttribute('data-smoke-sticky-terminals', token);
+      const sessionId = document.querySelector('.code-session.is-active')?.getAttribute('data-code-session-id');
+      if (!sessionId) {
+        throw new Error('Active coding session not found');
+      }
+      const activeTitle = document.querySelector('.code-session.is-active strong')?.textContent?.trim() || '';
+      window.__smokeOriginalSessionTitle = activeTitle;
+      const { api } = await import('/js/api.js');
+      await api.codeSessionUpdate(sessionId, {
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        title: `Smoke rail ${token}`,
+      });
+    }, sessionRailRefreshToken);
+    await page.waitForFunction((expectedTitle) => {
+      const title = document.querySelector('.code-session.is-active strong')?.textContent || '';
+      return title.includes(expectedTitle);
+    }, sessionRailRefreshTitle, { timeout: 15000 });
+    const sessionRailRefreshState = await page.evaluate((token) => {
+      const editor = document.querySelector('.code-editor.panel');
+      const terminals = document.querySelector('.code-terminals.panel');
+      return {
+        editorSticky: editor?.getAttribute('data-smoke-sticky-editor') === token,
+        terminalsSticky: terminals?.getAttribute('data-smoke-sticky-terminals') === token,
+      };
+    }, sessionRailRefreshToken);
+    assert.equal(sessionRailRefreshState.editorSticky, true, 'Sessions poll refresh should not replace the editor workbench');
+    assert.equal(sessionRailRefreshState.terminalsSticky, true, 'Sessions poll refresh should not replace the terminal workbench');
+    await page.evaluate(async (token) => {
+      const sessionId = document.querySelector('.code-session.is-active')?.getAttribute('data-code-session-id');
+      if (!sessionId) {
+        throw new Error('Active coding session not found for cleanup');
+      }
+      const { api } = await import('/js/api.js');
+      await api.codeSessionUpdate(sessionId, {
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        title: window.__smokeOriginalSessionTitle || 'Code Workspace',
+      });
+      document.querySelector('.code-editor.panel')?.removeAttribute('data-smoke-sticky-editor');
+      document.querySelector('.code-terminals.panel')?.removeAttribute('data-smoke-sticky-terminals');
+    }, sessionRailRefreshToken);
+
     const draftInput = page.locator('#chat-input');
     await draftInput.click();
     await draftInput.type('Focus should stay in Guardian chat input.');
@@ -1242,6 +1299,78 @@ guardian:
     await openPageAndAssertGuideCollapsed('cloud', 'Cloud');
     await openPageAndAssertGuideCollapsed('automations', 'Automations');
     await openPageAndAssertGuideCollapsed('config', 'Configuration');
+    await page.click('.tab-btn[data-tab-id="security"]');
+    await page.waitForFunction(() => {
+      return document.querySelector('.tab-btn[data-tab-id="security"]')?.classList.contains('active') === true;
+    });
+    await page.waitForSelector('.policy-category-card[data-category="allowedPaths"]');
+    const policyInitialState = await page.evaluate((expectedPath) => {
+      const allowedPathsCard = document.querySelector('.policy-category-card[data-category="allowedPaths"]');
+      const itemTexts = Array.from(document.querySelectorAll('.policy-category-card[data-category="allowedPaths"] .policy-item code')).map((node) => {
+        return (node.textContent || '').trim();
+      });
+      return {
+        totalItems: Number.parseInt(document.querySelector('[data-policy-total-items]')?.textContent?.trim() || '0', 10),
+        allowedPathsCount: Number.parseInt(allowedPathsCard?.querySelector('[data-policy-count]')?.textContent?.trim() || '0', 10),
+        hasReviewedPath: itemTexts.some((text) => text.includes(expectedPath)),
+      };
+    }, reviewedWorkspaceRoot);
+    assert.equal(policyInitialState.hasReviewedPath, true, 'Security allowlist should include the reviewed workspace path before removal');
+    const policyRefreshToken = `POLICY_REFRESH_${Date.now()}`;
+    await page.evaluate((token) => {
+      const policyColumns = document.querySelector('.policy-columns');
+      const allowedPathsCard = document.querySelector('.policy-category-card[data-category="allowedPaths"]');
+      if (!(policyColumns instanceof HTMLElement) || !(allowedPathsCard instanceof HTMLElement)) {
+        throw new Error('Policy allowlist surface not found');
+      }
+      policyColumns.setAttribute('data-smoke-policy-columns', token);
+      allowedPathsCard.setAttribute('data-smoke-allowed-paths-card', token);
+    }, policyRefreshToken);
+    const reviewedPathRow = page.locator('.policy-category-card[data-category="allowedPaths"] .policy-item').filter({ hasText: reviewedWorkspaceRoot }).first();
+    await reviewedPathRow.locator('.policy-item-remove').click();
+    await page.waitForFunction((removedPath) => {
+      return !Array.from(document.querySelectorAll('.policy-category-card[data-category="allowedPaths"] .policy-item code')).some((node) => {
+        return (node.textContent || '').includes(removedPath);
+      });
+    }, reviewedWorkspaceRoot, { timeout: 15000 });
+    const policyRemovalState = await page.evaluate((token) => {
+      const policyColumns = document.querySelector('.policy-columns');
+      const allowedPathsCard = document.querySelector('.policy-category-card[data-category="allowedPaths"]');
+      return {
+        columnsSticky: policyColumns?.getAttribute('data-smoke-policy-columns') === token,
+        cardSticky: allowedPathsCard?.getAttribute('data-smoke-allowed-paths-card') === token,
+        totalItems: Number.parseInt(document.querySelector('[data-policy-total-items]')?.textContent?.trim() || '0', 10),
+        allowedPathsCount: Number.parseInt(allowedPathsCard?.querySelector('[data-policy-count]')?.textContent?.trim() || '0', 10),
+      };
+    }, policyRefreshToken);
+    assert.equal(policyRemovalState.columnsSticky, true, 'Security allowlist remove should not replace the allowlist layout');
+    assert.equal(policyRemovalState.cardSticky, true, 'Security allowlist remove should not replace the Allowed Paths card');
+    assert.equal(policyRemovalState.totalItems, policyInitialState.totalItems - 1, 'Security allowlist remove should decrement the total entry count');
+    assert.equal(policyRemovalState.allowedPathsCount, policyInitialState.allowedPathsCount - 1, 'Security allowlist remove should decrement the Allowed Paths count');
+    await page.fill('.policy-add-input[data-category="allowedPaths"]', reviewedWorkspaceRoot);
+    await page.click('.policy-add-btn[data-category="allowedPaths"]');
+    await page.waitForFunction((restoredPath) => {
+      return Array.from(document.querySelectorAll('.policy-category-card[data-category="allowedPaths"] .policy-item code')).some((node) => {
+        return (node.textContent || '').includes(restoredPath);
+      });
+    }, reviewedWorkspaceRoot, { timeout: 15000 });
+    const policyRestoreState = await page.evaluate((token) => {
+      const policyColumns = document.querySelector('.policy-columns');
+      const allowedPathsCard = document.querySelector('.policy-category-card[data-category="allowedPaths"]');
+      const addInput = document.querySelector('.policy-add-input[data-category="allowedPaths"]');
+      return {
+        columnsSticky: policyColumns?.getAttribute('data-smoke-policy-columns') === token,
+        cardSticky: allowedPathsCard?.getAttribute('data-smoke-allowed-paths-card') === token,
+        totalItems: Number.parseInt(document.querySelector('[data-policy-total-items]')?.textContent?.trim() || '0', 10),
+        allowedPathsCount: Number.parseInt(allowedPathsCard?.querySelector('[data-policy-count]')?.textContent?.trim() || '0', 10),
+        inputValue: addInput instanceof HTMLInputElement ? addInput.value : '',
+      };
+    }, policyRefreshToken);
+    assert.equal(policyRestoreState.columnsSticky, true, 'Security allowlist add should not replace the allowlist layout');
+    assert.equal(policyRestoreState.cardSticky, true, 'Security allowlist add should not replace the Allowed Paths card');
+    assert.equal(policyRestoreState.totalItems, policyInitialState.totalItems, 'Security allowlist add should restore the total entry count');
+    assert.equal(policyRestoreState.allowedPathsCount, policyInitialState.allowedPathsCount, 'Security allowlist add should restore the Allowed Paths count');
+    assert.equal(policyRestoreState.inputValue, '', 'Security allowlist add should clear the Allowed Paths input after save');
 
     await page.click('a[data-page="code"]');
     await page.waitForSelector('.code-page');

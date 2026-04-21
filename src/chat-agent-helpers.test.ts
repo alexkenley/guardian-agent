@@ -101,6 +101,27 @@ describe('formatToolResultForLLM', () => {
     expect(rendered).toContain('[file] package.json');
     expect(rendered).not.toContain('[Object omitted]');
   });
+
+  it('preserves mid-file helper definitions when compacting large fs_read results', () => {
+    const rendered = formatToolResultForLLM('fs_read', {
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+        content: [
+          ...Array.from({ length: 55 }, (_value, index) => `const fillerHead${index} = ${index};`),
+          'private buildCodeSessionRegistrySection(input: WorkerMessageRequest): PromptAssemblyAdditionalSection | null {',
+          '  return null;',
+          '}',
+          ...Array.from({ length: 30 }, (_value, index) => `const fillerTail${index} = ${index};`),
+        ].join('\n'),
+      },
+    });
+
+    expect(rendered).toContain('definitions');
+    expect(rendered).toContain('private buildCodeSessionRegistrySection');
+    expect(rendered).not.toContain('[Object omitted]');
+  });
 });
 
 describe('formatDirectFilesystemSearchResponse', () => {

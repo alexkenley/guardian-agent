@@ -2444,75 +2444,150 @@ async function renderPolicyTab(panel) {
       auto_approve: { label: 'Auto Approve', desc: 'All tool calls execute without approval', tone: 'error' },
     };
 
-    function render() {
-      const modeInfo = modeLabels[policy.mode] || { label: policy.mode, desc: '', tone: 'info' };
-      const totalItems = categories.reduce((sum, c) => sum + (policy.sandbox?.[c.key]?.length || 0), 0);
+    if (panel._policyInteractionController?.abort) {
+      panel._policyInteractionController.abort();
+    }
+    panel._policyInteractionController = typeof AbortController === 'function' ? new AbortController() : null;
+    const interactionSignal = panel._policyInteractionController?.signal;
 
+    function getCategoryItems(catKey) {
+      return Array.isArray(policy.sandbox?.[catKey]) ? [...policy.sandbox[catKey]] : [];
+    }
+
+    function renderPolicyItems(catKey) {
+      const items = getCategoryItems(catKey);
+      if (items.length === 0) {
+        return '<div class="policy-empty">No entries yet</div>';
+      }
+      return items.map(item => `
+        <div class="policy-item" data-category="${catKey}" data-item="${escAttr(item)}">
+          <code>${esc(item)}</code>
+          <button class="policy-item-remove" type="button" data-category="${catKey}" data-item="${escAttr(item)}" title="Remove ${esc(item)}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function getModeInfo() {
+      return modeLabels[policy.mode] || { label: policy.mode, desc: '', tone: 'info' };
+    }
+
+    function getAllowlistSummary() {
+      return categories.map((cat) => {
+        return `${getCategoryItems(cat.key).length} ${cat.label.toLowerCase().replace('allowed ', '')}`;
+      }).join(', ');
+    }
+
+    function getTotalItems() {
+      return categories.reduce((sum, cat) => sum + getCategoryItems(cat.key).length, 0);
+    }
+
+    function renderCategoryCard(cat) {
+      const items = getCategoryItems(cat.key);
+      return `
+        <div class="table-container policy-category-card" data-category="${cat.key}">
+          <div class="table-header">
+            <h3>${iconSvgs[cat.icon]} ${esc(cat.label)}</h3>
+            <span class="badge badge-idle" data-policy-count>${items.length}</span>
+          </div>
+          <div class="cfg-center-body">
+            <p class="policy-hint">${esc(cat.hint)}</p>
+            <div class="policy-add-row">
+              <input type="text" class="policy-add-input" data-category="${cat.key}" placeholder="${esc(cat.placeholder)}">
+              <button class="btn btn-primary btn-sm policy-add-btn" type="button" data-category="${cat.key}">Add</button>
+            </div>
+            <div class="policy-item-list" data-category="${cat.key}">
+              ${renderPolicyItems(cat.key)}
+            </div>
+            <div class="policy-feedback" data-category="${cat.key}"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderShell() {
+      const modeInfo = getModeInfo();
       panel.innerHTML = `
         <div class="policy-overview">
-          <div class="status-card ${modeInfo.tone}">
+          <div class="status-card ${modeInfo.tone}" data-policy-mode-card>
             <div class="card-title">Execution Mode</div>
-            <div class="card-value">${esc(modeInfo.label)}</div>
-            <div class="card-subtitle">${esc(modeInfo.desc)}</div>
+            <div class="card-value" data-policy-mode-value>${esc(modeInfo.label)}</div>
+            <div class="card-subtitle" data-policy-mode-desc>${esc(modeInfo.desc)}</div>
           </div>
           <div class="status-card accent">
             <div class="card-title">Allowlist Entries</div>
-            <div class="card-value">${totalItems}</div>
-            <div class="card-subtitle">${categories.map(c => `${policy.sandbox?.[c.key]?.length || 0} ${c.label.toLowerCase().replace('allowed ', '')}`).join(', ')}</div>
+            <div class="card-value" data-policy-total-items>${getTotalItems()}</div>
+            <div class="card-subtitle" data-policy-total-summary>${esc(getAllowlistSummary())}</div>
           </div>
         </div>
 
         <div class="policy-columns">
-          ${categories.map(cat => {
-            const items = policy.sandbox?.[cat.key] || [];
-            return `
-              <div class="table-container policy-category-card" data-category="${cat.key}">
-                <div class="table-header">
-                  <h3>${iconSvgs[cat.icon]} ${esc(cat.label)}</h3>
-                  <span class="badge badge-idle">${items.length}</span>
-                </div>
-                <div class="cfg-center-body">
-                  <p class="policy-hint">${esc(cat.hint)}</p>
-                  <div class="policy-add-row">
-                    <input type="text" class="policy-add-input" data-category="${cat.key}" placeholder="${esc(cat.placeholder)}">
-                    <button class="btn btn-primary btn-sm policy-add-btn" type="button" data-category="${cat.key}">Add</button>
-                  </div>
-                  <div class="policy-item-list" data-category="${cat.key}">
-                    ${items.length === 0
-                      ? '<div class="policy-empty">No entries yet</div>'
-                      : items.map(item => `
-                        <div class="policy-item" data-category="${cat.key}" data-item="${escAttr(item)}">
-                          <code>${esc(item)}</code>
-                          <button class="policy-item-remove" type="button" data-category="${cat.key}" data-item="${escAttr(item)}" title="Remove ${esc(item)}">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                          </button>
-                        </div>
-                      `).join('')}
-                  </div>
-                  <div class="policy-feedback" data-category="${cat.key}"></div>
-                </div>
-              </div>
-            `;
-          }).join('')}
+          ${categories.map(renderCategoryCard).join('')}
         </div>
       `;
-
-      // Wire add buttons and Enter key
-      panel.querySelectorAll('.policy-add-btn').forEach(btn => {
-        btn.addEventListener('click', () => addItem(btn.dataset.category));
-      });
-      panel.querySelectorAll('.policy-add-input').forEach(input => {
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') addItem(input.dataset.category); });
-      });
-
-      // Wire remove buttons
-      panel.querySelectorAll('.policy-item-remove').forEach(btn => {
-        btn.addEventListener('click', () => removeItem(btn.dataset.category, btn.dataset.item));
-      });
 
       applyInputTooltips(panel);
       enhanceSectionHelp(panel, CONFIG_HELP.toolsPolicy, createGenericHelpFactory('Configuration Security'));
       activateContextHelp(panel);
+    }
+
+    function syncOverview() {
+      const modeInfo = getModeInfo();
+      const modeCard = panel.querySelector('[data-policy-mode-card]');
+      const modeValue = panel.querySelector('[data-policy-mode-value]');
+      const modeDesc = panel.querySelector('[data-policy-mode-desc]');
+      const totalItems = panel.querySelector('[data-policy-total-items]');
+      const totalSummary = panel.querySelector('[data-policy-total-summary]');
+
+      if (modeCard instanceof HTMLElement) {
+        modeCard.className = `status-card ${modeInfo.tone}`;
+      }
+      if (modeValue) {
+        modeValue.textContent = modeInfo.label;
+      }
+      if (modeDesc) {
+        modeDesc.textContent = modeInfo.desc;
+      }
+      if (totalItems) {
+        totalItems.textContent = String(getTotalItems());
+      }
+      if (totalSummary) {
+        totalSummary.textContent = getAllowlistSummary();
+      }
+    }
+
+    function syncCategory(catKey) {
+      const items = getCategoryItems(catKey);
+      const card = panel.querySelector(`.policy-category-card[data-category="${catKey}"]`);
+      if (!(card instanceof HTMLElement)) {
+        return;
+      }
+      const badge = card.querySelector('[data-policy-count]');
+      const list = card.querySelector(`.policy-item-list[data-category="${catKey}"]`);
+      if (badge) {
+        badge.textContent = String(items.length);
+      }
+      if (list) {
+        list.innerHTML = renderPolicyItems(catKey);
+      }
+      syncOverview();
+    }
+
+    function setCategoryPending(catKey, pending) {
+      const addInput = panel.querySelector(`.policy-add-input[data-category="${catKey}"]`);
+      const addButton = panel.querySelector(`.policy-add-btn[data-category="${catKey}"]`);
+      if (addInput instanceof HTMLInputElement) {
+        addInput.disabled = pending;
+      }
+      if (addButton instanceof HTMLButtonElement) {
+        addButton.disabled = pending;
+      }
+      panel.querySelectorAll(`.policy-item-remove[data-category="${catKey}"]`).forEach((button) => {
+        if (button instanceof HTMLButtonElement) {
+          button.disabled = pending;
+        }
+      });
     }
 
     function feedback(catKey, message, tone = 'muted') {
@@ -2525,12 +2600,12 @@ async function renderPolicyTab(panel) {
 
     async function addItem(catKey) {
       const input = panel.querySelector(`.policy-add-input[data-category="${catKey}"]`);
-      if (!input) return;
+      if (!(input instanceof HTMLInputElement)) return;
       // Support comma-separated bulk add
       const values = input.value.split(',').map(v => v.trim()).filter(Boolean);
       if (values.length === 0) return;
 
-      const current = policy.sandbox?.[catKey] || [];
+      const current = getCategoryItems(catKey);
       const dupes = values.filter(v => current.includes(v));
       const newValues = values.filter(v => !current.includes(v));
 
@@ -2540,6 +2615,7 @@ async function renderPolicyTab(panel) {
       }
 
       const updated = [...current, ...newValues];
+      setCategoryPending(catKey, true);
       feedback(catKey, 'Saving...', 'muted');
       try {
         const result = await api.updateToolPolicy({ sandbox: { [catKey]: updated } });
@@ -2548,29 +2624,35 @@ async function renderPolicyTab(panel) {
           policy.sandbox[catKey] = updated;
           const added = newValues.length === 1 ? `Added "${newValues[0]}"` : `Added ${newValues.length} items`;
           const dupeNote = dupes.length > 0 ? ` (${dupes.length} duplicate${dupes.length > 1 ? 's' : ''} skipped)` : '';
-          render();
+          input.value = '';
+          syncCategory(catKey);
           feedback(catKey, added + dupeNote, 'success');
         } else {
           feedback(catKey, result.message || 'Failed to save.', 'error');
         }
       } catch (err) {
         feedback(catKey, err instanceof Error ? err.message : String(err), 'error');
+      } finally {
+        setCategoryPending(catKey, false);
+        input.focus();
       }
     }
 
     async function removeItem(catKey, item) {
-      const current = policy.sandbox?.[catKey] || [];
+      const current = getCategoryItems(catKey);
       const updated = current.filter(i => i !== item);
 
       // Optimistic UI: immediately fade the item
       const itemEl = panel.querySelector(`.policy-item[data-category="${catKey}"][data-item="${CSS.escape(item)}"]`);
       if (itemEl) itemEl.style.opacity = '0.4';
 
+      setCategoryPending(catKey, true);
       try {
         const result = await api.updateToolPolicy({ sandbox: { [catKey]: updated } });
         if (result.success !== false) {
+          if (!policy.sandbox) policy.sandbox = {};
           policy.sandbox[catKey] = updated;
-          render();
+          syncCategory(catKey);
           feedback(catKey, `Removed "${item}"`, 'success');
         } else {
           if (itemEl) itemEl.style.opacity = '1';
@@ -2579,10 +2661,37 @@ async function renderPolicyTab(panel) {
       } catch (err) {
         if (itemEl) itemEl.style.opacity = '1';
         feedback(catKey, err instanceof Error ? err.message : String(err), 'error');
+      } finally {
+        setCategoryPending(catKey, false);
       }
     }
 
-    render();
+    panel.addEventListener('click', async (event) => {
+      const addButton = event.target instanceof Element ? event.target.closest('.policy-add-btn') : null;
+      if (addButton instanceof HTMLButtonElement) {
+        await addItem(addButton.dataset.category);
+        return;
+      }
+
+      const removeButton = event.target instanceof Element ? event.target.closest('.policy-item-remove') : null;
+      if (removeButton instanceof HTMLButtonElement) {
+        await removeItem(removeButton.dataset.category, removeButton.dataset.item);
+      }
+    }, interactionSignal ? { signal: interactionSignal } : undefined);
+
+    panel.addEventListener('keydown', async (event) => {
+      if (event.key !== 'Enter') {
+        return;
+      }
+      const input = event.target instanceof HTMLInputElement ? event.target : null;
+      if (!input?.classList.contains('policy-add-input')) {
+        return;
+      }
+      event.preventDefault();
+      await addItem(input.dataset.category);
+    }, interactionSignal ? { signal: interactionSignal } : undefined);
+
+    renderShell();
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err.message || String(err))}</div>`;
   }

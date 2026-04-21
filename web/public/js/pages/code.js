@@ -3546,6 +3546,7 @@ function ensureSessionRefreshLoop() {
     try {
       const previousSignature = getSessionRenderSignature(activeSession);
       const previousActivitySignature = getSessionActivityRenderSignature(activeSession);
+      const previousRailSignature = getSessionRailRenderSignature(activeSession);
       const previousTreeSignature = getVisibleTreeSignature(activeSession);
       const session = await refreshSessionSnapshot(activeSession.id);
       if (!session) return;
@@ -3557,12 +3558,14 @@ function ensureSessionRefreshLoop() {
         await refreshSessionSandboxes(session, { rerender: false });
       }
       const activityChanged = getSessionActivityRenderSignature(session) !== previousActivitySignature;
+      const railChanged = getSessionRailRenderSignature(session) !== previousRailSignature;
       const requiresFullRerender = (
         getSessionRenderSignature(session) !== previousSignature
         || getVisibleTreeSignature(session) !== previousTreeSignature
-        || (activityChanged && codeState.activePanel === 'sessions')
       );
       if (requiresFullRerender) {
+        rerenderFromState();
+      } else if (railChanged && codeState.activePanel === 'sessions' && !refreshVisibleSessionRail()) {
         rerenderFromState();
       } else if (activityChanged && codeState.activePanel === 'activity' && !refreshVisibleAssistantPanel(session)) {
         rerenderFromState();
@@ -3834,18 +3837,11 @@ function restoreFocusState(container, state) {
 function getSessionRenderSignature(session) {
   if (!session) return '';
   return JSON.stringify({
-    title: session.title || '',
     workspaceRoot: session.workspaceRoot || '',
     resolvedRoot: session.resolvedRoot || '',
     currentDirectory: session.currentDirectory || '',
     selectedFilePath: session.selectedFilePath || '',
     showDiff: !!session.showDiff,
-    status: session.status || '',
-    expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
-    workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
-    workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
-    workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
-    workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
     terminalCollapsed: !!session.terminalCollapsed,
     terminalTabs: Array.isArray(session.terminalTabs)
       ? session.terminalTabs.map((tab) => ({
@@ -3912,9 +3908,43 @@ function getSessionActivityRenderSignature(session) {
             : null,
         }
       : null,
+    workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+    workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
+    workspaceTrustReview: normalizeWorkspaceTrustReview(session.workspaceTrustReview),
+    workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
+    workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
     focusSummary: session.focusSummary || '',
     planSummary: session.planSummary || '',
     compactedSummary: session.compactedSummary || '',
+  });
+}
+
+function getSessionRailRenderSignature(session) {
+  if (!session) return '';
+  const workflow = normalizeCodeSessionWorkflow(session.workflow);
+  const workspaceTrust = session.workspaceTrust || null;
+  return JSON.stringify({
+    title: session.title || '',
+    workspaceRoot: session.workspaceRoot || '',
+    approvalCount: Array.isArray(session.pendingApprovals) ? session.pendingApprovals.length : 0,
+    taskCount: getTaskBadgeCount(session),
+    checkCount: getCheckBadgeCount(session),
+    workflow: workflow
+      ? {
+          label: workflow.label || '',
+          status: workflow.status || '',
+          verificationState: workflow.verificationState || '',
+          isolationLevel: workflow.isolation?.level || '',
+          isolationBackendKind: workflow.isolation?.backendKind || '',
+        }
+      : null,
+    workspaceTrust: workspaceTrust
+      ? {
+          state: workspaceTrust.state || '',
+          effectiveState: getEffectiveWorkspaceTrustState(session) || '',
+          reviewActive: isWorkspaceTrustReviewActive(session),
+        }
+      : null,
   });
 }
 
@@ -5599,6 +5629,16 @@ function refreshVisibleAssistantPanel(session = getActiveSession()) {
   if (nextScroll) {
     nextScroll.scrollTop = previousScrollTop;
   }
+  return true;
+}
+
+function refreshVisibleSessionRail() {
+  if (!currentContainer || codeState.activePanel !== 'sessions') return false;
+  const list = currentContainer.querySelector('.code-rail__list');
+  if (!(list instanceof HTMLElement)) return false;
+  const previousScrollTop = list.scrollTop;
+  list.innerHTML = codeState.sessions.map((session) => renderSessionCard(session)).join('');
+  list.scrollTop = previousScrollTop;
   return true;
 }
 

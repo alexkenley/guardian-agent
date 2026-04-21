@@ -11,6 +11,8 @@ describe('response quality', () => {
   it('treats present-tense mutation narration as intermediate', () => {
     expect(isIntermediateStatusResponse('Creating the file at tmp/trace-smoke.md now.')).toBe(true);
     expect(isIntermediateStatusResponse('Searching the repo for the relevant files now.')).toBe(true);
+    expect(isIntermediateStatusResponse('Search result: 1 match found.\nAppending WEBUI_SEARCH_TEST_OK now.')).toBe(true);
+    expect(isIntermediateStatusResponse('Listing tmp/webui-remediation/search-many/ now.')).toBe(true);
   });
 
   it('does not mark completed result summaries as intermediate', () => {

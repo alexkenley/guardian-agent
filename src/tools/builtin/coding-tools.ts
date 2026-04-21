@@ -851,6 +851,16 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!context.codeSessionStore) {
         return { success: false, error: 'Code session store is not available.' };
       }
+      const explicitCurrentSession = context.getCurrentCodeSessionRecord(request);
+      if (explicitCurrentSession) {
+        return {
+          success: true,
+          output: {
+            session: context.summarizeCodeSession(explicitCurrentSession),
+            attached: true,
+          },
+        };
+      }
       let userId = request.userId?.trim();
       if (userId?.startsWith('code-session:') || userId?.startsWith('delegated-task:') || userId?.startsWith('sched-task:')) {
         userId = request.principalId?.trim() ?? userId;

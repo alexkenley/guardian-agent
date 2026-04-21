@@ -102,10 +102,10 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
         success: true,
         output: {
           path: safePath,
-          entries: entries.slice(0, 500).map((entry) => ({
-            name: entry.name,
-            type: entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other',
-          })),
+          entries: entries.slice(0, 500).map((entry) => {
+            const type = entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : 'other';
+            return `[${type}] ${entry.name}`;
+          }),
         },
       };
     },
@@ -275,7 +275,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
       const rawPath = requireString(args.path, 'path');
       const safePath = await context.resolveAllowedPath(rawPath, request);
       context.guardAction(request, 'read_file', { path: rawPath });
-      const maxBytes = Math.min(maxReadBytes, Math.max(256, asNumber(args.maxBytes, 64_000)));
+      const maxBytes = Math.min(maxReadBytes, Math.max(256, asNumber(args.maxBytes, 256_000)));
       const mimeType = inferMimeType(safePath);
 
       if (FS_READ_EXTRACTED_MIME_TYPES.has(mimeType)) {

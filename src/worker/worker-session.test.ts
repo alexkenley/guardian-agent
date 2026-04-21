@@ -423,6 +423,104 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.content).toBe('I could not safely inspect the quarantined raw content.');
   });
 
+  it('records compact fs_read definition previews in delegated execution events for large files', async () => {
+    let assistantCallCount = 0;
+    const largeFileContent = [
+      ...Array.from({ length: 55 }, (_value, index) => `const fillerHead${index} = ${index};`),
+      'private buildCodeSessionRegistrySection(input: WorkerMessageRequest): PromptAssemblyAdditionalSection | null {',
+      '  return null;',
+      '}',
+      ...Array.from({ length: 30 }, (_value, index) => `const fillerTail${index} = ${index};`),
+    ].join('\n');
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the requested source file.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+
+      assistantCallCount += 1;
+      if (assistantCallCount === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'call-large-read',
+            name: 'fs_read',
+            arguments: JSON.stringify({ path: 'src/supervisor/worker-manager.ts' }),
+          }],
+          model: 'test-model',
+          finishReason: 'tool_calls',
+        } satisfies ChatResponse;
+      }
+
+      return {
+        content: 'The helper is buildCodeSessionRegistrySection.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_read',
+        description: 'Read a file.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+        },
+        risk: 'read_only',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-large-read-1',
+        message: 'Read src/supervisor/worker-manager.ts.',
+        output: {
+          path: 'src/supervisor/worker-manager.ts',
+          content: largeFileContent,
+        },
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-large-read-trace',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Open src/supervisor/worker-manager.ts and tell me the helper that builds the code session registry section.',
+        timestamp: Date.now(),
+      },
+    });
+
+    const executionEvents = result.metadata?.executionEvents as Array<{
+      type: string;
+      payload?: { traceResultPreview?: string };
+    }> | undefined;
+    const completedReadEvent = executionEvents?.find((event) => event.type === 'tool_call_completed');
+
+    expect(completedReadEvent?.payload?.traceResultPreview).toContain('definitions');
+    expect(completedReadEvent?.payload?.traceResultPreview).toContain('private buildCodeSessionRegistrySection');
+  });
+
   it('resumes suspended approval-backed runs through structured continuation metadata without reclassifying the turn', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

@@ -75,6 +75,18 @@ describe('request-patterns', () => {
     expect(isExplicitWorkspaceScopedRepoWorkRequest(
       'Inspect the Guardian workspace and tell me what matters most.',
     )).toBe(false);
+    expect(isExplicitWorkspaceScopedRepoWorkRequest(
+      'Search the workspace for SPECIAL_INDEXED_MATCH. Tell me the highest-numbered matching file, then append WEBUI_SEARCH_TEST_OK to that file.',
+    )).toBe(false);
+  });
+
+  it('does not treat generic workspace file operations as repo inspection', () => {
+    expect(isExplicitRepoInspectionRequest(
+      'Search the workspace for SPECIAL_INDEXED_MATCH. Tell me the highest-numbered matching file, then append WEBUI_SEARCH_TEST_OK to that file.',
+    )).toBe(false);
+    expect(isExplicitRepoInspectionRequest(
+      'List tmp/webui-remediation/search-many, tell me the last five filenames in sorted order, then rename the last file to note-50-renamed.txt.',
+    )).toBe(false);
   });
 
   it('recognizes requests that explicitly refer back to the chat transcript', () => {

@@ -93,7 +93,7 @@ const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|n
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const TOOL_TRACE_PREVIEW_MAX_CHARS = 12_000;
-const TOOL_TRACE_PREVIEW_TOOL_NAMES = new Set(['fs_list', 'fs_search', 'code_symbol_search']);
+const TOOL_TRACE_PREVIEW_TOOL_NAMES = new Set(['fs_list', 'fs_read', 'fs_search', 'code_symbol_search']);
 const PLANNER_TOOL_ALIASES = new Map<string, string>([
   ['fs_readfile', 'fs_read'],
   ['fs_writefile', 'fs_write'],
@@ -375,10 +375,14 @@ function buildToolTracePreview(toolName: string, result: Record<string, unknown>
   if (!result || !TOOL_TRACE_PREVIEW_TOOL_NAMES.has(toolName)) {
     return undefined;
   }
+  const formatted = formatToolResultForLLM(toolName, result);
+  if (formatted.trim()) {
+    return truncateToolTracePreview(formatted);
+  }
   try {
     return truncateToolTracePreview(JSON.stringify(result));
   } catch {
-    return truncateToolTracePreview(formatToolResultForLLM(toolName, result));
+    return undefined;
   }
 }
 
@@ -414,6 +418,9 @@ function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
   const traceResultPreview = event.phase === 'completed'
     ? buildToolTracePreview(event.toolCall.name, event.result)
     : undefined;
+  const rawOutput = event.phase === 'completed' && event.result && 'output' in event.result
+    ? JSON.stringify(event.result.output)
+    : undefined;
   return {
     eventId: `${event.toolCall.id}:${event.phase}`,
     nodeId: event.toolCall.id,
@@ -425,6 +432,7 @@ function buildToolExecutionEvent(event: LlmLoopToolEvent): ExecutionEvent {
       args: event.args,
       ...(event.result ? { resultStatus: event.result.status, resultMessage: event.result.message } : {}),
       ...(traceResultPreview ? { traceResultPreview } : {}),
+      ...(rawOutput ? { rawOutput } : {}),
       ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
     },
   };
