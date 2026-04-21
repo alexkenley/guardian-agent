@@ -390,8 +390,8 @@ function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMes
   if (errorMessage) return 'failed';
   const status = typeof result?.status === 'string' ? result.status.trim().toLowerCase() : '';
   if (status === 'pending_approval') return 'pending_approval';
-  if (status === 'denied' || status === 'failed' || status === 'error') return 'failed';
-  if (status === 'blocked') return 'blocked';
+  if (status === 'denied' || status === 'blocked') return 'blocked';
+  if (status === 'failed' || status === 'error') return 'failed';
   if (result?.success === false) return 'failed';
   return 'succeeded';
 }

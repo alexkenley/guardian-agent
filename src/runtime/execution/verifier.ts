@@ -149,7 +149,7 @@ export function verifyDelegatedResult(input: {
       };
     case 'tool_execution':
       if (successfulExecutionReceipts.length <= 0) {
-        if (blockerReceipts.length > 0 && answer) {
+        if (blockerReceipts.length > 0) {
           return {
             decision: 'blocked',
             reasons: ['Delegated worker encountered a real blocker while executing the requested command or verification step.'],
@@ -196,7 +196,7 @@ export function verifyDelegatedResult(input: {
       };
     case 'security_analysis':
       if (successfulExecutionReceipts.length <= 0) {
-        if (blockerReceipts.length > 0 && answer) {
+        if (blockerReceipts.length > 0) {
           return {
             decision: 'blocked',
             reasons: ['Delegated worker encountered a real blocker while collecting security evidence.'],
@@ -238,7 +238,7 @@ export function verifyDelegatedResult(input: {
     case 'repo_inspection':
     default:
       if (successfulExecutionReceipts.length <= 0) {
-        if (blockerReceipts.length > 0 && answer) {
+        if (blockerReceipts.length > 0) {
           return {
             decision: 'blocked',
             reasons: ['Delegated worker encountered a real blocker while collecting repo evidence.'],
