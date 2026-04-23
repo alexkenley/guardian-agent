@@ -533,6 +533,19 @@ const MODIFIER_CLAUSE_LEADERS = [
   'ensure ',
   'make sure ',
   'please ',
+  'and cite ',
+  'and name ',
+  'and list ',
+  'and show ',
+  'and identify ',
+];
+
+const READONLY_CLAUSE_PATTERNS = [
+  /\bdo\s+not\s+edit\b/i,
+  /\bdon'?t\s+edit\b/i,
+  /\bread[\s-]*only\b/i,
+  /\bwithout\s+(?:editing|modifications?|changes?|writes?)\b/i,
+  /\bno\s+(?:editing|modifications?|changes?|writes?)\b/i,
 ];
 
 function isModifierClause(clause: string): boolean {
@@ -541,7 +554,27 @@ function isModifierClause(clause: string): boolean {
   return MODIFIER_CLAUSE_LEADERS.some((leader) => lower.startsWith(leader));
 }
 
-function splitSequentialRequestClauses(sourceContent: string): string[] {
+function isReadonlyModifierClause(clause: string): boolean {
+  const trimmed = clause.trim();
+  if (!trimmed) return false;
+  return READONLY_CLAUSE_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+function isAnswerConstraintClause(clause: string): boolean {
+  const lower = clause.trim().toLowerCase();
+  if (!lower) return false;
+  // "Cite exact file names and symbol names" → modifier that should be a constraint, not a step
+  if (/\b(cite|name|list|identify|show)\s+.*\b(file|files|symbol|function|type|class|interface)\b/i.test(lower)) {
+    return true;
+  }
+  // "Do not edit anything" and similar readonly patterns → constraint, not a step
+  if (isReadonlyModifierClause(clause)) {
+    return true;
+  }
+  return false;
+}
+
+export function splitSequentialRequestClauses(sourceContent: string): string[] {
   const normalized = sourceContent
     .replace(/\r\n/g, '\n')
     .replace(/\b(?:then|next|after that|finally)\b[:,]?\s+/gi, '\n')
@@ -554,7 +587,18 @@ function splitSequentialRequestClauses(sourceContent: string): string[] {
 
   const merged: string[] = [];
   for (const clause of rawClauses) {
+    // Readonly modifiers like "Do not edit anything" are answer constraints, not steps.
+    // Drop them from the plan entirely — they'll be captured in answerConstraints.
+    if (isReadonlyModifierClause(clause)) {
+      continue;
+    }
     if (merged.length > 0 && isModifierClause(clause)) {
+      merged[merged.length - 1] = `${merged[merged.length - 1]} ${clause}`.trim();
+      continue;
+    }
+    // Answer constraint clauses like "Cite exact file names and symbol names" modify
+    // the answer step rather than being a standalone step. Merge them into the prior clause.
+    if (merged.length > 0 && isAnswerConstraintClause(clause)) {
       merged[merged.length - 1] = `${merged[merged.length - 1]} ${clause}`.trim();
       continue;
     }

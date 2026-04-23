@@ -364,6 +364,48 @@ describe('IntentGateway', () => {
     ]);
   });
 
+  it('keeps exact-file repo inspection modifiers inside the synthesized answer contract on fallback paths', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Inspect this repo and tell me which files and functions or types now define the delegated worker completion contract. Cite exact file names and symbol names. Do not edit anything.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: 'I am not sure.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.requireExactFileReferences).toBe(true);
+    expect(result.decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'search',
+        summary: 'Inspect the relevant repo files and collect grounded repo evidence.',
+        required: true,
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        summary: 'Answer with exact file names, file paths, and symbol names grounded in the repo evidence.',
+        required: true,
+        dependsOn: ['step_1'],
+      }),
+    ]);
+  });
+
   it('uses the request preview for unstructured recovery summaries and keeps recovery diagnostics out of client metadata', async () => {
     const gateway = new IntentGateway();
     const request = 'Use the external path C:\\tmp\\manual-check.txt.';

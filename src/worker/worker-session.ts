@@ -73,6 +73,7 @@ import type {
   EvidenceReceipt,
   ExecutionEvent,
   Interruption,
+  PlannedStep,
   ProviderSelectionSnapshot,
   StepReceipt,
   WorkerRunStatus,
@@ -108,6 +109,14 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const TOOL_TRACE_PREVIEW_MAX_CHARS = 12_000;
 const TOOL_TRACE_PREVIEW_TOOL_NAMES = new Set(['fs_list', 'fs_read', 'fs_search', 'code_symbol_search']);
+const PLANNED_STEP_KINDS = new Set<PlannedStep['kind']>([
+  'tool_call',
+  'write',
+  'read',
+  'search',
+  'memory_save',
+  'answer',
+]);
 const PLANNER_TOOL_ALIASES = new Map<string, string>([
   ['fs_readfile', 'fs_read'],
   ['fs_writefile', 'fs_write'],
@@ -414,6 +423,25 @@ function shouldUseDelegatedAnswerFirstLane(input: {
   return input.selectedExecutionProfile?.preferredAnswerPath === 'direct';
 }
 
+function appendSystemGuidance(
+  llmMessages: ChatMessage[],
+  guidance: string | null | undefined,
+): void {
+  const normalized = guidance?.trim();
+  if (!normalized) {
+    return;
+  }
+  const firstMsg = llmMessages[0];
+  if (firstMsg?.role === 'system') {
+    firstMsg.content += `\n\n${normalized}`;
+  } else {
+    llmMessages.unshift({
+      role: 'system',
+      content: normalized,
+    });
+  }
+}
+
 function buildDelegatedAnswerFirstCorrectionPrompt(
   taskContract: DelegatedTaskContract,
   allowDelegatedAnswerFirst: boolean,
@@ -536,12 +564,73 @@ function buildExactFileReferenceGuidance(taskContract: DelegatedTaskContract): s
   if (taskContract.requireExactFileReferences !== true) {
     return null;
   }
-  return [
+  const constraints = taskContract.answerConstraints;
+  const lines: string[] = [
     'Exact file reference contract:',
     'Only read or cite paths that came from successful fs_search/fs_list/code_symbol_search results or successful fs_read results.',
+    'Start from the repo or workspace root unless the user explicitly named a narrower path or a prior successful search result justifies narrowing the scope.',
+    'Treat tests, harnesses, examples, and prompt-echo matches as leads only unless the request explicitly asks for tests or harness behavior.',
+    'If the first search results are empty, too broad, or mostly echo the prompt or point at tests, broaden back to the repo root and try adjacent implementation terms before ending the turn.',
+    'Do not assume a subdirectory is authoritative just because the request mentions "worker", "timeline", "contract", or similar terms; verify the implementation files from actual search results first.',
+    'For exact-file repo inspections, search and symbol results are only leads; read the actual implementation files with fs_read or fs_list before answering.',
+    'When the user asks where behavior is implemented, prefer non-test source files that contain the implementation logic, not files that only import, test, document, or quote that behavior.',
     'Do not invent filenames or sibling paths after an ENOENT or a failed read/list call.',
     'If a guessed path fails, go back to the successful search/list results and narrow using the exact returned relativePath values.',
     'Before the final answer, make sure the exact file paths you name match the paths backed by successful tool receipts.',
+  ];
+
+  if (constraints) {
+    lines.push('');
+    lines.push('Answer quality requirements:');
+    if (constraints.requiresImplementationFiles) {
+      lines.push('- You MUST identify and read the actual implementation files, not just files that match the search query. After searching, use fs_read on the most likely implementation files before answering.');
+      lines.push('- Search broadly first (e.g., across src/runtime, src/worker, src/supervisor) then narrow by reading the most promising files. Do not stop at the first search result.');
+      lines.push('- An implementation file is one that contains the primary logic for the requested functionality — not a test, not a type-only re-export, not a helper that merely imports the real implementation.');
+    }
+    if (constraints.requiresSymbolNames) {
+      lines.push('- You MUST include the exact function names, type names, or symbol names that implement the requested functionality. Use backtick formatting for code identifiers like `functionName` or `TypeName`.');
+    }
+    if (constraints.readonly) {
+      lines.push('- This is a read-only inspection. Do not write, create, or modify any files.');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): string | null {
+  const requiredSteps = taskContract.plan.steps.filter((step) => step.required !== false);
+  if (requiredSteps.length <= 0) {
+    return null;
+  }
+  const stepLines = requiredSteps.map((step) => {
+    const dependencySummary = step.dependsOn?.length
+      ? ` (depends on ${step.dependsOn.join(', ')})`
+      : '';
+    const toolSummary = step.expectedToolCategories?.length
+      ? ` [preferred tools: ${step.expectedToolCategories.join(', ')}]`
+      : '';
+    return `- ${step.stepId} [${step.kind}]${dependencySummary}: ${step.summary}${toolSummary}`;
+  });
+  const answerSteps = requiredSteps.filter((step) => step.kind === 'answer');
+  return [
+    'Delegated task contract:',
+    `kind: ${taskContract.kind}`,
+    ...(taskContract.route ? [`route: ${taskContract.route}`] : []),
+    ...(taskContract.operation ? [`operation: ${taskContract.operation}`] : []),
+    'Required planned steps:',
+    ...stepLines,
+    'Complete every required planned step before ending the turn.',
+    ...(requiredSteps.some((step) => (step.expectedToolCategories?.length ?? 0) > 0)
+      ? ['A tool call only satisfies a planned step when it matches that step\'s expected tool categories.']
+      : []),
+    ...(answerSteps.length > 0
+      ? [
+          'Required final answer criteria:',
+          ...answerSteps.map((step) => `- ${step.stepId}: ${step.summary}`),
+          'Do not treat the run as complete until the final answer satisfies every required answer step above.',
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -650,16 +739,24 @@ function buildClaimsFromReceipts(
   taskContract: DelegatedTaskContract,
 ): Claim[] {
   const claims: Claim[] = [];
+  const isRepoInspection = taskContract.kind === 'repo_inspection' || taskContract.kind === 'security_analysis';
   for (const receipt of receipts) {
     if (receipt.refs.length > 0) {
       for (const ref of receipt.refs) {
+        // For repo_inspection contracts, classify fs_read receipts as
+        // implementation_file claims (the worker read these files to answer
+        // the question) vs fs_search/fs_list receipts as file_reference claims
+        // (these are search hits).
+        const isImplementationRead = isRepoInspection
+          && receipt.toolName === 'fs_read'
+          && receipt.status === 'succeeded';
         claims.push({
           claimId: `${receipt.receiptId}:file:${ref}`,
-          kind: 'file_reference',
+          kind: isImplementationRead ? 'implementation_file' : 'file_reference',
           subject: ref,
           value: ref,
           evidenceReceiptIds: [receipt.receiptId],
-          confidence: 0.8,
+          confidence: isImplementationRead ? 0.9 : 0.8,
         });
       }
     }
@@ -719,8 +816,59 @@ function buildDelegatedClaims(
       evidenceReceiptIds: [input.answerReceiptId],
       confidence: 1,
     });
+    // When the contract requires symbol names, extract referenced symbol names
+    // from the final answer and create symbol_reference claims.
+    const symbolConstraint = input.taskContract.answerConstraints?.requiresSymbolNames;
+    if (symbolConstraint && input.finalUserAnswer.trim()) {
+      const symbolNames = extractSymbolNamesFromAnswer(input.finalUserAnswer);
+      for (const symbolName of symbolNames) {
+        claims.push({
+          claimId: `${input.answerReceiptId}:symbol:${symbolName}`,
+          kind: 'symbol_reference',
+          subject: symbolName,
+          value: symbolName,
+          evidenceReceiptIds: [input.answerReceiptId],
+          confidence: 0.85,
+        });
+      }
+    }
   }
   return claims;
+}
+
+const CODE_SYMBOL_PATTERN = /`([^`]+)`/g;
+// Matches PascalCase or camelCase identifiers that look like code symbols.
+// Requires at least one lowercase letter (to filter out acronyms like 'AI', 'URL')
+// and at least one uppercase/camelCase transition (to look like a real type/function name).
+const TYPE_REFERENCE_PATTERN = /\b([A-Z][a-zA-Z0-9_]*[a-z][a-zA-Z0-9_]*)\b/g;
+
+const COMMON_ENGLISH_WORDS = new Set([
+  'The', 'This', 'That', 'These', 'Those', 'There', 'Then', 'They', 'Their',
+  'For', 'And', 'But', 'Not', 'You', 'Are', 'Has', 'Can', 'Will', 'With',
+  'From', 'Into', 'When', 'What', 'Which', 'Where', 'How', 'Why',
+]);
+
+function extractSymbolNamesFromAnswer(answer: string): string[] {
+  const symbols = new Set<string>();
+
+  // Extract backtick-quoted symbols: `DelegatedTaskContract`, `buildClaims`
+  const backtickMatches = answer.matchAll(CODE_SYMBOL_PATTERN);
+  for (const match of backtickMatches) {
+    if (match[1] && match[1].length >= 2) {
+      symbols.add(match[1]);
+    }
+  }
+
+  // Extract PascalCase or camelCase identifiers that look like type/function names
+  const typeMatches = answer.matchAll(TYPE_REFERENCE_PATTERN);
+  for (const match of typeMatches) {
+    const candidate = match[1];
+    if (candidate && candidate.length >= 3 && !COMMON_ENGLISH_WORDS.has(candidate)) {
+      symbols.add(candidate);
+    }
+  }
+
+  return [...symbols];
 }
 
 function buildClaimEvents(
@@ -767,6 +915,46 @@ function resolveToolStepId(
     previouslyMatchedStepIds: matchedStepIds,
   });
   return matched;
+}
+
+function chooseSyntheticCarryForwardToolName(step: PlannedStep): string {
+  const explicitToolName = step.expectedToolCategories?.find((value) => !PLANNED_STEP_KINDS.has(value as PlannedStep['kind']));
+  if (explicitToolName) {
+    return explicitToolName;
+  }
+  switch (step.kind) {
+    case 'search':
+      return 'fs_search';
+    case 'read':
+      return 'fs_read';
+    case 'write':
+      return 'fs_write';
+    case 'memory_save':
+      return 'memory_save';
+    case 'tool_call':
+      return step.expectedToolCategories?.[0] || 'find_tools';
+    case 'answer':
+      return 'find_tools';
+  }
+}
+
+function buildSyntheticCarryForwardReceipt(
+  step: PlannedStep | undefined,
+  receipt: StepReceipt,
+): EvidenceReceipt | null {
+  if (!step || step.kind === 'answer') {
+    return null;
+  }
+  return {
+    receiptId: `prior:${receipt.stepId}`,
+    sourceType: 'tool_call',
+    toolName: chooseSyntheticCarryForwardToolName(step),
+    status: 'succeeded',
+    refs: [],
+    summary: receipt.summary,
+    startedAt: receipt.startedAt,
+    endedAt: receipt.endedAt,
+  };
 }
 
 function buildDelegatedResultEnvelope(input: {
@@ -2317,26 +2505,25 @@ export class BrokeredWorkerSession {
       buildAnswerFirstSkillCorrectionPrompt(params.activeSkills, answerFirstOriginalRequest),
     );
     const workerLoopBudget = deriveWorkerLoopBudget(taskContract, selectedExecutionProfile);
+    appendSystemGuidance(llmMessages, buildDelegatedTaskPlanGuidance(taskContract));
 
+    const priorStepById = new Map(taskContract.plan.steps.map((step) => [step.stepId, step]));
     const priorSatisfiedStepReceipts = filterDependencySatisfiedStepReceipts(
       taskContract.plan,
       (params.priorSatisfiedStepReceipts ?? [])
         .filter((receipt) => receipt.status === 'satisfied'),
-    );
+    ).filter((receipt) => priorStepById.get(receipt.stepId)?.kind !== 'answer');
     for (const receipt of priorSatisfiedStepReceipts) {
       matchedStepIds.add(receipt.stepId);
-      const syntheticReceiptId = `prior:${receipt.stepId}`;
-      evidenceReceipts.set(syntheticReceiptId, {
-        receiptId: syntheticReceiptId,
-        sourceType: 'tool_call',
-        toolName: 'prior_attempt',
-        status: 'succeeded',
-        refs: [],
-        summary: receipt.summary,
-        startedAt: receipt.startedAt,
-        endedAt: receipt.endedAt,
-      } satisfies EvidenceReceipt);
-      toolReceiptStepIds.set(syntheticReceiptId, receipt.stepId);
+      const syntheticReceipt = buildSyntheticCarryForwardReceipt(
+        priorStepById.get(receipt.stepId),
+        receipt,
+      );
+      if (!syntheticReceipt) {
+        continue;
+      }
+      evidenceReceipts.set(syntheticReceipt.receiptId, syntheticReceipt);
+      toolReceiptStepIds.set(syntheticReceipt.receiptId, receipt.stepId);
     }
     if (priorSatisfiedStepReceipts.length > 0) {
       const satisfiedLines = priorSatisfiedStepReceipts
@@ -2349,29 +2536,10 @@ export class BrokeredWorkerSession {
         satisfiedLines,
         'Only execute the remaining unsatisfied steps in this attempt.',
       ].join('\n');
-      
-      const firstMsg = llmMessages[0];
-      if (firstMsg?.role === 'system') {
-        firstMsg.content += retryContext;
-      } else {
-        llmMessages.unshift({
-          role: 'system',
-          content: retryContext.trim(),
-        });
-      }
+
+      appendSystemGuidance(llmMessages, retryContext);
     }
-    const exactFileReferenceGuidance = buildExactFileReferenceGuidance(taskContract);
-    if (exactFileReferenceGuidance) {
-      const firstMsg = llmMessages[0];
-      if (firstMsg?.role === 'system') {
-        firstMsg.content += `\n\n${exactFileReferenceGuidance}`;
-      } else {
-        llmMessages.unshift({
-          role: 'system',
-          content: exactFileReferenceGuidance,
-        });
-      }
-    }
+    appendSystemGuidance(llmMessages, buildExactFileReferenceGuidance(taskContract));
     const recordDelegatedToolEvent = (event: LlmLoopToolEvent): void => {
       const resolvedStepId = resolveToolStepId(event, taskContract, toolCallStepIds, matchedStepIds);
       const enrichedEvent = resolvedStepId ? { ...event, stepId: resolvedStepId } : event;

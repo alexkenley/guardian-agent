@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { INTENT_GATEWAY_MISSING_SUMMARY } from '../intent/summary.js';
 import type {
+  AnswerConstraints,
+  Claim,
   DelegatedResultEnvelope,
   DelegatedTaskContract,
   EvidenceReceipt,
@@ -119,6 +122,43 @@ function buildEnvelope(input?: {
 }
 
 describe('verifyDelegatedResult', () => {
+  it('falls back to resolvedContent when the gateway summary is only a placeholder', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'medium',
+      operation: 'inspect',
+      summary: INTENT_GATEWAY_MISSING_SUMMARY,
+      resolvedContent: 'Inspect this repo and tell me which files define the delegated worker completion contract.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the repo for relevant files.', required: true },
+        { kind: 'answer', summary: 'Answer the request directly.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.summary).toBe(
+      'Inspect this repo and tell me which files define the delegated worker completion contract.',
+    );
+    expect(taskContract.plan.steps).toMatchObject([
+      { kind: 'search', summary: 'Search the repo for relevant files.' },
+      { kind: 'read', summary: 'Read the specific implementation files needed to ground the exact file references.' },
+      {
+        kind: 'answer',
+        summary: 'Inspect this repo and tell me which files define the delegated worker completion contract. Cite the specific implementation files, not just files that were read during search.',
+      },
+    ]);
+  });
+
   it('injects a read step for exact-file repo inspections before the final answer step', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'coding_task',
@@ -145,7 +185,11 @@ describe('verifyDelegatedResult', () => {
     expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['search', 'read', 'answer']);
     expect(taskContract.plan.steps[1]).toMatchObject({
       kind: 'read',
-      expectedToolCategories: ['fs_read', 'fs_list', 'code_symbol_search'],
+      expectedToolCategories: ['fs_read', 'fs_list'],
+    });
+    expect(taskContract.plan.steps[2]).toMatchObject({
+      kind: 'answer',
+      dependsOn: ['step_1', 'step_2'],
     });
   });
 
@@ -199,6 +243,147 @@ describe('verifyDelegatedResult', () => {
             summary: 'The files are src/support/workerProgress.ts and src/timeline/renderTimeline.ts.',
             startedAt: 3,
             endedAt: 4,
+          },
+        ],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      unsatisfiedStepIds: ['step_2', 'step_3'],
+    });
+    expect(decision.requiredNextAction).toContain('step_2');
+    expect(decision.requiredNextAction).toContain('step_3');
+  });
+
+  it('does not let fs_search satisfy the exact-file read step after the search step is already matched', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect the repository and return the exact files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the repo for candidate files.', required: true },
+        { kind: 'answer', summary: 'Answer with the exact grounded files.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+
+    const matchedStepId = matchPlannedStepForTool({
+      plannedTask: taskContract.plan,
+      toolName: 'fs_search',
+      args: {
+        path: 'S:\\Development\\GuardianAgent',
+        query: 'delegated worker progress',
+      },
+      previouslyMatchedStepIds: new Set(['step_1']),
+    });
+
+    expect(matchedStepId).toBe('step_1');
+  });
+
+  it('ignores an incompatible hinted step id and falls back to the matching planned step', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect the repository and return the exact files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the repo for candidate files.', required: true },
+        { kind: 'answer', summary: 'Answer with the exact grounded files.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+
+    const matchedSearchStep = matchPlannedStepForTool({
+      hintStepId: 'step_2',
+      plannedTask: taskContract.plan,
+      toolName: 'fs_search',
+      args: {
+        path: 'S:\\Development\\GuardianAgent',
+        query: 'delegated worker progress',
+      },
+    });
+
+    expect(matchedSearchStep).toBe('step_1');
+  });
+
+  it('keeps the exact-file read step unsatisfied when the worker only collected search receipts', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect the repository and return the exact files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the repo for candidate files.', required: true },
+        { kind: 'answer', summary: 'Answer with the exact grounded files.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        evidenceReceipts: [{
+          receiptId: 'receipt-search-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_search',
+          status: 'succeeded',
+          refs: [
+            'src/runtime/intent/route-classifier.ts',
+            'src/runtime/intent/structured-recovery.ts',
+          ],
+          summary: 'Search found candidate files.',
+          startedAt: 1,
+          endedAt: 2,
+        }],
+        claims: [
+          {
+            claimId: 'claim-file-1',
+            kind: 'file_reference',
+            subject: 'src/runtime/intent/route-classifier.ts',
+            value: 'src/runtime/intent/route-classifier.ts',
+            evidenceReceiptIds: ['receipt-search-1'],
+            confidence: 0.8,
+          },
+          {
+            claimId: 'claim-file-2',
+            kind: 'file_reference',
+            subject: 'src/runtime/intent/structured-recovery.ts',
+            value: 'src/runtime/intent/structured-recovery.ts',
+            evidenceReceiptIds: ['receipt-search-1'],
+            confidence: 0.8,
           },
         ],
       }),
@@ -465,5 +650,287 @@ describe('verifyDelegatedResult', () => {
       unsatisfiedStepIds: ['step_1'],
     });
     expect(decision.reasons[0]).toContain('Remote sandbox command failed on Daytona Main');
+  });
+
+  describe('repo inspection answer constraints', () => {
+    it('rejects repo-inspection answers that cite search-hit files but no implementation files', () => {
+      const taskContract = buildRepoInspectionTaskContract({
+        requireExactFileReferences: true,
+        answerConstraints: {
+          requiresImplementationFiles: true,
+          requiresSymbolNames: true,
+        },
+        summary: 'Inspect this repo and tell me which files and functions define the delegated worker completion contract.',
+      });
+      // Only file_reference claims, no implementation_file claims
+      const decision = verifyDelegatedResult({
+        envelope: buildEnvelope({
+          taskContract,
+          runStatus: 'completed',
+          finalUserAnswer: 'The relevant files are in src/runtime/execution/ and src/worker/.',
+          operatorSummary: 'The relevant files are in src/runtime/execution/ and src/worker/.',
+          stepReceipts: taskContract.plan.steps.map((step, index) => ({
+            stepId: step.stepId,
+            status: 'satisfied' as const,
+            evidenceReceiptIds: index === 2 ? ['receipt-1'] : [],
+            summary: step.summary,
+            startedAt: index + 1,
+            endedAt: index + 2,
+          })),
+          evidenceReceipts: [{
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/'],
+            summary: 'Searched for relevant files',
+            startedAt: 1,
+            endedAt: 2,
+          }],
+          claims: [{
+            claimId: 'claim-search-1',
+            kind: 'file_reference',
+            subject: 'src/runtime/execution/',
+            value: 'src/runtime/execution/',
+            evidenceReceiptIds: ['receipt-1'],
+            confidence: 0.8,
+          }],
+        }),
+      });
+
+      expect(decision).toMatchObject({
+        decision: 'insufficient',
+        missingEvidenceKinds: expect.arrayContaining(['implementation_file_claim']),
+      });
+    });
+
+    it('accepts repo-inspection answers with implementation_file claims', () => {
+      const taskContract = buildRepoInspectionTaskContract({
+        requireExactFileReferences: true,
+        answerConstraints: {
+          requiresImplementationFiles: true,
+        },
+        summary: 'Inspect this repo and tell me which files define the delegated worker completion contract.',
+      });
+      const decision = verifyDelegatedResult({
+        envelope: buildEnvelope({
+          taskContract,
+          runStatus: 'completed',
+          finalUserAnswer: 'The delegated worker completion contract is defined in `src/runtime/execution/types.ts` with `DelegatedTaskContract` and `DelegatedResultEnvelope`.',
+          operatorSummary: 'The delegated worker completion contract is defined in src/runtime/execution/types.ts',
+          stepReceipts: taskContract.plan.steps.map((step, index) => ({
+            stepId: step.stepId,
+            status: 'satisfied' as const,
+            evidenceReceiptIds: index === 2 ? ['receipt-1'] : [],
+            summary: step.summary,
+            startedAt: index + 1,
+            endedAt: index + 2,
+          })),
+          evidenceReceipts: [{
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/types.ts'],
+            summary: 'Read src/runtime/execution/types.ts',
+            startedAt: 1,
+            endedAt: 2,
+          }],
+          claims: [{
+            claimId: 'claim-impl-1',
+            kind: 'implementation_file',
+            subject: 'src/runtime/execution/types.ts',
+            value: 'src/runtime/execution/types.ts',
+            evidenceReceiptIds: ['receipt-1'],
+            confidence: 0.9,
+          }],
+        }),
+      });
+
+      expect(decision).toMatchObject({
+        decision: 'satisfied',
+        retryable: false,
+      });
+    });
+
+    it('rejects answers that lack symbol names when requiresSymbolNames is set', () => {
+      const taskContract = buildRepoInspectionTaskContract({
+        requireExactFileReferences: true,
+        answerConstraints: {
+          requiresImplementationFiles: true,
+          requiresSymbolNames: true,
+        },
+        summary: 'Which files and functions implement the verifier?',
+      });
+      const decision = verifyDelegatedResult({
+        envelope: buildEnvelope({
+          taskContract,
+          runStatus: 'completed',
+          finalUserAnswer: 'The relevant files are src/runtime/execution/verifier.ts.',
+          operatorSummary: 'The relevant files are src/runtime/execution/verifier.ts.',
+          stepReceipts: taskContract.plan.steps.map((step, index) => ({
+            stepId: step.stepId,
+            status: 'satisfied' as const,
+            evidenceReceiptIds: index === 2 ? ['receipt-1'] : [],
+            summary: step.summary,
+            startedAt: index + 1,
+            endedAt: index + 2,
+          })),
+          evidenceReceipts: [{
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/verifier.ts'],
+            summary: 'Read src/runtime/execution/verifier.ts',
+            startedAt: 1,
+            endedAt: 2,
+          }],
+          claims: [{
+            claimId: 'claim-impl-1',
+            kind: 'implementation_file',
+            subject: 'src/runtime/execution/verifier.ts',
+            value: 'src/runtime/execution/verifier.ts',
+            evidenceReceiptIds: ['receipt-1'],
+            confidence: 0.9,
+          }],
+        }),
+      });
+
+      // The answer doesn't include any symbol names (no PascalCase or backtick-quoted)
+      // and there are no symbol_reference claims
+      expect(decision).toMatchObject({
+        decision: 'insufficient',
+        missingEvidenceKinds: expect.arrayContaining(['symbol_reference_claim']),
+      });
+    });
+
+    it('accepts answers with symbol_reference claims when requiresSymbolNames is set', () => {
+      const taskContract = buildRepoInspectionTaskContract({
+        requireExactFileReferences: true,
+        answerConstraints: {
+          requiresImplementationFiles: true,
+          requiresSymbolNames: true,
+        },
+        summary: 'Which files and functions implement the verifier?',
+      });
+      const decision = verifyDelegatedResult({
+        envelope: buildEnvelope({
+          taskContract,
+          runStatus: 'completed',
+          finalUserAnswer: 'The verifier is implemented in `src/runtime/execution/verifier.ts` with `verifyDelegatedResult` and `verifyExactFileReferenceRequirements`.',
+          operatorSummary: 'The verifier is implemented in src/runtime/execution/verifier.ts',
+          stepReceipts: taskContract.plan.steps.map((step, index) => ({
+            stepId: step.stepId,
+            status: 'satisfied' as const,
+            evidenceReceiptIds: index === 2 ? ['receipt-1', 'answer:1'] : [],
+            summary: step.summary,
+            startedAt: index + 1,
+            endedAt: index + 2,
+          })),
+          evidenceReceipts: [{
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/verifier.ts'],
+            summary: 'Read src/runtime/execution/verifier.ts',
+            startedAt: 1,
+            endedAt: 2,
+          }],
+          claims: [
+            {
+              claimId: 'claim-impl-1',
+              kind: 'implementation_file',
+              subject: 'src/runtime/execution/verifier.ts',
+              value: 'src/runtime/execution/verifier.ts',
+              evidenceReceiptIds: ['receipt-1'],
+              confidence: 0.9,
+            },
+            {
+              claimId: 'answer:1:symbol:verifyDelegatedResult',
+              kind: 'symbol_reference',
+              subject: 'verifyDelegatedResult',
+              value: 'verifyDelegatedResult',
+              evidenceReceiptIds: ['answer:1'],
+              confidence: 0.85,
+            },
+            {
+              claimId: 'answer:1:symbol:verifyExactFileReferenceRequirements',
+              kind: 'symbol_reference',
+              subject: 'verifyExactFileReferenceRequirements',
+              value: 'verifyExactFileReferenceRequirements',
+              evidenceReceiptIds: ['answer:1'],
+              confidence: 0.85,
+            },
+          ],
+        }),
+      });
+
+      expect(decision).toMatchObject({
+        decision: 'satisfied',
+        retryable: false,
+      });
+    });
+
+    it('rejects readonly-constrained repo inspections that have filesystem mutations', () => {
+      const taskContract = buildRepoInspectionTaskContract({
+        requireExactFileReferences: true,
+        answerConstraints: {
+          readonly: true,
+          requiresImplementationFiles: true,
+        },
+        summary: 'Inspect this repo. Do not edit anything.',
+      });
+      const decision = verifyDelegatedResult({
+        envelope: buildEnvelope({
+          taskContract,
+          runStatus: 'completed',
+          finalUserAnswer: 'The implementation is in src/runtime/execution/types.ts.',
+          operatorSummary: 'The implementation is in src/runtime/execution/types.ts.',
+          stepReceipts: taskContract.plan.steps.map((step, index) => ({
+            stepId: step.stepId,
+            status: 'satisfied' as const,
+            evidenceReceiptIds: index === 2 ? ['receipt-1'] : [],
+            summary: step.summary,
+            startedAt: index + 1,
+            endedAt: index + 2,
+          })),
+          evidenceReceipts: [{
+            receiptId: 'receipt-1',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/types.ts'],
+            summary: 'Read src/runtime/execution/types.ts',
+            startedAt: 1,
+            endedAt: 2,
+          }],
+          claims: [
+            {
+              claimId: 'claim-impl-1',
+              kind: 'implementation_file',
+              subject: 'src/runtime/execution/types.ts',
+              value: 'src/runtime/execution/types.ts',
+              evidenceReceiptIds: ['receipt-1'],
+              confidence: 0.9,
+            },
+            {
+              claimId: 'claim-mutation-1',
+              kind: 'filesystem_mutation',
+              subject: 'fs_write',
+              value: 'wrote tmp/some-file.txt',
+              evidenceReceiptIds: [],
+              confidence: 0.9,
+            },
+          ],
+        }),
+      });
+
+      expect(decision).toMatchObject({
+        decision: 'insufficient',
+        missingEvidenceKinds: expect.arrayContaining(['readonly_violation']),
+      });
+    });
   });
 });

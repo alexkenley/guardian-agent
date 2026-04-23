@@ -1,5 +1,6 @@
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type {
+  AnswerConstraints,
   DelegatedTaskContractKind,
   EvidenceReceipt,
   Interruption,
@@ -39,6 +40,7 @@ export function buildPlannedTask(
     operation?: string;
     summary?: string;
     requireExactFileReferences?: boolean;
+    answerConstraints?: AnswerConstraints;
   },
 ): PlannedTask {
   const gatewaySteps = Array.isArray(decision?.plannedSteps)
@@ -48,7 +50,10 @@ export function buildPlannedTask(
     : [];
 
   if (gatewaySteps.length > 0) {
-    const steps = ensureExactFileReferenceReadStep(gatewaySteps, contract);
+    const steps = ensureExactFileReferenceReadStep(
+      applyContractAnswerSummary(gatewaySteps, contract.summary, contract.answerConstraints),
+      contract,
+    );
     return {
       planId: buildPlanId(decision?.route ?? contract.route, decision?.operation ?? contract.operation, steps.length),
       steps,
@@ -106,17 +111,76 @@ function ensureExactFileReferenceReadStep(
     stepId: '__exact_file_read__',
     kind: 'read',
     summary: 'Read the specific implementation files needed to ground the exact file references.',
-    expectedToolCategories: ['fs_read', 'fs_list', 'code_symbol_search'],
+    expectedToolCategories: ['fs_read', 'fs_list'],
     required: true,
     ...(priorStepId ? { dependsOn: [priorStepId] } : {}),
   };
   const nextSteps = [...steps];
   if (answerIndex >= 0) {
+    const answerStep = nextSteps[answerIndex];
     nextSteps.splice(answerIndex, 0, exactFileReadStep);
+    if (answerStep) {
+      const nextDependsOn = new Set(answerStep.dependsOn ?? []);
+      nextDependsOn.add(exactFileReadStep.stepId);
+      nextSteps[answerIndex + 1] = {
+        ...answerStep,
+        dependsOn: [...nextDependsOn],
+      };
+    }
   } else {
     nextSteps.push(exactFileReadStep);
   }
   return renumberPlannedSteps(nextSteps);
+}
+
+function applyContractAnswerSummary(
+  steps: PlannedStep[],
+  summary: string | undefined,
+  answerConstraints?: AnswerConstraints,
+): PlannedStep[] {
+  const normalizedSummary = summary?.trim();
+  if (!normalizedSummary) {
+    return steps;
+  }
+  let updated = false;
+  const nextSteps = steps.map((step) => {
+    if (step.kind !== 'answer' || !isGeneratedGenericAnswerSummary(step.summary)) {
+      return step;
+    }
+    updated = true;
+    const enrichedSummary = enrichAnswerSummaryForConstraints(normalizedSummary, answerConstraints);
+    return {
+      ...step,
+      summary: enrichedSummary,
+    };
+  });
+  return updated ? nextSteps : steps;
+}
+
+function enrichAnswerSummaryForConstraints(
+  summary: string,
+  constraints: AnswerConstraints | undefined,
+): string {
+  if (!constraints) return summary;
+  const parts: string[] = [summary.endsWith('.') ? summary : `${summary}.`];
+  if (constraints.requiresImplementationFiles) {
+    parts.push('Cite the specific implementation files, not just files that were read during search.');
+  }
+  if (constraints.requiresSymbolNames) {
+    parts.push('Include the exact function, type, or symbol names requested.');
+  }
+  if (constraints.readonly) {
+    parts.push('Do not modify any files.');
+  }
+  return parts.join(' ');
+}
+
+function isGeneratedGenericAnswerSummary(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  return normalized === 'answer the request directly.'
+    || normalized === 'complete the requested work.'
+    || normalized === 'answer the request directly'
+    || normalized === 'complete the requested work';
 }
 
 function renumberPlannedSteps(steps: PlannedStep[]): PlannedStep[] {
@@ -134,17 +198,23 @@ function renumberPlannedSteps(steps: PlannedStep[]): PlannedStep[] {
 }
 
 export function matchPlannedStepForTool(input: ToolStepMatchInput): string | undefined {
+  const toolKind = inferStepKindFromToolName(input.toolName);
   const normalizedHint = input.hintStepId?.trim();
-  if (normalizedHint && input.plannedTask.steps.some((step) => step.stepId === normalizedHint)) {
-    return normalizedHint;
+  if (normalizedHint) {
+    const hintedStep = input.plannedTask.steps.find((step) => step.stepId === normalizedHint);
+    if (hintedStep && toolNameSatisfiesStep(hintedStep, input.toolName, toolKind)) {
+      return normalizedHint;
+    }
   }
 
-  const toolKind = inferStepKindFromToolName(input.toolName);
   const argRefs = new Set(extractNormalizedRefs(input.args));
   const previouslyMatched = input.previouslyMatchedStepIds ?? new Set<string>();
 
   const scored = input.plannedTask.steps.map((step, index) => {
     let score = 0;
+    if (!toolNameSatisfiesStep(step, input.toolName, toolKind)) {
+      return { step, index, score: Number.NEGATIVE_INFINITY };
+    }
     if (
       input.toolName === 'find_tools'
       && step.kind === 'tool_call'
@@ -193,11 +263,12 @@ export function buildStepReceipts(input: BuildStepReceiptsInput): StepReceipt[] 
     const matchedReceipts = (receiptsByStepId.get(step.stepId) ?? [])
       .slice()
       .sort((left, right) => left.startedAt - right.startedAt);
-    const successful = matchedReceipts.filter((receipt) => receipt.status === 'succeeded');
-    const blocked = matchedReceipts.find((receipt) => (
+    const qualifyingReceipts = matchedReceipts.filter((receipt) => receiptSatisfiesStep(step, receipt));
+    const successful = qualifyingReceipts.filter((receipt) => receipt.status === 'succeeded');
+    const blocked = qualifyingReceipts.find((receipt) => (
       receipt.status === 'pending_approval' || receipt.status === 'blocked'
     ));
-    const failed = matchedReceipts.find((receipt) => receipt.status === 'failed');
+    const failed = qualifyingReceipts.find((receipt) => receipt.status === 'failed');
 
     if (successful.length > 0) {
       return {
@@ -438,6 +509,27 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
     return 'write';
   }
   return 'tool_call';
+}
+
+function toolNameSatisfiesStep(
+  step: PlannedStep,
+  toolName: string,
+  inferredToolKind: PlannedStepKind = inferStepKindFromToolName(toolName),
+): boolean {
+  if (!step.expectedToolCategories?.length) {
+    return true;
+  }
+  return step.expectedToolCategories.some((value) => value === toolName || value === inferredToolKind);
+}
+
+function receiptSatisfiesStep(step: PlannedStep, receipt: EvidenceReceipt): boolean {
+  if (!step.expectedToolCategories?.length) {
+    return true;
+  }
+  if (receipt.sourceType !== 'tool_call' || !receipt.toolName) {
+    return false;
+  }
+  return toolNameSatisfiesStep(step, receipt.toolName);
 }
 
 function extractNormalizedRefs(value: unknown): string[] {

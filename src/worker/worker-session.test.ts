@@ -980,6 +980,126 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(fileClaims.some((claim) => claim.subject === 'S:\\Development\\GuardianAgent')).toBe(false);
   });
 
+  it('injects the canonical delegated task plan into the worker system prompt', async () => {
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed repo inspections should not reclassify the turn.');
+      }
+      return {
+        content: 'I have not inspected enough files yet.',
+        model: 'test-model',
+        finishReason: 'stop',
+        providerLocality: 'external',
+        providerName: 'openai',
+      } satisfies ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_search',
+          description: 'Search files for a pattern.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              query: { type: 'string' },
+            },
+            required: ['query'],
+          },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'high',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'test delegated contract prompt injection',
+      },
+      message: {
+        id: 'msg-canonical-plan-guidance',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files and functions or types now define the delegated worker completion contract. Cite exact file names and symbol names.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the repo and identify the delegated worker completion contract files and symbols.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: true,
+            expectedContextPressure: 'high',
+            preferredAnswerPath: 'chat_synthesis',
+            plannedSteps: [
+              { kind: 'search', summary: 'Search the repo for the delegated worker completion contract files.', required: true },
+              { kind: 'answer', summary: 'Answer with exact file names and symbol names grounded in the repo evidence.', required: true, dependsOn: ['step_1'] },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const firstToolLoopCall = llmChat.mock.calls.find((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'fs_search'));
+    const systemMessages = (firstToolLoopCall?.[0] ?? [])
+      .filter((message: { role?: string; content?: string }) => message.role === 'system')
+      .map((message: { content?: string }) => message.content ?? '')
+      .join('\n\n');
+    expect(systemMessages).toContain('Execution plan:');
+    expect(systemMessages).toContain('step_1: search - Search the repo for the delegated worker completion contract files. (required)');
+    expect(systemMessages).toContain('step_2: read - Read the specific implementation files needed to ground the exact file references. (required; expected tool categories: fs_read, fs_list; depends on: step_1)');
+    expect(systemMessages).toContain('step_3: answer - Answer with exact file names and symbol names grounded in the repo evidence. (required; depends on: step_1, step_2)');
+    expect(systemMessages).toContain('Delegated task contract:');
+    expect(systemMessages).toContain('Required planned steps:');
+    expect(systemMessages).toContain('- step_1 [search]: Search the repo for the delegated worker completion contract files.');
+    expect(systemMessages).toContain('- step_2 [read] (depends on step_1): Read the specific implementation files needed to ground the exact file references.');
+    expect(systemMessages).toContain('- step_3 [answer] (depends on step_1, step_2): Answer with exact file names and symbol names grounded in the repo evidence.');
+    expect(systemMessages).toContain('A tool call only satisfies a planned step when it matches that step\'s expected tool categories.');
+    expect(systemMessages).toContain('Required final answer criteria:');
+    expect(systemMessages).toContain('Exact file reference contract:');
+    expect(systemMessages).toContain('Start from the repo or workspace root unless the user explicitly named a narrower path or a prior successful search result justifies narrowing the scope.');
+    expect(systemMessages).toContain('Treat tests, harnesses, examples, and prompt-echo matches as leads only unless the request explicitly asks for tests or harness behavior.');
+    expect(systemMessages).toContain('If the first search results are empty, too broad, or mostly echo the prompt or point at tests, broaden back to the repo root and try adjacent implementation terms before ending the turn.');
+    expect(systemMessages).toContain('Do not assume a subdirectory is authoritative just because the request mentions "worker", "timeline", "contract", or similar terms; verify the implementation files from actual search results first.');
+    expect(systemMessages).toContain('For exact-file repo inspections, search and symbol results are only leads; read the actual implementation files with fs_read or fs_list before answering.');
+    expect(systemMessages).toContain('When the user asks where behavior is implemented, prefer non-test source files that contain the implementation logic, not files that only import, test, document, or quote that behavior.');
+  });
+
   it('emits exact file claims from search-only repo inspections when tool results are wrapped under nested output objects', async () => {
     const llmChat = vi.fn(async (messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
@@ -1179,6 +1299,167 @@ describe('BrokeredWorkerSession automation control', () => {
     const fileClaims = delegatedResult?.claims?.filter((claim) => claim.kind === 'file_reference') ?? [];
     expect(fileClaims.some((claim) => claim.subject === 'src/worker/worker-session.test.ts')).toBe(true);
     expect(fileClaims.some((claim) => claim.subject === 'web/public/js/chat-panel.js')).toBe(true);
+  });
+
+  it('preserves prior satisfied non-answer steps as compatible evidence on exact-file retries', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed repo inspections should not reclassify the turn.');
+      }
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-read-1') {
+        return {
+          content: [
+            'Delegated worker progress is implemented in `src/supervisor/worker-manager.ts`.',
+            'Run timeline rendering is implemented in `web/public/js/chat-panel.js`.',
+          ].join('\n'),
+          model: 'test-model',
+          finishReason: 'stop',
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'fs_read')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-read-1',
+            name: 'fs_read',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 120) : 'unknown'}`);
+    });
+
+    const callTool = vi.fn(async (request: { toolName: string }) => {
+      if (request.toolName !== 'fs_read') {
+        throw new Error(`Unexpected tool ${request.toolName}`);
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        message: 'Tool \'fs_read\' completed.',
+        output: {
+          path: 'S:\\Development\\GuardianAgent\\src\\supervisor\\worker-manager.ts',
+          content: 'export class WorkerManager {}',
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_read',
+          description: 'Read a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+            },
+            required: ['path'],
+          },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      priorSatisfiedStepReceipts: [{
+        stepId: 'step_1',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-search'],
+        summary: 'Search found candidate files.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'openai',
+        providerType: 'openai',
+        providerModel: 'gpt-4o',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 36_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: [],
+        reason: 'test retry carry-forward exact-file repo inspection profile',
+      },
+      message: {
+        id: 'msg-retry-carry-forward',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata({
+          codeContext: {
+            workspaceRoot: 'S:\\Development\\GuardianAgent',
+            sessionId: 'code-1',
+          },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the repo to identify files implementing delegated worker progress and run timeline rendering without editing.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              { kind: 'search', summary: 'Inspect the relevant repo files and collect grounded repo evidence.', required: true },
+              { kind: 'answer', summary: 'Answer with exact file names, file paths, and symbol names grounded in the repo evidence.', required: true, dependsOn: ['step_1'] },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const delegatedResult = result.metadata?.delegatedResult as {
+      runStatus?: string;
+      stepReceipts?: Array<{ stepId?: string; status?: string }>;
+      evidenceReceipts?: Array<{ receiptId?: string; toolName?: string }>;
+    } | undefined;
+    expect(delegatedResult?.runStatus).toBe('completed');
+    expect(delegatedResult?.stepReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stepId: 'step_1', status: 'satisfied' }),
+      expect.objectContaining({ stepId: 'step_2', status: 'satisfied' }),
+      expect.objectContaining({ stepId: 'step_3', status: 'satisfied' }),
+    ]));
+    expect(delegatedResult?.evidenceReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ receiptId: 'prior:step_1', toolName: 'fs_search' }),
+    ]));
   });
 
   it('does not silently switch delegated worker providers when the selected model fails', async () => {

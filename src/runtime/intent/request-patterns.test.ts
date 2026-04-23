@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  deriveAnswerConstraints,
   isExplicitComplexPlanningRequest,
   isExplicitCodingSessionControlRequest,
   isExplicitRepoInspectionRequest,
@@ -96,5 +97,45 @@ describe('request-patterns', () => {
     expect(isConversationTranscriptReferenceRequest(
       'Did the last answer in this conversation use the same delegated model profile?',
     )).toBe(true);
+  });
+
+  describe('deriveAnswerConstraints', () => {
+    it('sets requiresImplementationFiles for exact-file requests', () => {
+      const constraints = deriveAnswerConstraints('Which files and functions implement the verifier?');
+      expect(constraints.requiresImplementationFiles).toBe(true);
+    });
+
+    it('sets requiresSymbolNames for symbol requests', () => {
+      const constraints = deriveAnswerConstraints('Which functions and types define the contract?');
+      expect(constraints.requiresSymbolNames).toBe(true);
+    });
+
+    it('sets readonly for "do not edit" requests', () => {
+      const constraints = deriveAnswerConstraints('Inspect this repo. Do not edit anything.');
+      expect(constraints.readonly).toBe(true);
+    });
+
+    it('sets readonly for "don\'t edit" requests', () => {
+      const constraints = deriveAnswerConstraints('Inspect this repo. Don\'t edit anything.');
+      expect(constraints.readonly).toBe(true);
+    });
+
+    it('sets requiresImplementationFiles for "which files implement" patterns', () => {
+      const constraints = deriveAnswerConstraints('Tell me which files render the timeline.');
+      expect(constraints.requiresImplementationFiles).toBe(true);
+    });
+
+    it('combines multiple constraints for compound requests', () => {
+      const constraints = deriveAnswerConstraints('Inspect this repo and tell me which files and functions define the contract. Cite exact file names and symbol names.');
+      expect(constraints.requiresImplementationFiles).toBe(true);
+      expect(constraints.requiresSymbolNames).toBe(true);
+    });
+
+    it('returns empty constraints for simple requests', () => {
+      const constraints = deriveAnswerConstraints('Just reply hello back');
+      expect(constraints.requiresImplementationFiles).toBeUndefined();
+      expect(constraints.requiresSymbolNames).toBeUndefined();
+      expect(constraints.readonly).toBeUndefined();
+    });
   });
 });

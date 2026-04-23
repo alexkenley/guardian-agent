@@ -3469,6 +3469,7 @@ describe('WorkerManager', () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     const retrySatisfiedStepIds: string[][] = [];
+    const retryDirectives: string[] = [];
     let dispatchCount = 0;
     workerMessageHandler = (params) => {
       dispatchCount += 1;
@@ -3478,6 +3479,11 @@ describe('WorkerManager', () => {
             .filter(Boolean)
         : [];
       retrySatisfiedStepIds.push(carriedForward);
+      const retryDirective = Array.isArray(params.additionalSections)
+        ? (params.additionalSections as Array<{ section?: string; content?: string }>)
+            .find((section) => section.section === 'Delegated Retry Directive')?.content ?? ''
+        : '';
+      retryDirectives.push(retryDirective);
 
       if (dispatchCount === 1) {
         const gatewayDecision = readPreRoutedIntentGatewayMetadata(repoGroundedCodingMetadata())?.decision;
@@ -3522,8 +3528,13 @@ describe('WorkerManager', () => {
                 sourceType: 'tool_call',
                 toolName: 'fs_search',
                 status: 'succeeded',
-                refs: ['src/worker', 'web/public/js'],
-                summary: 'Search found candidate directories.',
+                refs: [
+                  'src/supervisor/worker-manager.ts',
+                  'src/runtime/run-timeline.ts',
+                  'web/public/js/chat-panel.js',
+                  'web/public/js/chat-run-tracking.js',
+                ],
+                summary: 'Search found candidate implementation files.',
                 startedAt: 1,
                 endedAt: 2,
               },
@@ -3656,6 +3667,11 @@ describe('WorkerManager', () => {
     expect(result.content).toContain('src/supervisor/worker-manager.ts');
     expect(result.content).toContain('web/public/js/chat-panel.js');
     expect(retrySatisfiedStepIds).toEqual([[], ['step_1']]);
+    expect(retryDirectives[1]).toContain('Grounded file/path candidates from already satisfied steps:');
+    expect(retryDirectives[1]).toContain('src/supervisor/worker-manager.ts');
+    expect(retryDirectives[1]).toContain('src/runtime/run-timeline.ts');
+    expect(retryDirectives[1]).toContain('web/public/js/chat-panel.js');
+    expect(retryDirectives[1]).toContain('Reuse those grounded candidates before starting any new speculative search.');
     expect(intentRoutingTrace.record.mock.calls[2]?.[0]).toMatchObject({
       stage: 'delegated_worker_retrying',
     });

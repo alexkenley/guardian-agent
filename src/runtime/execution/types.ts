@@ -88,6 +88,7 @@ export interface DelegatedTaskContract {
   requiresEvidence: boolean;
   allowsAnswerFirst: boolean;
   requireExactFileReferences: boolean;
+  answerConstraints?: AnswerConstraints;
   summary?: string;
   plan: PlannedTask;
 }
@@ -171,10 +172,19 @@ export interface EvidenceReceipt {
 
 export type ClaimKind =
   | 'file_reference'
+  | 'implementation_file'
+  | 'symbol_reference'
   | 'filesystem_mutation'
   | 'security_finding'
   | 'provider_selection'
   | 'answer';
+
+export interface AnswerConstraints {
+  requiresImplementationFiles?: boolean;
+  requiresSymbolNames?: boolean;
+  readonly?: boolean;
+  requestedSymbols?: string[];
+}
 
 export interface Claim {
   claimId: string;
@@ -214,6 +224,7 @@ export interface VerificationDecision {
   requiredNextAction?: string;
   missingEvidenceKinds?: string[];
   unsatisfiedStepIds?: string[];
+  qualityNotes?: string[];
 }
 
 export interface DelegatedResultEnvelope {

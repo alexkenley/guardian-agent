@@ -1,5 +1,7 @@
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
+import { deriveAnswerConstraints } from '../intent/request-patterns.js';
+import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
 import {
   buildPlannedTask,
   collectMissingEvidenceKinds,
@@ -85,10 +87,17 @@ export function verifyDelegatedResult(input: {
     if (exactFileReferenceFailure) {
       return exactFileReferenceFailure;
     }
+    const repoInspectionResult = verifyRepoInspectionRequirements(input.envelope);
+    if (repoInspectionResult.decision) {
+      return repoInspectionResult.decision;
+    }
     return {
       decision: 'satisfied',
       reasons: ['Delegated worker satisfied every required planned step.'],
       retryable: false,
+      ...(repoInspectionResult.qualityNotes.length > 0
+        ? { qualityNotes: repoInspectionResult.qualityNotes }
+        : {}),
     };
   }
 
@@ -146,6 +155,7 @@ export function verifyDelegatedResult(input: {
 function buildBaseDelegatedTaskContract(
   decision: IntentGatewayDecision | null | undefined,
 ): Omit<DelegatedTaskContract, 'plan'> {
+  const summary = resolveDelegatedTaskSummary(decision);
   if (decision?.route === 'coding_task' && decision.operation === 'run') {
     return {
       kind: 'tool_execution',
@@ -154,7 +164,7 @@ function buildBaseDelegatedTaskContract(
       requiresEvidence: true,
       allowsAnswerFirst: false,
       requireExactFileReferences: false,
-      summary: decision.summary,
+      summary,
     };
   }
   if (decision?.route === 'filesystem_task' && !isReadOnlyOperation(decision.operation)) {
@@ -165,29 +175,33 @@ function buildBaseDelegatedTaskContract(
       requiresEvidence: true,
       allowsAnswerFirst: false,
       requireExactFileReferences: false,
-      summary: decision.summary,
+      summary,
     };
   }
   if (decision?.route === 'security_task' || decision?.executionClass === 'security_analysis') {
+    const answerConstraints = deriveAnswerConstraints(decision?.resolvedContent);
     return {
-      kind: 'security_analysis',
+      kind: 'security_analysis' as const,
       route: decision?.route,
       operation: decision?.operation,
       requiresEvidence: true,
       allowsAnswerFirst: false,
       requireExactFileReferences: decision?.requireExactFileReferences === true,
-      summary: decision?.summary,
+      ...(Object.keys(answerConstraints).length > 0 ? { answerConstraints } : {}),
+      summary,
     };
   }
   if (decision?.requiresRepoGrounding === true || decision?.executionClass === 'repo_grounded') {
+    const answerConstraints = deriveAnswerConstraints(decision?.resolvedContent);
     return {
-      kind: 'repo_inspection',
+      kind: 'repo_inspection' as const,
       route: decision.route,
       operation: decision.operation,
       requiresEvidence: true,
       allowsAnswerFirst: false,
       requireExactFileReferences: decision.requireExactFileReferences === true,
-      summary: decision.summary,
+      ...(Object.keys(answerConstraints).length > 0 ? { answerConstraints } : {}),
+      summary,
     };
   }
   return {
@@ -197,8 +211,23 @@ function buildBaseDelegatedTaskContract(
     requiresEvidence: false,
     allowsAnswerFirst: true,
     requireExactFileReferences: false,
-    summary: decision?.summary,
+    summary,
   };
+}
+
+function resolveDelegatedTaskSummary(
+  decision: IntentGatewayDecision | null | undefined,
+): string | undefined {
+  const normalizedSummary = normalizeUserFacingIntentGatewaySummary(decision?.summary);
+  if (normalizedSummary) {
+    return normalizedSummary;
+  }
+  const resolvedContent = decision?.resolvedContent?.trim();
+  if (resolvedContent) {
+    return resolvedContent;
+  }
+  const rawSummary = decision?.summary?.trim();
+  return rawSummary || undefined;
 }
 
 function verifyProviderSelection(
@@ -276,7 +305,7 @@ function verifyExactFileReferenceRequirements(
       .map((receipt) => receipt.receiptId),
   );
   const fileClaims = envelope.claims.filter((claim) => (
-    claim.kind === 'file_reference'
+    (claim.kind === 'file_reference' || claim.kind === 'implementation_file')
     && claim.evidenceReceiptIds.some((receiptId) => successfulReceiptIds.has(receiptId))
   ));
 
@@ -299,6 +328,126 @@ function verifyExactFileReferenceRequirements(
     };
   }
   return null;
+}
+
+interface RepoInspectionVerificationResult {
+  decision: VerificationDecision | null;
+  qualityNotes: string[];
+}
+
+function verifyRepoInspectionRequirements(
+  envelope: DelegatedResultEnvelope,
+): RepoInspectionVerificationResult {
+  const contract = envelope.taskContract;
+  const qualityNotes: string[] = [];
+  if (contract.kind !== 'repo_inspection' && contract.kind !== 'security_analysis') {
+    return { decision: null, qualityNotes };
+  }
+  const constraints = contract.answerConstraints;
+  if (!constraints) return { decision: null, qualityNotes };
+
+  const answer = envelope.finalUserAnswer?.trim() || '';
+  if (!answer) return { decision: null, qualityNotes };
+
+  const successfulReceiptIds = new Set(
+    envelope.evidenceReceipts
+      .filter((receipt) => receipt.status === 'succeeded')
+      .map((receipt) => receipt.receiptId),
+  );
+
+  const missingKinds: string[] = [];
+  const reasons: string[] = [];
+
+  // Check implementation-file claims
+  if (constraints.requiresImplementationFiles) {
+    const implementationClaims = envelope.claims.filter((claim) => (
+      claim.kind === 'implementation_file'
+      && claim.evidenceReceiptIds.some((receiptId) => successfulReceiptIds.has(receiptId))
+    ));
+    const fileClaims = envelope.claims.filter((claim) => (
+      claim.kind === 'file_reference'
+      && claim.evidenceReceiptIds.some((receiptId) => successfulReceiptIds.has(receiptId))
+    ));
+    if (implementationClaims.length === 0) {
+      reasons.push('Delegated worker did not identify any implementation files for the requested functionality.');
+      missingKinds.push('implementation_file_claim');
+      // Quality note: the answer only cites search-hit files, not files the worker actually read in depth
+      if (fileClaims.length > 0) {
+        qualityNotes.push(`Answer cites ${fileClaims.length} file reference(s) from search but no confirmed implementation files. The answer may identify files that were found by search but not deeply inspected.`);
+      }
+    } else if (!finalAnswerCitesFileReference(answer, implementationClaims)) {
+      reasons.push('Delegated worker identified implementation files but did not cite them in the final answer.');
+      missingKinds.push('implementation_file_claim');
+    } else {
+      // Implementation files are cited. Check if the count seems low for a repo inspection.
+      const implFileCount = implementationClaims.length;
+      if (implFileCount <= 2) {
+        qualityNotes.push(`Answer cites ${implFileCount} implementation file(s). For a thorough repo inspection, more implementation files may be relevant.`);
+      }
+    }
+  }
+
+  // Check symbol-reference claims when requested
+  if (constraints.requiresSymbolNames) {
+    const symbolClaims = envelope.claims.filter((claim) => (
+      claim.kind === 'symbol_reference'
+      && claim.evidenceReceiptIds.some((receiptId) => successfulReceiptIds.has(receiptId))
+    ));
+    if (symbolClaims.length === 0) {
+      // Fallback: check if the answer mentions the requested symbols directly
+      if (constraints.requestedSymbols && constraints.requestedSymbols.length > 0) {
+        const answerLower = answer.toLowerCase();
+        const foundSymbols = constraints.requestedSymbols.filter((sym) =>
+          answerLower.includes(sym.toLowerCase()));
+        if (foundSymbols.length === 0) {
+          reasons.push('Delegated worker did not reference the requested symbol names in the final answer.');
+          missingKinds.push('symbol_reference_claim');
+        }
+      } else {
+        // No specific symbols listed but the request asked for symbol names —
+        // check that the answer includes backtick-quoted code identifiers or
+        // PascalCase/camelCase names that look like functions or types.
+        const commonWords = new Set(['The', 'This', 'That', 'These', 'Those', 'There', 'Then', 'They', 'Their', 'For', 'And', 'But', 'Not', 'You', 'Are', 'Has', 'Can', 'Will', 'With', 'From', 'Into', 'When', 'What', 'Which', 'Where', 'How', 'Why']);
+        const backtickSymbols = /\`([^`]+)\`/g;
+        const typeLikeSymbols = /\b([A-Z][a-zA-Z0-9_]*[a-z][a-zA-Z0-9_]*)\b/g;
+        const functionCallPattern = /\b([a-z][a-zA-Z0-9_]*)\(\)/g;
+        const hasBackticks = backtickSymbols.test(answer);
+        const typeMatches = answer.match(typeLikeSymbols) ?? [];
+        const functionMatches = answer.match(functionCallPattern) ?? [];
+        const realTypeSymbols = typeMatches.filter((m) => !commonWords.has(m) && m.length >= 3);
+        if (!hasBackticks && realTypeSymbols.length === 0 && functionMatches.length === 0) {
+          reasons.push('Delegated worker did not reference any function, type, or symbol names in the final answer.');
+          missingKinds.push('symbol_reference_claim');
+        } else {
+          qualityNotes.push('Answer includes symbol-like references but no explicit symbol claims. The cited symbols may not be the exact ones requested.');
+        }
+      }
+    }
+  }
+
+  // Check readonly constraint
+  if (constraints.readonly) {
+    const mutationClaims = envelope.claims.filter((claim) => claim.kind === 'filesystem_mutation');
+    if (mutationClaims.length > 0) {
+      reasons.push('Delegated worker made filesystem modifications despite a read-only constraint.');
+      missingKinds.push('readonly_violation');
+    } else {
+      qualityNotes.push('No filesystem modifications were detected — the readonly constraint was respected.');
+    }
+  }
+
+  if (missingKinds.length === 0) return { decision: null, qualityNotes };
+
+  return {
+    decision: {
+      decision: 'insufficient',
+      reasons,
+      retryable: true,
+      requiredNextAction: 'Retry the delegated run and require implementation file references, symbol citations, and/or readonly compliance.',
+      missingEvidenceKinds: missingKinds,
+    },
+    qualityNotes,
+  };
 }
 
 function buildFailureReasons(envelope: DelegatedResultEnvelope): string[] {

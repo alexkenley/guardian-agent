@@ -140,11 +140,13 @@ export function buildRoutedIntentAdditionalSection(
   const entityLines = Object.entries(decision.entities)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
     .map(([key, value]) => `${key}: ${String(value)}`);
+  const plannedStepLines = buildRoutedIntentPlannedStepLines(decision);
   const ruleLines = buildRoutedIntentRuleLines(decision);
   const lines = [
     `route: ${decision.route}`,
     `operation: ${decision.operation}`,
     `resolution: ${decision.resolution}`,
+    ...(plannedStepLines.length > 0 ? ['planned steps:', ...plannedStepLines.map((line) => `- ${line}`)] : []),
     ...(entityLines.length > 0 ? ['entities:', ...entityLines.map((line) => `- ${line}`)] : []),
     ...(ruleLines.length > 0 ? ['execution rules:', ...ruleLines.map((line) => `- ${line}`)] : []),
   ];
@@ -153,6 +155,23 @@ export function buildRoutedIntentAdditionalSection(
     mode: 'explicit',
     content: wrapTaggedSection('routed-intent', lines.join('\n')),
   };
+}
+
+function buildRoutedIntentPlannedStepLines(decision: IntentGatewayDecision): string[] {
+  const plannedSteps = Array.isArray(decision.plannedSteps) ? decision.plannedSteps : [];
+  if (plannedSteps.length <= 0) {
+    return [];
+  }
+  return [
+    ...plannedSteps.map((step, index) => {
+      const dependencySummary = step.dependsOn?.length
+        ? ` (depends on ${step.dependsOn.join(', ')})`
+        : '';
+      const optionalSuffix = step.required === false ? ', optional' : '';
+      return `${index + 1}. [${step.kind}${optionalSuffix}] ${step.summary}${dependencySummary}`;
+    }),
+    'Treat the planned steps above as the execution contract for this turn.',
+  ];
 }
 
 export function buildToolExecutionCorrectionPrompt(

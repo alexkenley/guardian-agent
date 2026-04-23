@@ -105,6 +105,30 @@ describe('routed tool execution', () => {
     expect(section?.content).toContain('If a filename search only reports that matches exist or the result is truncated');
   });
 
+  it('includes planned steps when the gateway already emitted a repo inspection contract', () => {
+    const section = buildRoutedIntentAdditionalSection(repoDecision({
+      requireExactFileReferences: true,
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the repo for the delegated worker completion contract files.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Answer with exact file names and symbol names grounded in the repo evidence.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }));
+
+    expect(section?.content).toContain('planned steps:');
+    expect(section?.content).toContain('1. [search] Search the repo for the delegated worker completion contract files.');
+    expect(section?.content).toContain('2. [answer] Answer with exact file names and symbol names grounded in the repo evidence. (depends on step_1)');
+    expect(section?.content).toContain('Treat the planned steps above as the execution contract for this turn.');
+  });
+
   it('adds external-backend guidance for explicit coding backend requests', () => {
     const section = buildRoutedIntentAdditionalSection(repoDecision({
       operation: 'run',

@@ -55,6 +55,7 @@ export interface DelegatedWorkerHandoff {
   runClass?: DelegatedWorkerRunClass;
   reportingMode?: DelegatedWorkerReportingMode;
   operatorState?: DelegatedWorkerOperatorFollowUpState;
+  qualityNotes?: string[];
 }
 
 export interface DelegatedWorkerMetadata {

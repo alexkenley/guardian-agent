@@ -1,3 +1,4 @@
+import type { AnswerConstraints } from '../execution/types.js';
 import { normalizeIntentGatewayRepairText } from './text.js';
 
 const WORKSPACE_SCOPE_PATTERN = /\b(?:coding\s+workspace|coding\s+session|workspace|session)\b/;
@@ -136,13 +137,42 @@ export function isExplicitCodingSessionControlRequest(content: string | undefine
 export function isExplicitCodingExecutionRequest(content: string | undefined): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
-  
+
   const hasCodingTool = /\b(npm|pnpm|yarn|bun|pip|pip3|python|python3|go|cargo|rustc|javac|make|cmake|git|docker|kubectl)\b/i.test(normalized);
   const hasCodingCommand = /\b(install|run|test|build|deploy|ci|add|remove|update|status|diff|commit|push|pull)\b/i.test(normalized);
-  
+
   // Also match "run [anything] in [path]" which is almost always a task
   // Ensure we don't match across sentences by excluding period/newline
   const isRunInPath = /\brun\s+[^.!?\n]+?\s+in\s+[^.!?\n]+?\b/i.test(normalized);
-  
+
   return (hasCodingTool && hasCodingCommand) || isRunInPath;
+}
+
+const SYMBOL_REQUEST_PATTERN = /\b(?:functions?|types?|classes?|symbols?|interfaces?|methods?|variables?|constants?|enums?)\b/i;
+const READONLY_MODIFIER_PATTERN = /\b(?:do\s+not\s+edit|don'?t\s+edit|without\s+editing|read[\s-]*only|no\s+(?:editing|modifications?|changes?|writes?))\b/i;
+const IMPLEMENTATION_QUEST_PATTERN = /\b(?:which|what)\s+.*\b(?:implement|define|defines|defined|render|renders|rendered|responsible|own|handles?)\b/i;
+
+export function deriveAnswerConstraints(content: string | undefined): AnswerConstraints {
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return {};
+
+  const constraints: AnswerConstraints = {};
+
+  if (requestNeedsExactFileReferences(content)) {
+    constraints.requiresImplementationFiles = true;
+  }
+
+  if (SYMBOL_REQUEST_PATTERN.test(normalized)) {
+    constraints.requiresSymbolNames = true;
+  }
+
+  if (READONLY_MODIFIER_PATTERN.test(normalized)) {
+    constraints.readonly = true;
+  }
+
+  if (IMPLEMENTATION_QUEST_PATTERN.test(normalized)) {
+    constraints.requiresImplementationFiles = true;
+  }
+
+  return constraints;
 }

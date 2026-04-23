@@ -218,6 +218,7 @@ interface DelegatedResultSufficiencyFailure {
   satisfiedSteps: Array<{
     stepId: string;
     summary: string;
+    refs?: string[];
   }>;
 }
 
@@ -2253,6 +2254,9 @@ function appendDelegatedRetrySection(
   const satisfiedSummary = insufficiency.satisfiedSteps.length > 0
     ? insufficiency.satisfiedSteps.map((step) => `${step.stepId} (${step.summary})`).join('; ')
     : 'none';
+  const satisfiedRefLines = insufficiency.satisfiedSteps
+    .filter((step) => Array.isArray(step.refs) && step.refs.length > 0)
+    .map((step) => `- ${step.stepId}: ${step.refs?.join(', ')}`);
   if (missingEvidenceKinds.includes('execution_evidence')) {
     return [
       ...sections,
@@ -2265,6 +2269,13 @@ function appendDelegatedRetrySection(
           'Unsatisfied required steps:',
           ...unsatisfiedLines,
           `Already satisfied steps: ${satisfiedSummary}`,
+          ...(satisfiedRefLines.length > 0
+            ? [
+                'Grounded file/path candidates from already satisfied steps:',
+                ...satisfiedRefLines,
+                'Reuse those grounded candidates before starting any new speculative search.',
+              ]
+            : []),
           retryInstruction,
           'Discovering or listing tools does not satisfy an execution request.',
           'If you used find_tools to load code_remote_exec or another execution tool, call that tool in this retry.',
@@ -2286,6 +2297,13 @@ function appendDelegatedRetrySection(
         'Unsatisfied required steps:',
         ...unsatisfiedLines,
         `Already satisfied steps: ${satisfiedSummary}`,
+        ...(satisfiedRefLines.length > 0
+          ? [
+              'Grounded file/path candidates from already satisfied steps:',
+              ...satisfiedRefLines,
+              'Reuse those grounded candidates before starting any new speculative search.',
+            ]
+          : []),
         retryInstruction,
         'Complete the remaining required steps now. Do not re-run satisfied steps.',
         'Do not ask the user whether to narrow the search. Narrow it yourself.',
@@ -2339,6 +2357,15 @@ function buildDelegatedRetryReason(
   const missingEvidenceKinds = decision.missingEvidenceKinds ?? [];
   if (missingEvidenceKinds.includes('file_reference_claim')) {
     return 'the previous answer did not name the exact files or code paths that were requested';
+  }
+  if (missingEvidenceKinds.includes('implementation_file_claim')) {
+    return 'the previous answer did not identify the actual implementation files for the requested functionality';
+  }
+  if (missingEvidenceKinds.includes('symbol_reference_claim')) {
+    return 'the previous answer did not reference the requested function or type names';
+  }
+  if (missingEvidenceKinds.includes('readonly_violation')) {
+    return 'the previous attempt modified files when the request specified read-only inspection';
   }
   if (missingEvidenceKinds.includes('filesystem_mutation_receipt')) {
     return 'the previous attempt claimed a filesystem change without producing a successful tool result or a real blocker';
@@ -2399,6 +2426,7 @@ function collectDelegatedSatisfiedSteps(
   envelope: DelegatedResultEnvelope,
 ): DelegatedResultSufficiencyFailure['satisfiedSteps'] {
   const stepById = new Map(envelope.taskContract.plan.steps.map((step) => [step.stepId, step]));
+  const evidenceById = new Map(envelope.evidenceReceipts.map((receipt) => [receipt.receiptId, receipt]));
   return filterDependencySatisfiedStepReceipts(
     envelope.taskContract.plan,
     envelope.stepReceipts,
@@ -2406,7 +2434,27 @@ function collectDelegatedSatisfiedSteps(
     .map((receipt) => ({
       stepId: receipt.stepId,
       summary: stepById.get(receipt.stepId)?.summary ?? receipt.summary,
+      refs: dedupeDelegatedRetryRefs(
+        receipt.evidenceReceiptIds.flatMap((receiptId) => evidenceById.get(receiptId)?.refs ?? []),
+      ),
     }));
+}
+
+function dedupeDelegatedRetryRefs(refs: string[]): string[] {
+  const deduped = new Set<string>();
+  for (const ref of refs) {
+    const normalized = typeof ref === 'string'
+      ? ref.trim().replace(/\\/g, '/')
+      : '';
+    if (!normalized) {
+      continue;
+    }
+    deduped.add(normalized);
+    if (deduped.size >= 8) {
+      break;
+    }
+  }
+  return [...deduped];
 }
 
 function buildDelegatedRetryStepLine(
@@ -2694,6 +2742,7 @@ function attachDelegatedVerificationDecision(
       ...(decision.requiredNextAction ? { requiredNextAction: decision.requiredNextAction } : {}),
       ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
       ...(decision.unsatisfiedStepIds ? { unsatisfiedStepIds: [...decision.unsatisfiedStepIds] } : {}),
+      ...(decision.qualityNotes ? { qualityNotes: [...decision.qualityNotes] } : {}),
       summary: decision.reasons[0] ?? 'Verification completed.',
     },
   };
@@ -2704,6 +2753,7 @@ function attachDelegatedVerificationDecision(
       reasons: [...decision.reasons],
       ...(decision.missingEvidenceKinds ? { missingEvidenceKinds: [...decision.missingEvidenceKinds] } : {}),
       ...(decision.unsatisfiedStepIds ? { unsatisfiedStepIds: [...decision.unsatisfiedStepIds] } : {}),
+      ...(decision.qualityNotes ? { qualityNotes: [...decision.qualityNotes] } : {}),
     },
     events: [
       ...envelope.events.filter((event) => event.type !== 'verification_decided'),
@@ -2966,6 +3016,9 @@ function buildDelegatedHandoff(
     nextAction,
     reportingMode,
     ...(operatorState ? { operatorState } : {}),
+    ...(verification?.qualityNotes && verification.qualityNotes.length > 0
+      ? { qualityNotes: verification.qualityNotes }
+      : {}),
   };
 }
 
@@ -2994,8 +3047,13 @@ function applyDelegatedFollowUpPolicy(
         metadata,
       };
     }
+    // Surface quality notes as a suffix when the verification is satisfied
+    // but the answer has potential quality caveats
+    const qualitySuffix = (handoff.qualityNotes && handoff.qualityNotes.length > 0)
+      ? `\n\n⚠️ ${handoff.qualityNotes.join(' ')}`
+      : '';
     return {
-      content: result.content,
+      content: qualitySuffix ? `${result.content}${qualitySuffix}` : result.content,
       metadata,
     };
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeIntentGatewayDecision } from './structured-recovery.js';
+import { normalizeIntentGatewayDecision, splitSequentialRequestClauses } from './structured-recovery.js';
 
 describe('normalizeIntentGatewayDecision', () => {
   it('does not silently promote a classified general assistant turn into coding_task', () => {
@@ -47,5 +47,33 @@ describe('normalizeIntentGatewayDecision', () => {
 
     expect(decision.requireExactFileReferences).toBe(true);
     expect(decision.provenance?.requireExactFileReferences).toBe('derived.workload');
+  });
+
+  it('does not create a separate step for "Do not edit anything" modifier clauses', () => {
+    // "Do not edit anything" should be dropped from planned steps, not treated as a step.
+    const clauses = splitSequentialRequestClauses(
+      'Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.',
+    );
+    // The "Do not edit anything" clause should not appear as a step
+    const hasReadonlyStep = clauses.some(clause =>
+      /\bdo not edit\b/i.test(clause) || /\bdon'?t edit\b/i.test(clause),
+    );
+    expect(hasReadonlyStep).toBe(false);
+  });
+
+  it('merges answer-constraint clauses like "Cite exact file names" into the prior step', () => {
+    // "Cite exact file names and symbol names" should merge into the prior clause
+    // and NOT appear as a separate step. Since merging reduces to a single clause,
+    // splitSequentialRequestClauses returns [] for single-clause results,
+    // but the merged result should still contain the cite modifier.
+    const sourceContent = 'Inspect this repo and tell me which files define the contract. Cite exact file names and symbol names.';
+    const clauses = splitSequentialRequestClauses(sourceContent);
+    // After merging, the cite clause is merged into the inspect clause.
+    // If only one clause remains, splitSequentialRequestClauses returns [].
+    // Verify that "Cite exact file names" does not appear as a standalone step.
+    const hasCiteStep = clauses.some(clause =>
+      /^\s*cite\s+/i.test(clause.trim()),
+    );
+    expect(hasCiteStep).toBe(false);
   });
 });

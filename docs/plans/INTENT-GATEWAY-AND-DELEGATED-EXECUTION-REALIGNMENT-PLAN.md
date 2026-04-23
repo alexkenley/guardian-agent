@@ -23,6 +23,51 @@ Reset Guardian's routing and delegated-execution architecture around the parts t
 
 This is not a blank-slate rewrite plan. The repo already contains a partial landing of the contract work. The problem is that the implementation and the plan stack diverged.
 
+## Status Snapshot (2026-04-22)
+
+### Completed and committed
+
+- **Workstream 1: Gateway Signal Canonicalization** is complete and committed in `f61112a`.
+- **Workstream 2: Code-Session And Delegation Boundary Cleanup** is complete and committed in `5fe01c5`.
+
+### In progress and not ready to commit
+
+- **Workstream 3: Planned-Step Discipline** is still open.
+- The contract layer now preserves real request summaries better on degraded routes, carries grounded retry refs forward, and enforces step/tool compatibility more strictly.
+- **Phase 3A changes (2026-04-23):**
+  - Added `implementation_file` and `symbol_reference` claim kinds to distinguish search-hit files from implementation files
+  - Added `AnswerConstraints` to the contract with `requiresImplementationFiles`, `requiresSymbolNames`, `readonly`, and `requestedSymbols`
+  - Added `verifyRepoInspectionRequirements` to check implementation-file claims and symbol references beyond basic file-reference existence
+  - Fixed modifier-clause handling: "Do not edit anything" and "Cite exact file names" are now answer constraints, not separate steps
+  - Added `deriveAnswerConstraints` in request-patterns.ts for extracting answer constraints from request text
+  - Enriched answer-step summaries for repo-inspection contracts with constraint-specific quality guidance
+  - Worker session now classifies `fs_read` claims as `implementation_file` for repo-inspection contracts
+  - Worker session extracts `symbol_reference` claims from final answers when the contract requires symbol names
+
+### Current manual web baseline
+
+- `Just reply hello back`
+  - **Pass**
+  - Direct/simple behavior is stable again.
+- `Write the current date and time to tmp/manual-web/current-time.txt. Search src/runtime for planned_steps. Write a short summary to tmp/manual-web/planned-steps-summary.txt.`
+  - **Pass**
+  - Multi-step delegated write/search/write behavior is currently good enough to keep protected as a regression.
+- `Inspect this repo and tell me which files and functions or types now define the delegated worker completion contract. Cite exact file names and symbol names.`
+  - **Previously soft fail, now has infrastructure for catching semantically wrong answers**
+  - The verifier can now distinguish `implementation_file` claims from `file_reference` search-hit claims and require `symbol_reference` claims when the prompt asks for symbol names. However, the LLM model quality still determines whether the *right* implementation files are cited — the verifier can reject answers that cite only search-hit files with no implementation grounding.
+- `Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.`
+  - **Previously hard fail, now has infrastructure for fix**
+  - "Do not edit anything" is now an answer constraint (`readonly: true`) rather than a separate required step, so the modifier-clause step-coverage failure should be resolved. The `readonly` constraint also means `filesystem_mutation` claims will be flagged as violations.
+
+### What this means
+
+- The routing boundary work is materially better than it was at the start of remediation.
+- The remaining blocker was that the shared contract/verifier path could not reliably enforce the difference between a grounded but semantically wrong repo-inspection answer and a grounded and semantically correct implementation answer.
+- Phase 3A changes add the verification infrastructure to make this distinction: `implementation_file` vs `file_reference` claims, `symbol_reference` claims, `AnswerConstraints` with `requiresImplementationFiles` and `requiresSymbolNames`, and `verifyRepoInspectionRequirements`.
+- The modifier-as-step bug is fixed: "Do not edit anything" and "Cite exact file names" are now answer constraints, not separate required steps.
+
+Do not treat Workstream 3 as complete until both repo-inspection prompts above are clean in manual web validation.
+
 ## Current Implementation Baseline
 
 The following pieces are already real and should be treated as the starting point, not future aspirations:
@@ -102,6 +147,22 @@ Result:
 - the verifier ends up enforcing invented work
 - retry directives become misleading
 - weak-model failures look like step-coverage problems when the real issue is bad plan synthesis
+
+### 3b. Answer-step semantics are still too weak for exact-file repo inspections
+
+The contract and verifier currently do a better job of checking step coverage than they do of checking semantic answer quality.
+
+Current failure shape:
+
+- a delegated repo-inspection run can complete with grounded file references and still answer the wrong question
+- a run can satisfy the `answer` step because a final answer exists, even when the answer does not identify the actual implementation files or requested symbols
+- exact-file verification currently proves "the final answer cited some grounded file references" more reliably than it proves "the final answer cited the correct implementation files and symbols for the request"
+
+Result:
+
+- semantically wrong implementation answers can still pass
+- the remaining failing prompt can still collapse into step-coverage failure instead of converging on the right implementation answer
+- Workstream 3 is no longer just about plan-shape synthesis; it is also about tightening shared answer-step semantics
 
 ### 4. The envelope cutover is incomplete
 
@@ -214,6 +275,8 @@ Future changes to gateway/delegation/verifier realignment must update this file 
 
 ### Workstream 1: Gateway Signal Canonicalization
 
+**Status:** Complete and committed
+
 Goals:
 
 - treat structured fallback decisions consistently
@@ -229,6 +292,8 @@ Required changes:
 
 ### Workstream 2: Code-Session And Delegation Boundary Cleanup
 
+**Status:** Complete and committed
+
 Goals:
 
 - stop code-session context from mutating normal chat into delegated coding work
@@ -243,17 +308,38 @@ Required changes:
 
 ### Workstream 3: Planned-Step Discipline
 
+**Status:** In progress
+
+Current landing:
+
+- degraded/placeholder gateway summaries are no longer allowed to flow straight through as the delegated contract summary
+- generic generated answer steps can now be rewritten from the delegated contract summary instead of always staying at `Answer the request directly.`
+- step/tool matching, dependency-aware retry carry-forward, and grounded retry hints are stricter than they were at the start of this phase
+
+Remaining gap:
+
+- exact-file repo inspections still do not have strong enough shared answer-step semantics
+- one exact-file repo-inspection prompt still fails outright
+- another exact-file repo-inspection prompt now completes but still produces a semantically wrong/incomplete answer
+
 Goals:
 
 - stop fabricating verifier requirements from modifiers
 - make multi-step plans come from either explicit classifier output or clearly sequential action structure
+- make answer steps carry the real user ask when the gateway summary is degraded or generic
+- stop accepting semantically wrong exact-file repo-inspection answers just because they cite grounded files
 
 Required changes:
 
 - trust classifier-emitted `planned_steps` as the primary multi-step source
 - restrict deterministic synthesis to clear sequential action lists
 - stop turning answer modifiers such as `cite exact file names`, `do not edit anything`, or similar constraints into separate required steps
+- preserve the real delegated ask in the contract and answer-step criteria even when the gateway summary is degraded
 - if needed, add explicit step-level constraint fields or contract flags rather than inventing more steps
+- add shared answer constraints for exact-file repo inspections instead of relying only on generic `answer` step completion
+- tighten exact-file verification so it can distinguish implementation files from merely grounded but irrelevant search hits or helper files
+- tighten symbol/file citation verification so prompts asking for symbol names do not pass without the requested symbols
+- keep the multi-step write/search/write prompt and simple direct greeting as explicit regression gates while tightening repo-inspection quality
 
 ### Workstream 4: Envelope-First Verifier Cutover
 
@@ -298,18 +384,61 @@ Required changes:
 
 ## Sequencing
 
-1. Canonicalize degraded structured gateway reuse.
-2. Remove code-session-driven orchestration fallback.
-3. Tighten planned-step synthesis.
+1. Canonicalize degraded structured gateway reuse.  
+   Status: done.
+2. Remove code-session-driven orchestration fallback.  
+   Status: done.
+3. Finish Workstream 3 by tightening answer-step semantics and exact-file repo-inspection quality.  
+   Do not advance until both repo-inspection manual prompts are clean.
 4. Finish envelope-first verification and retry behavior.
 5. Decide the long-term execution/event spine.
 6. Update design docs, harnesses, and brittle expectations in the same change sets.
+
+## Next Phase Checklist
+
+### Phase 3A: Finish planned-step discipline
+
+- make exact-file repo-inspection answer constraints first-class in the shared contract
+- tighten verifier checks for implementation-file relevance and requested symbol coverage
+- ensure the delegated worker completion-contract prompt returns the actual contract files and symbols, not just any grounded files
+- ensure the delegated worker progress/timeline prompt completes without step-coverage failure
+- fix modifier-clause handling so "Do not edit anything" and "Cite exact file names" become answer constraints instead of separate required steps
+- add `implementation_file` and `symbol_reference` claim kinds to distinguish search hits from implementation grounding
+- add `AnswerConstraints` to `DelegatedTaskContract` with `requiresImplementationFiles`, `requiresSymbolNames`, `readonly`, and `requestedSymbols`
+- add `deriveAnswerConstraints` to extract constraints from request text patterns
+- add `verifyRepoInspectionRequirements` to check implementation-file claims, symbol references, and readonly compliance
+- enrich answer-step summaries for repo-inspection contracts with constraint-specific quality guidance
+- classify worker `fs_read` claims as `implementation_file` for repo-inspection contracts
+- extract `symbol_reference` claims from final answers when contract requires symbol names
+- add retry hints for `implementation_file_claim`, `symbol_reference_claim`, and `readonly_violation` missing evidence kinds
+
+### Phase 3A manual gates
+
+- `Inspect this repo and tell me which files and functions or types now define the delegated worker completion contract. Cite exact file names and symbol names.`
+  - must complete
+  - must name the real contract-defining and contract-consuming files
+  - must include the requested symbol names
+- `Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.`
+  - must complete
+  - must cite the actual implementation files, not just arbitrary grounded files
+- `Write the current date and time to tmp/manual-web/current-time.txt. Search src/runtime for planned_steps. Write a short summary to tmp/manual-web/planned-steps-summary.txt.`
+  - must keep passing
+- `Just reply hello back`
+  - must keep passing
+
+### Phase 4
+
+- after Workstream 3 is clean, move to envelope-first verifier cutover
+- demote legacy `workerExecution` metadata to diagnostics only
+- remove any remaining acceptance/control-flow dependence on legacy completion metadata
 
 ## Exit Criteria
 
 - degraded structured gateway decisions are reused consistently across routing, direct-intent, and worker handoff layers
 - a simple `general_assistant` or `direct_assistant` turn does not delegate just because a coding session is attached
 - planned-step synthesis no longer invents verifier requirements from modifiers
+- answer-step summaries reflect the real delegated ask rather than placeholder gateway summaries
+- exact-file repo-inspection verification can reject semantically wrong implementation answers even when they cite grounded files
 - delegated acceptance is driven by the typed envelope, not prose or legacy `completionReason` fields
 - the repo tells one coherent story about execution/event canonical state
 - the overlapping plan stack listed above is gone
@@ -321,14 +450,38 @@ Required changes:
 - degraded-but-structured gateway records still drive tier routing and direct-intent candidate selection
 - attached coding-session greeting and normal-chat turns stay inline on the selected provider
 - modifier prompts remain one inspection step plus constraints instead of splitting into fake steps
+- placeholder gateway summaries do not become the delegated contract summary when `resolvedContent` is available
+- generic answer steps are rewritten from the real delegated ask when the gateway emits only placeholder summary text
 - verifier decisions change only with envelope state, not `workerExecution` prose labels
 - multi-step delegated filesystem/coding prompts preserve satisfied steps across retry without plan drift
+- exact-file repo-inspection prompts do not pass on semantically wrong grounded answers
+- `implementation_file` claims satisfy repo-inspection requirements while `file_reference` claims alone are insufficient
+- `symbol_reference` claims are required when `requiresSymbolNames` is set
+- modifier phrases become answer constraints instead of separate required steps
+- readonly constraint (`answerConstraints.readonly`) blocks satisfaction on mutation claims
+
+### Manual web validation baseline (2026-04-22)
+
+- `Just reply hello back`
+  - current status: passing
+- `Write the current date and time to tmp/manual-web/current-time.txt. Search src/runtime for planned_steps. Write a short summary to tmp/manual-web/planned-steps-summary.txt.`
+  - current status: passing
+- `Inspect this repo and tell me which files and functions or types now define the delegated worker completion contract. Cite exact file names and symbol names.`
+  - current status: completes but still wrong/incomplete
+- `Inspect this repo and tell me which files implement delegated worker progress and run timeline rendering. Do not edit anything.`
+  - current status: still failing verification
 
 ### Harness
 
 - `node scripts/test-coding-assistant.mjs`
 - `node scripts/test-code-ui-smoke.mjs`
 - routing/delegation smoke coverage for degraded gateway reuse, plan synthesis, and attached coding-session direct chat
+
+Current harness caveats:
+
+- `test-code-ui-smoke.mjs` can still require a rerun because of an existing Web UI flake around `example.ts` selection plus the usual `401 /api/status` and Monaco cancellation noise.
+- `test-coding-assistant.mjs` can still require a rerun on Windows when the native AV readiness checks lag before the harness settles.
+- Treat those as harness flake/readiness issues, not as automatic evidence that the routing/delegation architecture regressed.
 
 ## Operating Rule
 
