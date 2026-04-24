@@ -755,6 +755,71 @@ describe('direct reasoning mode', () => {
     expect(traceEntries.map((entry) => entry.stage)).toContain('direct_reasoning_synthesis_completed');
   });
 
+  it('bounds broad grounded synthesis prompts while preserving selected artifact telemetry', async () => {
+    const readToolCalls = Array.from({ length: 16 }, (_, index) => ({
+      id: `call-${index + 1}`,
+      name: 'fs_read',
+      arguments: JSON.stringify({ path: `src/runtime/broad-${index + 1}.ts` }),
+    }));
+    let synthesisPrompt = '';
+    let noToolCallCount = 0;
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: readToolCalls,
+        });
+      }
+      noToolCallCount += 1;
+      if (noToolCallCount === 1) {
+        synthesisPrompt = messages.map((message) => message.content).join('\n');
+      }
+      return chatResponse({
+        content: 'Grounded synthesis cites compact selected artifacts.',
+      });
+    });
+    const executeTool = vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
+      const path = String(args.path ?? 'src/runtime/broad.ts');
+      return {
+        success: true,
+        status: 'succeeded',
+        output: {
+          path,
+          bytes: 20_000,
+          content: [
+            `export function ${path.replace(/[^a-z0-9]/gi, '')}() {}`,
+            'x'.repeat(20_000),
+          ].join('\n'),
+        },
+      };
+    });
+    const traceEntries: Array<Record<string, unknown>> = [];
+
+    const result = await handleDirectReasoningMode({
+      message: 'Inspect this repo and explain broad runtime architecture. Do not edit anything.',
+      gateway: gateway({ operation: 'inspect' }),
+      selectedExecutionProfile: profile(),
+      maxTurns: 1,
+    }, {
+      chat,
+      executeTool,
+      trace: {
+        record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
+      },
+    });
+
+    expect(result.content).toContain('Grounded synthesis cites compact selected artifacts.');
+    expect(synthesisPrompt).toContain('Typed evidence');
+    expect(synthesisPrompt).toContain('[excerpt shortened for synthesis]');
+    expect(synthesisPrompt.length).toBeLessThan(18_000);
+    const synthesisStarted = traceEntries.find((entry) => entry.stage === 'direct_reasoning_synthesis_started');
+    const details = synthesisStarted?.details as Record<string, unknown> | undefined;
+    expect(details?.selectedArtifactCount).toBe(10);
+    expect(details?.promptChars).toBeLessThan(18_000);
+    expect(details?.maxEvidenceChars).toBe(10_000);
+    expect(details?.maxSelectedArtifacts).toBe(10);
+  });
+
   it('does not report timedOut when budget-limited exploration still completes grounded synthesis', async () => {
     const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
       if (options?.tools && options.tools.length > 0) {

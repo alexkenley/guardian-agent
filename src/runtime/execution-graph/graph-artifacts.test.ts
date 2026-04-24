@@ -105,6 +105,36 @@ describe('execution graph artifacts', () => {
     expect(draft.content.citedArtifactIds).toEqual(['artifact-search', 'artifact-read', 'artifact-ledger']);
   });
 
+  it('keeps formatted synthesis evidence compact across multiple large file reads', () => {
+    const reads = Array.from({ length: 4 }, (_, index) => buildFileReadSetArtifact({
+      graphId: 'graph-1',
+      nodeId: 'node-1',
+      artifactId: `artifact-read-${index + 1}`,
+      path: `src/runtime/large-${index + 1}.ts`,
+      content: [
+        `export function large${index + 1}() {}`,
+        'x'.repeat(10_000),
+      ].join('\n'),
+      createdAt: 100 + index,
+    }));
+    const ledger = buildEvidenceLedgerArtifact({
+      graphId: 'graph-1',
+      nodeId: 'node-1',
+      artifactId: 'artifact-ledger-large',
+      artifacts: reads,
+      createdAt: 200,
+    });
+
+    const promptEvidence = formatEvidenceArtifactsForSynthesis({
+      ledger,
+      sourceArtifacts: reads,
+    });
+
+    expect(promptEvidence).toContain('[excerpt shortened for synthesis]');
+    expect(promptEvidence).toContain('src/runtime/large-4.ts');
+    expect(promptEvidence.length).toBeLessThan(9_500);
+  });
+
   it('bounds retention in the artifact store', () => {
     const store = new ExecutionArtifactStore({ maxArtifacts: 1 });
     store.writeArtifact(buildSearchResultSetArtifact({

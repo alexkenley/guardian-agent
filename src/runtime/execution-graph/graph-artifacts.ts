@@ -160,6 +160,7 @@ const MAX_PREVIEW_CHARS = 220;
 const MAX_SNIPPET_PREVIEW_CHARS = 240;
 const MAX_FILE_EXCERPT_CHARS = 8_000;
 const MAX_SYNTHESIS_ARTIFACT_CHARS = 12_000;
+const MAX_FORMATTED_SYNTHESIS_FILE_EXCERPT_CHARS = 1_800;
 
 export class ExecutionArtifactStore {
   private readonly artifacts = new Map<string, ExecutionArtifact>();
@@ -559,7 +560,11 @@ export function formatEvidenceArtifactsForSynthesis(input: {
       const content = artifact.content as FileReadSetContent;
       for (const file of content.files.slice(0, 4)) {
         lines.push(`Excerpt from ${file.path}:${file.lineStart}-${file.lineEnd}`);
-        lines.push(file.excerpt);
+        const excerpt = truncateText(file.excerpt, MAX_FORMATTED_SYNTHESIS_FILE_EXCERPT_CHARS) ?? '';
+        lines.push(excerpt);
+        if (excerpt.length < file.excerpt.trim().length) {
+          lines.push('[excerpt shortened for synthesis]');
+        }
       }
     }
   }

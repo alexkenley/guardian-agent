@@ -154,8 +154,8 @@ const DEFAULT_MAX_TOTAL_TIME_MS = 210_000;
 const DEFAULT_PER_CALL_TIMEOUT_MS = 60_000;
 const DEFAULT_FINAL_RESPONSE_TIMEOUT_MS = 90_000;
 const FINAL_RESPONSE_RESERVE_MS = 15_000;
-const MAX_SYNTHESIS_EVIDENCE_CHARS = 16_000;
-const MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS = 14;
+const MAX_SYNTHESIS_EVIDENCE_CHARS = 10_000;
+const MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS = 10;
 const MAX_DIRECT_REASONING_SYNTHESIS_COVERAGE_FILES = 16;
 const MAX_DIRECT_REASONING_SYNTHESIS_COMPLETION_FILES = 8;
 const DIRECT_REASONING_SYNTHESIS_REVISION_MIN_FILES = 4;
@@ -618,6 +618,19 @@ export async function executeDirectReasoningLoop(input: {
       : DEFAULT_FINAL_RESPONSE_TIMEOUT_MS;
     if (finalTimeoutMs > 1_000) {
       const synthesisArtifacts = selectDirectReasoningSynthesisArtifacts(artifactState.artifacts, evidence);
+      const sourceArtifactCount = artifactState.artifacts.length;
+      const ledgerArtifact = createDirectReasoningEvidenceLedgerArtifact(artifactState, now(), synthesisArtifacts);
+      if (ledgerArtifact) {
+        input.graphEmitter?.emit('artifact_created', artifactEventPayload(ledgerArtifact), `artifact:${ledgerArtifact.artifactId}`);
+      }
+      const synthesisMessages = buildDirectReasoningSynthesisMessages({
+        input: input.input,
+        artifacts: synthesisArtifacts,
+        ledgerArtifact,
+        toolCallCount,
+        evidence,
+      });
+      const synthesisPromptChars = totalChatMessageContentChars(synthesisMessages);
       recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_started', {
         route: input.input.gateway?.decision.route,
         operation: input.input.gateway?.decision.operation,
@@ -626,31 +639,24 @@ export async function executeDirectReasoningLoop(input: {
           : 'direct_reasoning_no_final_answer',
         toolCallCount,
         evidenceCount: evidence.length,
-        artifactCount: artifactState.artifacts.length,
+        artifactCount: sourceArtifactCount,
         selectedArtifactCount: synthesisArtifacts.length,
+        promptChars: synthesisPromptChars,
+        maxEvidenceChars: MAX_SYNTHESIS_EVIDENCE_CHARS,
+        maxSelectedArtifacts: MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS,
         selectedArtifacts: synthesisArtifacts.map((artifact) => ({
           artifactId: artifact.artifactId,
           artifactType: artifact.artifactType,
           refs: artifact.refs.slice(0, 12),
         })),
       });
-      const ledgerArtifact = createDirectReasoningEvidenceLedgerArtifact(artifactState, now(), synthesisArtifacts);
-      if (ledgerArtifact) {
-        input.graphEmitter?.emit('artifact_created', artifactEventPayload(ledgerArtifact), `artifact:${ledgerArtifact.artifactId}`);
-      }
       input.graphEmitter?.emit('llm_call_started', {
         phase: 'grounded_synthesis',
         toolCallCount,
         evidenceCount: evidence.length,
         artifactCount: synthesisArtifacts.length,
+        promptChars: synthesisPromptChars,
       }, 'synthesis:started');
-      const synthesisMessages = buildDirectReasoningSynthesisMessages({
-        input: input.input,
-        artifacts: synthesisArtifacts,
-        ledgerArtifact,
-        toolCallCount,
-        evidence,
-      });
       recordDirectReasoningLlmCall(input, 'started', {
         phase: 'grounded_synthesis',
         attempt: 1,
@@ -659,6 +665,7 @@ export async function executeDirectReasoningLoop(input: {
         toolCount: 0,
         evidenceCount: evidence.length,
         artifactCount: synthesisArtifacts.length,
+        promptChars: synthesisPromptChars,
       });
       const finalResponse = await chatWithBudget(input.deps, synthesisMessages, { tools: [] }, finalTimeoutMs);
       let synthesisContent = finalResponse?.content?.trim() ? finalResponse.content : '';
@@ -690,6 +697,7 @@ export async function executeDirectReasoningLoop(input: {
             evidence,
             missingCoverageFiles,
           });
+          const revisionPromptChars = totalChatMessageContentChars(revisionMessages);
           recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
             route: input.input.gateway?.decision.route,
             operation: input.input.gateway?.decision.operation,
@@ -697,6 +705,7 @@ export async function executeDirectReasoningLoop(input: {
             missingCoverageFiles: missingCoverageFiles.map((summary) => summary.file),
             coverageFileCount: selectDirectReasoningCoverageSummaries(evidence).length,
             callBudgetMs: revisionTimeoutMs,
+            promptChars: revisionPromptChars,
           });
           recordDirectReasoningLlmCall(input, 'started', {
             phase: 'grounded_synthesis_revision',
@@ -707,6 +716,7 @@ export async function executeDirectReasoningLoop(input: {
             evidenceCount: evidence.length,
             artifactCount: synthesisArtifacts.length,
             missingCoverageFileCount: missingCoverageFiles.length,
+            promptChars: revisionPromptChars,
           });
           const revisionResponse = await chatWithBudget(input.deps, revisionMessages, { tools: [] }, revisionTimeoutMs);
           recordDirectReasoningLlmCall(input, 'completed', {
@@ -904,6 +914,10 @@ function summarizeDirectReasoningChatResponse(response: ChatResponse): Record<st
     toolCallCount: toolCalls.length,
     toolNames: toolCalls.map((call) => call.name).filter((name) => !!name),
   };
+}
+
+function totalChatMessageContentChars(messages: ChatMessage[]): number {
+  return messages.reduce((total, message) => total + message.content.length, 0);
 }
 
 function buildDirectReasoningCompactRetryMessages(input: DirectReasoningInput): ChatMessage[] {
