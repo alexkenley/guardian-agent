@@ -30,6 +30,7 @@ import {
 import { normalizeConfidence, normalizeOperation } from './normalization.js';
 import {
   isExplicitComplexPlanningRequest,
+  isExplicitRepoInspectionRequest,
   isExplicitRepoPlanningRequest,
   looksLikeStandaloneGreetingTurn,
 } from './request-patterns.js';
@@ -89,6 +90,18 @@ export function repairUnavailableIntentGatewayDecision(
         parsed,
         rawSourceContent,
         'Recovered repo-scoped implementation-planning intent after an unstructured gateway response.',
+      ),
+      route: 'coding_task',
+      operation: 'inspect',
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+    }, repairContext, { classifierSource: 'repair.unstructured' });
+  }
+  if (isExplicitRepoInspectionRequest(rawSourceContent)) {
+    return normalizeIntentGatewayDecision({
+      ...buildRecoveredDecisionSeed(
+        parsed,
+        rawSourceContent,
+        'Recovered repo-scoped inspection intent after an unstructured gateway response.',
       ),
       route: 'coding_task',
       operation: 'inspect',

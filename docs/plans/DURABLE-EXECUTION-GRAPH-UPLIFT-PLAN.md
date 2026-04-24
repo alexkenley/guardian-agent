@@ -1,6 +1,6 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** In progress. Phase 1 is implemented; Phase 2 read-only graph/timeline vertical slice is implemented and the first read-only regression ladder is passing.
+**Status:** In progress. Phases 1-3 are implemented for the read-only graph/artifact lane, and the first read-only regression ladder is passing.
 **Date:** 2026-04-24
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
@@ -20,9 +20,10 @@ As of 2026-04-24:
 
 - Phase 1 graph kernel and event projection are implemented: execution graph types, event types, bounded store, run-timeline adapter, and focused tests.
 - Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
+- Phase 3 typed artifact store and grounded synthesis are implemented for the read-only lane: graph-owned artifact storage retains typed artifact contents and refs, direct reasoning emits `SearchResultSet`, `FileReadSet`, `EvidenceLedger`, and `SynthesisDraft` artifacts, and no-tools synthesis consumes bounded evidence artifacts.
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
-- Do not move to hybrid write/artifact behavior until this read-only lane remains stable through a broader manual web UI pass and the focused verification commands below.
+- Do not move to broader hybrid write behavior until this read-only/artifact lane remains stable through a broader manual web UI pass and the focused verification commands below.
 
 ## External Best-Practice References
 
@@ -416,6 +417,8 @@ Security checks:
 ### Phase 3: Typed Artifact Store And Grounded Synthesis
 
 Goal: search/read evidence becomes typed artifacts; synthesis consumes artifacts.
+
+Current status: implemented for the read-only direct-reasoning lane.
 
 Files:
 

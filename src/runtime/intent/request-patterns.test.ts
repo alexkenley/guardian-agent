@@ -43,6 +43,9 @@ describe('request-patterns', () => {
     expect(isExplicitRepoInspectionRequest(
       'Find the files that define IntentGateway planned steps, including type definitions, classifier schema, and recovery logic. Cite exact symbols. Do not edit anything.',
     )).toBe(true);
+    expect(isExplicitRepoInspectionRequest(
+      'Inspect this repo and explain where run.timeline SSE events are emitted and consumed. Cite exact files and function names. Do not edit anything.',
+    )).toBe(true);
   });
 
   it('does not confuse session-attachment questions with repo inspection requests', () => {

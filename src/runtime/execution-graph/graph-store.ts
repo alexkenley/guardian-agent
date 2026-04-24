@@ -11,10 +11,16 @@ import type {
   ExecutionSecurityContext,
 } from './types.js';
 import type { ExecutionGraphEvent } from './graph-events.js';
+import {
+  ExecutionArtifactStore,
+  artifactRefFromArtifact,
+  type ExecutionArtifact,
+} from './graph-artifacts.js';
 
 export interface ExecutionGraphStoreOptions {
   maxGraphs?: number;
   maxEventsPerGraph?: number;
+  maxArtifactsPerGraph?: number;
   maxCheckpointsPerGraph?: number;
   checkpointIntervalEvents?: number;
   now?: () => number;
@@ -41,14 +47,17 @@ export interface ExecutionGraphSnapshot {
 
 const DEFAULT_MAX_GRAPHS = 200;
 const DEFAULT_MAX_EVENTS_PER_GRAPH = 500;
+const DEFAULT_MAX_ARTIFACTS_PER_GRAPH = 500;
 const DEFAULT_MAX_CHECKPOINTS_PER_GRAPH = 50;
 const DEFAULT_CHECKPOINT_INTERVAL_EVENTS = 25;
 
 export class ExecutionGraphStore {
   private readonly graphs = new Map<string, ExecutionGraph>();
   private readonly events = new Map<string, ExecutionGraphEvent[]>();
+  private readonly artifacts = new Map<string, ExecutionArtifactStore>();
   private readonly maxGraphs: number;
   private readonly maxEventsPerGraph: number;
+  private readonly maxArtifactsPerGraph: number;
   private readonly maxCheckpointsPerGraph: number;
   private readonly checkpointIntervalEvents: number;
   private readonly now: () => number;
@@ -56,6 +65,7 @@ export class ExecutionGraphStore {
   constructor(options: ExecutionGraphStoreOptions = {}) {
     this.maxGraphs = Math.max(1, options.maxGraphs ?? DEFAULT_MAX_GRAPHS);
     this.maxEventsPerGraph = Math.max(1, options.maxEventsPerGraph ?? DEFAULT_MAX_EVENTS_PER_GRAPH);
+    this.maxArtifactsPerGraph = Math.max(1, options.maxArtifactsPerGraph ?? DEFAULT_MAX_ARTIFACTS_PER_GRAPH);
     this.maxCheckpointsPerGraph = Math.max(1, options.maxCheckpointsPerGraph ?? DEFAULT_MAX_CHECKPOINTS_PER_GRAPH);
     this.checkpointIntervalEvents = Math.max(1, options.checkpointIntervalEvents ?? DEFAULT_CHECKPOINT_INTERVAL_EVENTS);
     this.now = options.now ?? Date.now;
@@ -84,6 +94,7 @@ export class ExecutionGraphStore {
     };
     this.graphs.set(graphId, graph);
     this.events.set(graphId, []);
+    this.artifacts.set(graphId, new ExecutionArtifactStore({ maxArtifacts: this.maxArtifactsPerGraph }));
     this.prune();
     return cloneGraph(graph);
   }
@@ -140,6 +151,35 @@ export class ExecutionGraphStore {
     return cloneArtifact(artifact);
   }
 
+  writeArtifact<TContent extends ExecutionArtifact['content']>(
+    artifact: ExecutionArtifact<TContent>,
+  ): ExecutionArtifact<TContent> | null {
+    const graph = this.graphs.get(artifact.graphId.trim());
+    if (!graph) return null;
+    const store = this.artifacts.get(graph.graphId)
+      ?? new ExecutionArtifactStore({ maxArtifacts: this.maxArtifactsPerGraph });
+    this.artifacts.set(graph.graphId, store);
+    const written = store.writeArtifact(artifact);
+    graph.artifacts = store.listArtifacts()
+      .map(artifactRefFromArtifact)
+      .sort((left, right) => left.createdAt - right.createdAt || left.artifactId.localeCompare(right.artifactId));
+    graph.updatedAt = Math.max(graph.updatedAt, written.createdAt);
+    this.prune();
+    return written;
+  }
+
+  getArtifact(graphId: string, artifactId: string): ExecutionArtifact | null {
+    const graph = this.graphs.get(graphId.trim());
+    if (!graph) return null;
+    return this.artifacts.get(graph.graphId)?.getArtifact(artifactId) ?? null;
+  }
+
+  listArtifacts(graphId: string): ExecutionArtifact[] {
+    const graph = this.graphs.get(graphId.trim());
+    if (!graph) return [];
+    return this.artifacts.get(graph.graphId)?.listArtifacts() ?? [];
+  }
+
   private addCheckpoint(
     graph: ExecutionGraph,
     event: ExecutionGraphEvent,
@@ -165,6 +205,7 @@ export class ExecutionGraphStore {
     for (const graph of sorted.slice(this.maxGraphs)) {
       this.graphs.delete(graph.graphId);
       this.events.delete(graph.graphId);
+      this.artifacts.delete(graph.graphId);
     }
   }
 }

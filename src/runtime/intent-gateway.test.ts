@@ -200,6 +200,29 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
   });
 
+  it('recovers explicit repo inspection before automation-output recovery when dotted event names mention run timeline', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Inspect this repo and explain where run.timeline SSE events are emitted and consumed. Cite exact files and function names. Do not edit anything.',
+        channel: 'web',
+      },
+      async () => ({
+        content: 'This appears to ask about an automation run timeline output.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.requireExactFileReferences).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+  });
+
   it('repairs fully unavailable gateway responses into repo-grounded inspection decisions', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

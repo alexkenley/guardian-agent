@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { IntentGatewayDecision } from '../intent/types.js';
 import { createExecutionGraphEvent } from './graph-events.js';
 import { ExecutionGraphStore } from './graph-store.js';
+import { buildSearchResultSetArtifact } from './graph-artifacts.js';
 
 function decision(): IntentGatewayDecision {
   return {
@@ -129,5 +130,46 @@ describe('ExecutionGraphStore', () => {
 
     expect(store.getGraph('graph-1')).toBeNull();
     expect(store.getGraph('graph-2')?.executionId).toBe('exec-2');
+  });
+
+  it('stores typed artifacts with graph snapshots and prunes artifact refs with content', () => {
+    const store = new ExecutionGraphStore({
+      now: () => 100,
+      maxArtifactsPerGraph: 1,
+    });
+    store.createGraph({
+      graphId: 'graph-1',
+      executionId: 'exec-1',
+      requestId: 'req-1',
+      intent: decision(),
+    });
+
+    const oldArtifact = buildSearchResultSetArtifact({
+      graphId: 'graph-1',
+      nodeId: 'node-1',
+      artifactId: 'old-search',
+      query: 'RunTimelineStore',
+      matches: [{ relativePath: 'src/runtime/run-timeline.ts', line: 10 }],
+      createdAt: 110,
+    });
+    const newArtifact = buildSearchResultSetArtifact({
+      graphId: 'graph-1',
+      nodeId: 'node-1',
+      artifactId: 'new-search',
+      query: 'direct reasoning',
+      matches: [{ relativePath: 'src/runtime/direct-reasoning-mode.ts', line: 20 }],
+      createdAt: 120,
+    });
+
+    expect(store.writeArtifact(oldArtifact)?.artifactId).toBe('old-search');
+    expect(store.getArtifact('graph-1', 'old-search')?.content).toMatchObject({
+      totalMatches: 1,
+    });
+
+    store.writeArtifact(newArtifact);
+
+    expect(store.getArtifact('graph-1', 'old-search')).toBeNull();
+    expect(store.listArtifacts('graph-1').map((artifact) => artifact.artifactId)).toEqual(['new-search']);
+    expect(store.getSnapshot('graph-1')?.graph.artifacts.map((artifact) => artifact.artifactId)).toEqual(['new-search']);
   });
 });
