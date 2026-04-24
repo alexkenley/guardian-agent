@@ -24,6 +24,19 @@ import {
   buildDirectReasoningGraphEvent,
   type DirectReasoningGraphContext,
 } from './execution-graph/direct-reasoning-node.js';
+import {
+  artifactRefFromArtifact,
+  buildFileReadSetArtifact,
+  buildSearchResultSetArtifact,
+  type EvidenceLedgerContent,
+  type ExecutionArtifact,
+  type SynthesisDraftValidationResult,
+} from './execution-graph/graph-artifacts.js';
+import {
+  buildGroundedSynthesisLedgerArtifact,
+  buildGroundedSynthesisMessages,
+  createGroundedSynthesisDraftArtifact,
+} from './execution-graph/synthesis-node.js';
 
 import { deriveAnswerConstraints } from './intent/request-patterns.js';
 import { isReadLikeOperation } from './orchestration-role-contracts.js';
@@ -87,6 +100,8 @@ export interface DirectReasoningLoopResult {
   toolCallCount: number;
   timedOut: boolean;
   evidenceCount: number;
+  artifactCount: number;
+  artifactIds: string[];
   synthesized: boolean;
 }
 
@@ -101,7 +116,18 @@ interface DirectReasoningEvidenceEntry {
 }
 
 interface DirectReasoningGraphEmitter {
+  context: DirectReasoningGraphContext;
   emit: (kind: ExecutionGraphEventKind, payload?: Record<string, unknown>, eventKey?: string) => void;
+}
+
+interface DirectReasoningArtifactState {
+  context: DirectReasoningGraphContext;
+  artifacts: ExecutionArtifact[];
+}
+
+interface DirectReasoningSynthesisDraftArtifact {
+  artifact: ExecutionArtifact;
+  validation: SynthesisDraftValidationResult;
 }
 
 const DEFAULT_MAX_TURNS = 8;
@@ -110,8 +136,6 @@ const DEFAULT_PER_CALL_TIMEOUT_MS = 60_000;
 const DEFAULT_FINAL_RESPONSE_TIMEOUT_MS = 30_000;
 const FINAL_RESPONSE_RESERVE_MS = 15_000;
 const MAX_SYNTHESIS_EVIDENCE_CHARS = 24_000;
-const MAX_SYNTHESIS_EVIDENCE_ENTRIES = 24;
-const MAX_SYNTHESIS_SNIPPETS_PER_ENTRY = 10;
 const DIRECT_SEARCH_DEFAULT_MAX_RESULTS = 40;
 const DIRECT_SEARCH_DEFAULT_MAX_DEPTH = 12;
 const DIRECT_SEARCH_DEFAULT_MAX_FILES = 2_500;
@@ -360,6 +384,8 @@ export async function handleDirectReasoningMode(
         toolCallCount: loopResult.toolCallCount,
         timedOut: loopResult.timedOut,
         evidenceCount: loopResult.evidenceCount,
+        artifactCount: loopResult.artifactCount,
+        artifactIds: loopResult.artifactIds,
         synthesized: loopResult.synthesized,
       },
       ...(qualityNotes.length > 0 ? { qualityNotes } : {}),
@@ -385,6 +411,20 @@ export async function executeDirectReasoningLoop(input: {
   let timedOut = false;
   let turns = 0;
   const evidence: DirectReasoningEvidenceEntry[] = [];
+  const artifactState: DirectReasoningArtifactState = {
+    context: input.graphEmitter?.context ?? input.input.graphContext ?? buildDirectReasoningGraphContext({
+      requestId: input.input.traceContext?.requestId,
+      executionId: input.input.traceContext?.executionId,
+      rootExecutionId: input.input.traceContext?.rootExecutionId,
+      taskExecutionId: input.input.traceContext?.taskExecutionId,
+      channel: input.input.traceContext?.channel,
+      agentId: input.input.traceContext?.agentId,
+      userId: input.input.traceContext?.userId,
+      codeSessionId: input.input.traceContext?.codeSessionId,
+      decision: input.input.gateway?.decision ?? null,
+    }),
+    artifacts: [],
+  };
 
   while (turns < maxTurns) {
     const remainingMs = maxTotalTimeMs - (now() - startedAt);
@@ -426,6 +466,7 @@ export async function executeDirectReasoningLoop(input: {
         input: input.input,
         deps: input.deps,
         graphEmitter: input.graphEmitter,
+        artifactState,
         turn: turns,
         evidence,
       });
@@ -452,33 +493,48 @@ export async function executeDirectReasoningLoop(input: {
           : 'direct_reasoning_no_final_answer',
         toolCallCount,
         evidenceCount: evidence.length,
+        artifactCount: artifactState.artifacts.length,
       });
+      const ledgerArtifact = createDirectReasoningEvidenceLedgerArtifact(artifactState, now());
+      if (ledgerArtifact) {
+        input.graphEmitter?.emit('artifact_created', artifactEventPayload(ledgerArtifact), `artifact:${ledgerArtifact.artifactId}`);
+      }
       input.graphEmitter?.emit('llm_call_started', {
         phase: 'grounded_synthesis',
         toolCallCount,
         evidenceCount: evidence.length,
+        artifactCount: artifactState.artifacts.length,
       }, 'synthesis:started');
       const synthesisMessages = buildDirectReasoningSynthesisMessages({
         input: input.input,
-        evidence,
+        artifacts: artifactState.artifacts,
+        ledgerArtifact,
         toolCallCount,
       });
       const finalResponse = await chatWithBudget(input.deps, synthesisMessages, { tools: [] }, finalTimeoutMs);
       if (finalResponse?.content?.trim()) {
         finalContent = finalResponse.content;
         synthesized = true;
+        const draftArtifact = createDirectReasoningSynthesisDraftArtifact(artifactState, finalContent, now());
+        input.graphEmitter?.emit(
+          'artifact_created',
+          artifactEventPayload(draftArtifact.artifact, draftArtifact.validation),
+          `artifact:${draftArtifact.artifact.artifactId}`,
+        );
         recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_completed', {
           route: input.input.gateway?.decision.route,
           operation: input.input.gateway?.decision.operation,
           reason: 'direct_reasoning_grounded_synthesis_completed',
           toolCallCount,
           evidenceCount: evidence.length,
+          artifactCount: artifactState.artifacts.length,
         });
         input.graphEmitter?.emit('llm_call_completed', {
           phase: 'grounded_synthesis',
           resultStatus: 'succeeded',
           toolCallCount,
           evidenceCount: evidence.length,
+          artifactCount: artifactState.artifacts.length,
         }, 'synthesis:completed');
       } else {
         if (finalContent.trim()) {
@@ -488,29 +544,39 @@ export async function executeDirectReasoningLoop(input: {
             reason: 'direct_reasoning_synthesis_empty_kept_exploration_answer',
             toolCallCount,
             evidenceCount: evidence.length,
+            artifactCount: artifactState.artifacts.length,
           });
           input.graphEmitter?.emit('llm_call_completed', {
             phase: 'grounded_synthesis',
             resultStatus: 'empty_kept_exploration_answer',
             toolCallCount,
             evidenceCount: evidence.length,
+            artifactCount: artifactState.artifacts.length,
           }, 'synthesis:completed');
         } else {
           const fallbackContent = buildDirectReasoningEvidenceFallbackAnswer(evidence);
           if (fallbackContent) {
             finalContent = fallbackContent;
+            const draftArtifact = createDirectReasoningSynthesisDraftArtifact(artifactState, finalContent, now());
+            input.graphEmitter?.emit(
+              'artifact_created',
+              artifactEventPayload(draftArtifact.artifact, draftArtifact.validation),
+              `artifact:${draftArtifact.artifact.artifactId}`,
+            );
             recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_completed', {
               route: input.input.gateway?.decision.route,
               operation: input.input.gateway?.decision.operation,
               reason: 'direct_reasoning_deterministic_evidence_summary',
               toolCallCount,
               evidenceCount: evidence.length,
+              artifactCount: artifactState.artifacts.length,
             });
             input.graphEmitter?.emit('llm_call_completed', {
               phase: 'grounded_synthesis',
               resultStatus: 'deterministic_evidence_summary',
               toolCallCount,
               evidenceCount: evidence.length,
+              artifactCount: artifactState.artifacts.length,
             }, 'synthesis:completed');
           } else {
             recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_rejected', {
@@ -519,6 +585,7 @@ export async function executeDirectReasoningLoop(input: {
               reason: 'direct_reasoning_final_answer_unavailable',
               toolCallCount,
               evidenceCount: evidence.length,
+              artifactCount: artifactState.artifacts.length,
             });
             input.graphEmitter?.emit('llm_call_completed', {
               phase: 'grounded_synthesis',
@@ -526,6 +593,7 @@ export async function executeDirectReasoningLoop(input: {
               errorMessage: 'Direct reasoning final answer unavailable.',
               toolCallCount,
               evidenceCount: evidence.length,
+              artifactCount: artifactState.artifacts.length,
             }, 'synthesis:completed');
             timedOut = true;
           }
@@ -544,7 +612,16 @@ export async function executeDirectReasoningLoop(input: {
   }
 
   return finalContent.trim()
-    ? { content: finalContent.trim(), turns, toolCallCount, timedOut, evidenceCount: evidence.length, synthesized }
+    ? {
+        content: finalContent.trim(),
+        turns,
+        toolCallCount,
+        timedOut,
+        evidenceCount: evidence.length,
+        artifactCount: artifactState.artifacts.length,
+        artifactIds: artifactState.artifacts.map((artifact) => artifact.artifactId),
+        synthesized,
+      }
     : null;
 }
 
@@ -553,6 +630,7 @@ export async function executeDirectReasoningToolCall(input: {
   input: DirectReasoningInput;
   deps: DirectReasoningDependencies;
   graphEmitter?: DirectReasoningGraphEmitter | null;
+  artifactState?: DirectReasoningArtifactState;
   turn: number;
   evidence?: DirectReasoningEvidenceEntry[];
 }): Promise<string> {
@@ -620,7 +698,20 @@ export async function executeDirectReasoningToolCall(input: {
       ...(formatToolResultPreview(result) ? { resultPreview: formatToolResultPreview(result) } : {}),
     }, `tool:${toolCall.id}:completed`);
 
-    input.evidence?.push(buildDirectReasoningEvidenceEntry(toolName, boundedArgs, result));
+    const evidenceEntry = buildDirectReasoningEvidenceEntry(toolName, boundedArgs, result);
+    input.evidence?.push(evidenceEntry);
+    const artifact = createDirectReasoningToolArtifact({
+      state: input.artifactState,
+      toolName,
+      toolCallId: toolCall.id,
+      args: boundedArgs,
+      result,
+      createdAt: input.deps.now?.() ?? Date.now(),
+    });
+    if (artifact) {
+      input.artifactState?.artifacts.push(artifact);
+      input.graphEmitter?.emit('artifact_created', artifactEventPayload(artifact), `artifact:${artifact.artifactId}`);
+    }
     return formatDirectReasoningToolResult(toolName, boundedArgs, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -721,70 +812,20 @@ function parseToolArgs(raw: string): Record<string, unknown> | null {
 
 function buildDirectReasoningSynthesisMessages(input: {
   input: DirectReasoningInput;
-  evidence: DirectReasoningEvidenceEntry[];
+  artifacts?: ExecutionArtifact[];
+  ledgerArtifact?: ExecutionArtifact<EvidenceLedgerContent> | null;
   toolCallCount: number;
 }): ChatMessage[] {
-  const decision = input.input.gateway?.decision;
-  const evidenceText = formatDirectReasoningEvidenceForSynthesis(input.evidence);
-  return [
-    {
-      role: 'system',
-      content: [
-        'You are GuardianAgent direct reasoning grounded-synthesis finalizer.',
-        'No tools are available now. Use only the compact evidence ledger below.',
-        'Answer the original user request directly and cite exact file paths and symbol names when the evidence contains them.',
-        'Do not invent file relationships, control flow, function roles, or ownership that are not demonstrated by the evidence.',
-        'If the evidence is insufficient for part of the request, state the supported findings and the specific gap.',
-      ].join('\n'),
-    },
-    {
-      role: 'user',
-      content: [
-        'Original request:',
-        input.input.message,
-        '',
-        'Routing:',
-        `- route: ${decision?.route ?? 'unknown'}`,
-        `- operation: ${decision?.operation ?? 'unknown'}`,
-        `- executionClass: ${decision?.executionClass ?? 'unknown'}`,
-        `- workspaceRoot: ${input.input.workspaceRoot ?? 'unknown'}`,
-        `- completedToolCalls: ${input.toolCallCount}`,
-        '',
-        'Evidence gathered:',
-        evidenceText || '- No compact evidence was captured.',
-        '',
-        'Produce the final grounded answer now from this evidence ledger.',
-      ].join('\n'),
-    },
-  ];
-}
-
-function formatDirectReasoningEvidenceForSynthesis(evidence: DirectReasoningEvidenceEntry[]): string {
-  const lines: string[] = [];
-  for (const [index, entry] of evidence.slice(-MAX_SYNTHESIS_EVIDENCE_ENTRIES).entries()) {
-    lines.push(`[${index + 1}] ${entry.toolName}`);
-    lines.push(`Summary: ${entry.summary}`);
-    if (entry.status !== undefined) lines.push(`Status: ${stringifyCompact(entry.status)}`);
-    if (entry.success !== undefined) lines.push(`Success: ${stringifyCompact(entry.success)}`);
-    const argText = stringifyCompact(redactDirectReasoningToolArgs(entry.args));
-    if (argText && argText !== '{}') lines.push(`Args: ${argText}`);
-    const references = uniqueStrings(entry.references).slice(0, 12);
-    if (references.length > 0) {
-      lines.push('References:');
-      for (const reference of references) {
-        lines.push(`- ${reference}`);
-      }
-    }
-    const snippets = entry.snippets.slice(0, MAX_SYNTHESIS_SNIPPETS_PER_ENTRY);
-    if (snippets.length > 0) {
-      lines.push('Snippets:');
-      for (const snippet of snippets) {
-        lines.push(`- ${truncateText(snippet, 500)}`);
-      }
-    }
-    lines.push('');
-  }
-  return truncateText(lines.join('\n').trim(), MAX_SYNTHESIS_EVIDENCE_CHARS);
+  return buildGroundedSynthesisMessages({
+    request: input.input.message,
+    decision: input.input.gateway?.decision ?? null,
+    workspaceRoot: input.input.workspaceRoot,
+    completedToolCalls: input.toolCallCount,
+    sourceArtifacts: input.artifacts ?? [],
+    ledgerArtifact: input.ledgerArtifact ?? null,
+    maxEvidenceChars: MAX_SYNTHESIS_EVIDENCE_CHARS,
+    purpose: 'final_answer',
+  });
 }
 
 function buildDirectReasoningEvidenceEntry(
@@ -866,6 +907,170 @@ function buildDirectReasoningEvidenceEntry(
     summary: truncateText(stringifyCompact(output), 500),
     references: [],
     snippets: [truncateText(stringifyCompact(output), 800)],
+  };
+}
+
+function createDirectReasoningToolArtifact(input: {
+  state?: DirectReasoningArtifactState;
+  toolName: string;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  result: Record<string, unknown>;
+  createdAt: number;
+}): ExecutionArtifact | null {
+  if (!input.state || input.result.success === false) {
+    return null;
+  }
+  const output = input.result.output && typeof input.result.output === 'object'
+    ? input.result.output as Record<string, unknown>
+    : input.result;
+  const artifactId = `${input.state.context.graphId}:${input.toolCallId}:artifact`;
+  const trustLevel = input.result.trustLevel === 'quarantined'
+    ? 'quarantined'
+    : input.result.trustLevel === 'low_trust'
+      ? 'low_trust'
+      : 'trusted';
+  const taintReasons = Array.isArray(input.result.taintReasons)
+    ? input.result.taintReasons.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+
+  if (input.toolName === 'fs_search' && Array.isArray(output.matches)) {
+    return buildSearchResultSetArtifact({
+      graphId: input.state.context.graphId,
+      nodeId: input.state.context.nodeId,
+      artifactId,
+      label: 'Direct reasoning search results',
+      query: stringValue(output.query) || stringValue(input.args.query),
+      matches: output.matches as Array<Record<string, unknown>>,
+      truncated: output.truncated === true,
+      trustLevel,
+      taintReasons,
+      createdAt: input.createdAt,
+    });
+  }
+
+  if (input.toolName === 'fs_read' && typeof output.content === 'string') {
+    return buildFileReadSetArtifact({
+      graphId: input.state.context.graphId,
+      nodeId: input.state.context.nodeId,
+      artifactId,
+      label: 'Direct reasoning file read',
+      path: stringValue(output.path) || stringValue(input.args.path) || 'unknown',
+      content: output.content,
+      bytes: typeof output.bytes === 'number' && Number.isFinite(output.bytes) ? output.bytes : output.content.length,
+      truncated: output.truncated === true,
+      trustLevel,
+      taintReasons,
+      createdAt: input.createdAt,
+    });
+  }
+
+  if (input.toolName === 'fs_list' && Array.isArray(output.entries)) {
+    const directory = stringValue(output.path) || stringValue(input.args.path) || 'unknown';
+    const matches = output.entries.map((entry) => {
+      if (typeof entry === 'string') {
+        return { relativePath: `${directory}/${entry}`, matchType: 'directory_entry' };
+      }
+      if (entry && typeof entry === 'object') {
+        const record = entry as Record<string, unknown>;
+        const name = stringValue(record.name) || 'unknown';
+        return { relativePath: `${directory}/${name}`, matchType: stringValue(record.type) || 'directory_entry' };
+      }
+      return { relativePath: `${directory}/${String(entry)}`, matchType: 'directory_entry' };
+    });
+    return buildSearchResultSetArtifact({
+      graphId: input.state.context.graphId,
+      nodeId: input.state.context.nodeId,
+      artifactId,
+      label: 'Direct reasoning directory listing',
+      query: directory,
+      matches,
+      truncated: false,
+      trustLevel,
+      taintReasons,
+      createdAt: input.createdAt,
+    });
+  }
+
+  return null;
+}
+
+function createDirectReasoningEvidenceLedgerArtifact(
+  state: DirectReasoningArtifactState,
+  createdAt: number,
+): ExecutionArtifact<EvidenceLedgerContent> | null {
+  const sourceArtifacts = state.artifacts.filter((artifact) => artifact.artifactType !== 'EvidenceLedger' && artifact.artifactType !== 'SynthesisDraft');
+  if (sourceArtifacts.length === 0) {
+    return null;
+  }
+  const existing = state.artifacts.find((artifact): artifact is ExecutionArtifact<EvidenceLedgerContent> => artifact.artifactType === 'EvidenceLedger');
+  if (existing) {
+    return existing;
+  }
+  const artifact = buildGroundedSynthesisLedgerArtifact({
+    graphId: state.context.graphId,
+    nodeId: state.context.nodeId,
+    artifactId: `${state.context.graphId}:evidence-ledger`,
+    sourceArtifacts,
+    createdAt,
+  });
+  if (!artifact) {
+    return null;
+  }
+  state.artifacts.push(artifact);
+  return artifact;
+}
+
+function createDirectReasoningSynthesisDraftArtifact(
+  state: DirectReasoningArtifactState,
+  content: string,
+  createdAt: number,
+): DirectReasoningSynthesisDraftArtifact {
+  const sourceArtifacts = state.artifacts.filter((artifact) => artifact.artifactType !== 'SynthesisDraft');
+  const existing = state.artifacts.find((artifact) => artifact.artifactType === 'SynthesisDraft');
+  if (existing) {
+    return {
+      artifact: existing,
+      validation: {
+        valid: true,
+        missingArtifactIds: [],
+        invalidRefs: [],
+      },
+    };
+  }
+  const result = createGroundedSynthesisDraftArtifact({
+    graphId: state.context.graphId,
+    nodeId: state.context.nodeId,
+    artifactId: `${state.context.graphId}:synthesis-draft`,
+    content,
+    sourceArtifacts,
+    createdAt,
+  });
+  state.artifacts.push(result.artifact);
+  return result;
+}
+
+function artifactEventPayload(
+  artifact: ExecutionArtifact,
+  validation?: SynthesisDraftValidationResult,
+): Record<string, unknown> {
+  const ref = artifactRefFromArtifact(artifact);
+  return {
+    artifactId: ref.artifactId,
+    artifactType: ref.artifactType,
+    label: ref.label,
+    ...(ref.preview ? { preview: ref.preview } : {}),
+    ...(ref.trustLevel ? { trustLevel: ref.trustLevel } : {}),
+    ...(ref.taintReasons ? { taintReasons: ref.taintReasons } : {}),
+    ...(ref.redactionPolicy ? { redactionPolicy: ref.redactionPolicy } : {}),
+    ...(validation ? {
+      citationValidation: {
+        valid: validation.valid,
+        missingArtifactIds: validation.missingArtifactIds,
+        invalidRefs: validation.invalidRefs,
+      },
+    } : {}),
+    summary: ref.preview ?? ref.label,
   };
 }
 
@@ -1058,18 +1263,6 @@ function redactDirectReasoningToolArgs(args: Record<string, unknown>): Record<st
   return redacted;
 }
 
-function uniqueStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
-  return unique;
-}
-
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
@@ -1190,6 +1383,7 @@ function createDirectReasoningGraphEmitter(
   });
   let sequence = 0;
   return {
+    context,
     emit: (kind, payload = {}, eventKey) => {
       sequence += 1;
       const event = buildDirectReasoningGraphEvent(context, {

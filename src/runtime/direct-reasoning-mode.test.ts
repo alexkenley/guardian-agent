@@ -231,15 +231,21 @@ describe('direct reasoning mode', () => {
       channel: 'web',
       agentId: 'guardian',
     });
-    expect(graphEvents.map((entry) => entry.kind)).toEqual([
+    expect(graphEvents.map((entry) => entry.kind)).toEqual(expect.arrayContaining([
       'graph_started',
       'node_started',
       'tool_call_started',
       'tool_call_completed',
+      'artifact_created',
       'llm_call_started',
       'llm_call_completed',
       'node_completed',
       'graph_completed',
+    ]));
+    expect(graphEvents.filter((entry) => entry.kind === 'artifact_created').map((entry) => (entry.payload as Record<string, unknown>).artifactType)).toEqual([
+      'SearchResultSet',
+      'EvidenceLedger',
+      'SynthesisDraft',
     ]);
     expect(graphEvents.find((entry) => entry.kind === 'tool_call_started')).toMatchObject({
       graphId: 'execution-graph:req-1:direct-reasoning',
@@ -256,6 +262,14 @@ describe('direct reasoning mode', () => {
         toolName: 'fs_search',
         argsPreview: expect.stringContaining('IntentGateway'),
       }),
+    });
+    expect(result.metadata?.directReasoningStats).toMatchObject({
+      artifactCount: 3,
+      artifactIds: expect.arrayContaining([
+        'execution-graph:req-1:direct-reasoning:call-1:artifact',
+        'execution-graph:req-1:direct-reasoning:evidence-ledger',
+        'execution-graph:req-1:direct-reasoning:synthesis-draft',
+      ]),
     });
   });
 
@@ -379,7 +393,8 @@ describe('direct reasoning mode', () => {
     expect(chat.mock.calls[1]?.[1]?.tools).toEqual([]);
     const recoveryMessages = chat.mock.calls[1]?.[0] ?? [];
     const recoveryPrompt = recoveryMessages.map((message) => message.content).join('\n');
-    expect(recoveryPrompt).toContain('Evidence gathered');
+    expect(recoveryPrompt).toContain('Typed evidence');
+    expect(recoveryPrompt).toContain('evidenceLedgerArtifactId:');
     expect(recoveryPrompt).toContain('executeDirectReasoningToolCall');
     expect(recoveryPrompt.length).toBeLessThan(30_000);
     expect(traceEntries.map((entry) => entry.stage)).toContain('direct_reasoning_synthesis_started');
