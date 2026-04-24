@@ -8,6 +8,8 @@ import type {
 } from './code-sessions.js';
 import type { AssistantDispatchTrace, WorkflowTraceNode } from './orchestrator.js';
 import type { ExecutionEvent } from './execution/types.js';
+import type { ExecutionGraphEvent } from './execution-graph/graph-events.js';
+import { projectExecutionGraphEventToTimeline } from './execution-graph/timeline-adapter.js';
 import type { OrchestrationRunEvent } from './run-events.js';
 import type { ScheduledTaskHistoryEntry } from './scheduled-tasks.js';
 import { runDetailMatchesContextFilters } from './trace-context-filters.js';
@@ -50,7 +52,7 @@ export interface DashboardRunTimelineItem {
   timestamp: number;
   type: DashboardRunTimelineItemType;
   status: 'info' | 'running' | 'blocked' | 'succeeded' | 'failed' | 'warning';
-  source: 'orchestrator' | 'workflow' | 'code_session' | 'system';
+  source: 'orchestrator' | 'workflow' | 'code_session' | 'system' | 'execution_graph';
   title: string;
   detail?: string;
   nodeId?: string;
@@ -577,6 +579,16 @@ export class RunTimelineStore {
         tags: mergeTags(taskSummary?.tags ?? [], ['delegated-worker', 'execution-events']),
       },
       items: taskItems,
+    });
+  }
+
+  ingestExecutionGraphEvent(event: ExecutionGraphEvent): void {
+    const projection = projectExecutionGraphEventToTimeline(event);
+    if (!projection) return;
+    this.commitRun(projection.runId, {
+      ...(projection.baseStatus ? { baseStatus: projection.baseStatus } : {}),
+      summary: projection.summary,
+      items: projection.items,
     });
   }
 

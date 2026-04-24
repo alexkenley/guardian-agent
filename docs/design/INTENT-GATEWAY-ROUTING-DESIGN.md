@@ -140,6 +140,7 @@ Primary prompt profiles:
 Shared recovery rules:
 - fenced JSON, malformed object text, and tool-call argument blobs flow through the shared structured JSON recovery helpers
 - truncated or partially malformed flat JSON objects can still recover bounded scalar fields such as `route`, `operation`, `confidence`, and `resolution` so workload derivation and downstream provider-role selection keep the intended route signal
+- planned-step recovery may replace an overly collapsed classifier plan when the original user turn plainly contains ordered read/search plus write clauses; this is still bounded structured recovery, not execution routing from raw text
 - the repair path is bounded and schema-shaped; it exists to recover a valid structured decision, not to reinterpret the user turn heuristically
 - recovered results keep their source mode visible in routing metadata and tests instead of pretending the primary path succeeded
 

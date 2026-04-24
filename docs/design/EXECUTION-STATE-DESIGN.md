@@ -1,6 +1,6 @@
 # Execution State Design
 
-> Current convergence of gateway routing, delegated completion, verifier authority, and execution-state boundaries is tracked in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
+> Current convergence of gateway routing, delegated completion, verifier authority, and execution-state boundaries is tracked in [DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md](../plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md). The earlier realignment record is archived in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/archive/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
 
 **Status:** Implemented current architecture
 
@@ -35,7 +35,7 @@ It is the authoritative spec for:
 
 - Reconstructing older requests from chat text alone when execution state is missing.
 - Treating continuity summaries as authoritative semantic routing input.
-- Defining the remaining gateway/delegated completion realignment program here. That convergence work lives in [INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md](../plans/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md).
+- Defining the remaining gateway/delegated completion realignment program here. Active convergence work lives in [DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md](../plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md).
 
 ## Core Model
 

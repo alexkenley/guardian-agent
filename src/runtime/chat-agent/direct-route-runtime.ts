@@ -102,9 +102,43 @@ export interface DirectFilesystemIntentInput {
 }
 
 export async function tryDirectFilesystemIntent(input: DirectFilesystemIntentInput): Promise<string | DirectRouteRuntimeResponse | null> {
+  if (shouldDeferFilesystemIntentToOrchestration(input)) {
+    return null;
+  }
   const directSave = await tryDirectFilesystemSave(input);
   if (directSave) return directSave;
   return tryDirectFilesystemSearch(input);
+}
+
+function shouldDeferFilesystemIntentToOrchestration(input: DirectFilesystemIntentInput): boolean {
+  const decision = input.gatewayDecision;
+  if (!decision) return false;
+  const plannedSteps = Array.isArray(decision.plannedSteps) ? decision.plannedSteps : [];
+  const hasWriteStep = plannedSteps.some((step) => step.kind === 'write'
+    || step.expectedToolCategories?.some((category) => category === 'write' || category === 'fs_write'));
+  const hasReadOrSearchStep = plannedSteps.some((step) => step.kind === 'read'
+    || step.kind === 'search'
+    || step.kind === 'answer'
+    || step.expectedToolCategories?.some((category) => (
+      category === 'read'
+      || category === 'search'
+      || category === 'fs_read'
+      || category === 'fs_search'
+    )));
+  if (hasWriteStep && hasReadOrSearchStep) {
+    return true;
+  }
+  if (decision.operation === 'save' && decision.turnRelation !== 'new_request' && !hasReadOrSearchStep) {
+    return false;
+  }
+  const mutatingOperation = decision.operation === 'create'
+    || decision.operation === 'update'
+    || decision.operation === 'delete'
+    || decision.operation === 'save';
+  if (!mutatingOperation) {
+    return false;
+  }
+  return true;
 }
 
 export async function tryDirectFilesystemSave(input: DirectFilesystemIntentInput) {

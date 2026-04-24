@@ -205,8 +205,7 @@ import {
 } from './runtime/chat-agent/direct-memory.js';
 import {
   resumeStoredDirectRoutePendingAction as resumeStoredDirectRoutePendingActionHelper,
-  tryDirectFilesystemSave as tryDirectFilesystemSaveHelper,
-  tryDirectFilesystemSearch as tryDirectFilesystemSearchHelper,
+  tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
 } from './runtime/chat-agent/direct-route-runtime.js';
 import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
@@ -8916,54 +8915,7 @@ type DirectIntentShadowCandidate =
     originalUserContent?: string,
     gatewayDecision?: IntentGatewayDecision,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    const directSave = await this.tryDirectFilesystemSave(
-      message,
-      ctx,
-      userKey,
-      conversationKey,
-      codeContext,
-      originalUserContent,
-      gatewayDecision,
-    );
-    if (directSave) return directSave;
-    return tryDirectFilesystemSearchHelper({
-      message,
-      ctx,
-      userKey,
-      conversationKey,
-      codeContext,
-      originalUserContent,
-      gatewayDecision,
-      agentId: this.id,
-      tools: this.tools,
-      conversationService: this.conversationService,
-      executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-        nowMs,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
-  }
-
-  private async tryDirectFilesystemSave(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    conversationKey: ConversationKey,
-    codeContext?: { workspaceRoot: string; sessionId?: string },
-    originalUserContent?: string,
-    gatewayDecision?: IntentGatewayDecision,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectFilesystemSaveHelper({
+    return tryDirectFilesystemIntentHelper({
       message,
       ctx,
       userKey,

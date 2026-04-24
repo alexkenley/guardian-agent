@@ -110,8 +110,10 @@ describe('direct reasoning mode', () => {
 
   it('runs an iterative read-only tool loop with trace and tool execution context', async () => {
     const messagesByCall: ChatMessage[][] = [];
-    const chat = vi.fn(async (messages: ChatMessage[], _options?: ChatOptions): Promise<ChatResponse> => {
+    const optionsByCall: Array<ChatOptions | undefined> = [];
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
       messagesByCall.push(messages);
+      optionsByCall.push(options);
       if (messagesByCall.length === 1) {
         return chatResponse({
           finishReason: 'tool_calls',
@@ -150,6 +152,7 @@ describe('direct reasoning mode', () => {
       toolName,
     }));
     const traceEntries: Array<Record<string, unknown>> = [];
+    const graphEvents: Array<Record<string, unknown>> = [];
 
     const result = await handleDirectReasoningMode({
       message: 'Which files define the IntentGateway route classifier?',
@@ -183,10 +186,20 @@ describe('direct reasoning mode', () => {
       trace: {
         record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
       },
+      graphEvents: {
+        emit: (event) => graphEvents.push(event as unknown as Record<string, unknown>),
+      },
     });
 
     expect(result.content).toContain('src/runtime/intent-gateway.ts');
     expect(result.metadata?.directReasoningMode).toBe('brokered_readonly');
+    expect(result.metadata?.directReasoningStats).toMatchObject({
+      toolCallCount: 1,
+      evidenceCount: 1,
+      synthesized: true,
+    });
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(optionsByCall[2]?.tools).toEqual([]);
     expect(executeTool).toHaveBeenCalledTimes(1);
     expect(executeTool.mock.calls[0]?.[0]).toBe('fs_search');
     expect(executeTool.mock.calls[0]?.[2]).toMatchObject({
@@ -207,6 +220,8 @@ describe('direct reasoning mode', () => {
       'direct_reasoning_started',
       'direct_reasoning_tool_call',
       'direct_reasoning_tool_call',
+      'direct_reasoning_synthesis_started',
+      'direct_reasoning_synthesis_completed',
       'direct_reasoning_completed',
     ]);
     expect(traceEntries[0]).toMatchObject({
@@ -215,6 +230,32 @@ describe('direct reasoning mode', () => {
       userId: 'user-1',
       channel: 'web',
       agentId: 'guardian',
+    });
+    expect(graphEvents.map((entry) => entry.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'tool_call_started',
+      'tool_call_completed',
+      'llm_call_started',
+      'llm_call_completed',
+      'node_completed',
+      'graph_completed',
+    ]);
+    expect(graphEvents.find((entry) => entry.kind === 'tool_call_started')).toMatchObject({
+      graphId: 'execution-graph:req-1:direct-reasoning',
+      executionId: 'req-1',
+      rootExecutionId: 'req-1',
+      requestId: 'req-1',
+      runId: 'req-1',
+      nodeKind: 'explore_readonly',
+      producer: 'brokered_worker',
+      channel: 'web',
+      agentId: 'guardian',
+      codeSessionId: 'code-1',
+      payload: expect.objectContaining({
+        toolName: 'fs_search',
+        argsPreview: expect.stringContaining('IntentGateway'),
+      }),
     });
   });
 
@@ -240,5 +281,218 @@ describe('direct reasoning mode', () => {
 
     expect(result).toContain('not available in direct reasoning mode');
     expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it('bounds broad direct fs_search calls to a repo subdirectory', async () => {
+    const executeTool = vi.fn(async (_toolName: string, args: Record<string, unknown>) => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        query: args.query,
+        path: args.path,
+        matches: [],
+      },
+    }));
+
+    await executeDirectReasoningToolCall({
+      toolCall: {
+        id: 'call-1',
+        name: 'fs_search',
+        arguments: JSON.stringify({ query: 'direct_reasoning_tool_call' }),
+      },
+      input: {
+        message: 'Inspect this repo and tell me where direct reasoning tool calls are recorded.',
+        gateway: gateway(),
+        selectedExecutionProfile: profile(),
+        workspaceRoot: 'S:/Development/GuardianAgent',
+      },
+      deps: {
+        chat: vi.fn(),
+        executeTool,
+      },
+      turn: 1,
+    });
+
+    expect(executeTool).toHaveBeenCalledWith('fs_search', expect.objectContaining({
+      path: 'src',
+      maxResults: 40,
+      maxDepth: 12,
+      maxFiles: 2500,
+      maxFileBytes: 40000,
+    }), expect.any(Object));
+  });
+
+  it('uses a no-tools grounded synthesis call when tool exploration reaches the turn budget without a final answer', async () => {
+    const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'src/runtime/direct-reasoning-mode.ts' }),
+            },
+          ],
+        });
+      }
+      return chatResponse({
+        content: 'Planned steps are defined in `src/runtime/intent/types.ts` by `IntentGatewayPlannedStep`.',
+      });
+    });
+    const largeRead = [
+      'export function buildDirectReasoningToolSet() {}',
+      'export async function executeDirectReasoningToolCall() {}',
+      'x'.repeat(50_000),
+    ].join('\n');
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        query: 'plannedSteps',
+        path: 'src/runtime/direct-reasoning-mode.ts',
+        bytes: largeRead.length,
+        content: largeRead,
+      },
+    }));
+    const traceEntries: Array<Record<string, unknown>> = [];
+
+    const result = await handleDirectReasoningMode({
+      message: 'Find the files that define IntentGateway planned steps.',
+      gateway: gateway({ operation: 'search' }),
+      selectedExecutionProfile: profile(),
+      maxTurns: 1,
+      traceContext: {
+        requestId: 'req-recovery',
+        messageId: 'msg-recovery',
+      },
+    }, {
+      chat,
+      executeTool,
+      trace: {
+        record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
+      },
+    });
+
+    expect(result.content).toContain('src/runtime/intent/types.ts');
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[1]?.tools).toEqual([]);
+    const recoveryMessages = chat.mock.calls[1]?.[0] ?? [];
+    const recoveryPrompt = recoveryMessages.map((message) => message.content).join('\n');
+    expect(recoveryPrompt).toContain('Evidence gathered');
+    expect(recoveryPrompt).toContain('executeDirectReasoningToolCall');
+    expect(recoveryPrompt.length).toBeLessThan(30_000);
+    expect(traceEntries.map((entry) => entry.stage)).toContain('direct_reasoning_synthesis_started');
+    expect(traceEntries.map((entry) => entry.stage)).toContain('direct_reasoning_synthesis_completed');
+  });
+
+  it('replaces an unsupported exploration draft with the grounded synthesis answer', async () => {
+    const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (chat.mock.calls.length === 1) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'src/runtime/direct-reasoning-mode.ts' }),
+            },
+            {
+              id: 'call-2',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'src/runtime/intent-routing-trace.ts' }),
+            },
+          ],
+        });
+      }
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          content: 'Direct reasoning tool calls are recorded through `src/runtime/orchestrator.ts` and `AssistantDispatchTrace`.',
+        });
+      }
+      return chatResponse({
+        content: 'Direct reasoning records tool-call timeline evidence in `src/runtime/direct-reasoning-mode.ts` via `executeDirectReasoningToolCall()` and `recordDirectReasoningTrace()`, using the `direct_reasoning_tool_call` stage defined in `src/runtime/intent-routing-trace.ts`.',
+      });
+    });
+    const executeTool = vi.fn(async (_toolName: string, args: Record<string, unknown>) => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: args.path,
+        content: args.path === 'src/runtime/direct-reasoning-mode.ts'
+          ? [
+              "recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_tool_call', {",
+              'export async function executeDirectReasoningToolCall() {}',
+              'function recordDirectReasoningTrace() {}',
+            ].join('\n')
+          : "export type IntentRoutingTraceStage = 'direct_reasoning_tool_call' | 'direct_reasoning_completed';",
+      },
+    }));
+
+    const result = await handleDirectReasoningMode({
+      message: 'Inspect this repo and tell me where direct reasoning tool calls are recorded in the run timeline. Cite exact files and function names.',
+      gateway: gateway({ operation: 'inspect' }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      maxTurns: 2,
+    }, {
+      chat,
+      executeTool,
+    });
+
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(chat.mock.calls[2]?.[1]?.tools).toEqual([]);
+    expect(result.content).toContain('src/runtime/direct-reasoning-mode.ts');
+    expect(result.content).toContain('recordDirectReasoningTrace');
+    expect(result.content).toContain('src/runtime/intent-routing-trace.ts');
+    expect(result.content).not.toContain('AssistantDispatchTrace');
+    expect(result.content).not.toContain('src/runtime/orchestrator.ts');
+  });
+
+  it('falls back to compact evidence when grounded synthesis is empty and paths are absolute Windows paths', async () => {
+    const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        return chatResponse({
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'fs_read',
+              arguments: JSON.stringify({ path: 'S:\\Development\\GuardianAgent\\src\\runtime\\direct-reasoning-mode.ts' }),
+            },
+          ],
+        });
+      }
+      return chatResponse({ content: '' });
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: 'S:\\Development\\GuardianAgent\\src\\runtime\\direct-reasoning-mode.ts',
+        bytes: 96,
+        content: [
+          'export async function executeDirectReasoningToolCall() {}',
+          'export function recordDirectReasoningTrace() {}',
+        ].join('\n'),
+      },
+    }));
+
+    const result = await handleDirectReasoningMode({
+      message: 'Inspect this repo and tell me where direct reasoning tool calls are recorded.',
+      gateway: gateway({ operation: 'inspect' }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      maxTurns: 1,
+    }, {
+      chat,
+      executeTool,
+    });
+
+    expect(result.metadata?.directReasoningFailed).toBeUndefined();
+    expect(result.content).toContain('src/runtime/direct-reasoning-mode.ts');
+    expect(result.content).toContain('executeDirectReasoningToolCall');
+    expect(result.content).toContain('recordDirectReasoningTrace');
+    expect(result.content).not.toContain('src//runtime');
   });
 });

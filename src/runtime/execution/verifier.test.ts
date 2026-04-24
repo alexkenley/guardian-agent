@@ -572,6 +572,86 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('preserves concrete answer and write steps for coding run contracts', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Tell me the current coding workspace path, then create tmp/manual-web/workspace-check.txt containing that path.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'answer',
+          summary: 'Tell me the current coding workspace path.',
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Create tmp/manual-web/workspace-check.txt containing that path.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.kind).toBe('tool_execution');
+    expect(taskContract.plan.steps).toMatchObject([
+      { kind: 'answer' },
+      { kind: 'write', expectedToolCategories: ['fs_write'], dependsOn: ['step_1'] },
+    ]);
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        finalUserAnswer: 'The current coding workspace path is S:/Development/GuardianAgent.',
+        operatorSummary: 'Wrote tmp/manual-web/workspace-check.txt.',
+        stepReceipts: [
+          {
+            stepId: 'step_1',
+            status: 'satisfied',
+            evidenceReceiptIds: ['answer:1'],
+            summary: 'The current coding workspace path is S:/Development/GuardianAgent.',
+            startedAt: 1,
+            endedAt: 1,
+          },
+          {
+            stepId: 'step_2',
+            status: 'satisfied',
+            evidenceReceiptIds: ['receipt-write-1'],
+            summary: 'Wrote tmp/manual-web/workspace-check.txt.',
+            startedAt: 2,
+            endedAt: 3,
+          },
+        ],
+        evidenceReceipts: [{
+          receiptId: 'receipt-write-1',
+          sourceType: 'tool_call',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          refs: ['tmp/manual-web/workspace-check.txt'],
+          summary: 'Wrote tmp/manual-web/workspace-check.txt.',
+          startedAt: 2,
+          endedAt: 3,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
   it('uses a filesystem mutation plan when gateway planned steps are stale read-only evidence steps', () => {
     const taskContract = buildFilesystemMutationTaskContract();
 

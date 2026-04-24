@@ -1,8 +1,11 @@
 # Direct Reasoning Mode Architecture Split
 
-**Status:** Phase 1+2 complete; brokered-isolation hardening complete; Hybrid execution manager complete; Phase 3 (progressive output) in design
+**Status:** Archived historical implementation record. Future work is superseded by `../DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`.
 **Date:** 2026-04-23
 **Supersedes:** Workstream 3 Phase 3A in INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md
+**Superseded by:** `../DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`
+
+> Cleanup note (2026-04-24): Phases 1, 2, 2B, and 2C remain useful historical context for the current direct-reasoning split. Do not continue the standalone Phase 3 progressive-output plan from this file. Progressive output, hybrid read/write composition, run-timeline projection, and recovery should be implemented through the durable execution graph plan instead.
 
 ## Problem
 
@@ -42,6 +45,19 @@ Repo-inspection and coding tasks (e.g., "Inspect this repo and tell me which fil
 - The delegated phase remains the only phase allowed to write, request approvals, mutate files, or produce the final user-facing completion.
 - Verification remains supervisor-owned: the final delegated envelope is reconciled with all tool jobs observed under the request id, including read/search jobs from the direct phase and write jobs from the delegated phase.
 
+### Recovery Manager / Advisor Mode (new)
+- Handles last-resort recovery when the normal direct or delegated path has already failed to produce a valid terminal result
+- Uses an extra no-tools LLM call only for bounded advice, never for execution, approval, verification, or contract satisfaction
+- Direct reasoning uses it to compose a final answer from already-collected tool evidence when the loop hit the turn or time budget before producing final prose
+- Delegated orchestration uses it after deterministic verification fails and ordinary profile retry/escalation has not produced a sufficient envelope
+- WorkerManager validates every advisor proposal deterministically before it becomes prompt guidance:
+  - actions may target only verifier-unsatisfied planned step ids
+  - the strategy must match the planned-step kind
+  - suggested tools must be in the allowlist for that strategy
+  - a `give_up`, malformed, overbroad, or mismatched proposal is rejected and the original failure remains authoritative
+- Recovery guidance is only an additional prompt section for one bounded retry. The delegated worker still has to execute the missing tool step and return receipts; the verifier still decides success or failure.
+- Trace stages are explicit: `recovery_advisor_started`, `recovery_advisor_completed`, and `recovery_advisor_rejected`
+
 ### Routing decision
 1. The Intent Gateway classifies repo-inspection as `executionClass: 'repo_grounded'`, `operation: 'inspect'`
 2. `selectExecutionProfile` calls `shouldPreferFrontier` → `wouldUseDirectReasoningMode()` → returns `true` → **skips frontier preference** → selects managed cloud tier
@@ -73,6 +89,8 @@ The manager chooses one of three shapes:
 | Pure direct reasoning | Read-only repo-grounded inspection/search | Brokered direct reasoning loop, final answer returned directly |
 | Pure delegated orchestration | Mutations, approvals, security, automation, or ordinary planned tool execution | Delegated worker pipeline with verifier |
 | Hybrid phased execution | Required read/search exploration plus required write/tool side effects | Direct reasoning read phase, then delegated mutation phase with carried-forward receipts |
+
+When one of those shapes fails late, the manager may perform one recovery-advisor hop. That hop does not create a fourth execution shape; it is a bounded repair attempt attached to the current shape and current request id.
 
 The hybrid phase must preserve the security boundary:
 
@@ -150,6 +168,15 @@ The key guarantee: **automatic tier selection routes direct reasoning tasks to m
 - The delegated write phase receives those receipts plus a "Hybrid Direct Reasoning Handoff" context section, so it can write from grounded evidence instead of repeating large-repo discovery
 - Final verification reconciles the delegated envelope with all observed tool jobs under the request id
 - **Files:** `src/supervisor/worker-manager.ts`, `src/supervisor/worker-manager.test.ts`
+
+### Phase 2C: Recovery Manager ✅
+- Direct reasoning reserves final-answer budget after tool evidence is available so tool exploration cannot consume the entire request budget
+- If direct reasoning collects tool evidence but stops before final prose, it performs one no-tools final-response recovery call grounded only in the existing conversation/tool transcript
+- Delegated orchestration can request one recovery-advisor proposal after deterministic verification fails and ordinary retry/escalation has not repaired the missing evidence
+- Recovery-advisor proposals are parsed and validated in `src/runtime/execution/recovery-advisor.ts`; only validated advice becomes a prompt section
+- Advisor calls run through the brokered worker with no tools and JSON response format
+- The verifier remains authoritative. Recovery guidance cannot mark a step satisfied, approve a blocked action, bypass sandbox policy, or erase required receipts.
+- **Files:** `src/runtime/execution/recovery-advisor.ts`, `src/runtime/execution/recovery-advisor.test.ts`, `src/runtime/direct-reasoning-mode.ts`, `src/worker/worker-session.ts`, `src/supervisor/worker-manager.ts`
 
 ### Phase 3: Progressive Output (in design)
 - **Goal:** Stream tool-call progress during the direct reasoning loop so the user sees live activity instead of a blank screen during multi-turn search/read cycles
@@ -261,6 +288,8 @@ The `SSEEvent` type already includes `chat.thinking` and `chat.tool_call` in its
 
 12. **Hybrid manager instead of binary routing.** The split is not "direct reasoning or orchestration forever." The correct abstraction is an execution-mode manager that can compose read-only direct reasoning with delegated mutation under one request id, one audit/timeline flow, and one final verifier. This preserves the reason the split exists (iterative repo exploration) without weakening the orchestration controls needed for writes.
 
+13. **Recovery advice is advisory, not authoritative.** The extra LLM call is allowed only after a path is already stuck. It may suggest a bounded retry focus, but deterministic code validates the proposal and the normal verifier still requires real evidence receipts. This keeps the system more resilient without converting "model says it is fixed" into completion authority.
+
 ## Completed Changes — Phase 1, 2, And 2B
 
 Files modified/created:
@@ -274,12 +303,15 @@ Files modified/created:
 | `src/runtime/incoming-dispatch.test.ts` | Updated 2 test expectations (frontier→managed_cloud) |
 | `src/runtime/runtime.test.ts` | Updated 1 test expectation (parentProfile frontier→managed_cloud) |
 | `src/runtime/intent-routing-trace.ts` | Added direct reasoning trace stages including failure |
+| `src/runtime/execution/recovery-advisor.ts` | Bounded recovery advisor parser, validator, and deterministic prompt-section builder |
 | `src/chat-agent.ts` | Selects direct reasoning and passes an explicit flag to WorkerManager; removed the old supervisor-side direct loop |
 | `src/worker/worker-session.ts` | Runs direct reasoning inside the brokered worker with brokered LLM/tool dependencies |
+| `src/worker/worker-session.ts` | Runs no-tools recovery-advisor requests through the brokered worker |
 | `src/supervisor/worker-manager.ts` | Dispatches explicit direct-reasoning worker requests without delegated job verification/retry |
 | `src/supervisor/worker-manager.ts` | Adds hybrid phased execution for read/search plus write/tool requests |
+| `src/supervisor/worker-manager.ts` | Owns recovery-advisor dispatch, deterministic validation, retry guidance, and trace stages |
 | `src/broker/broker-client.ts` / `src/broker/broker-server.ts` | Added worker-to-supervisor trace forwarding and preserved tool request context such as `surfaceId`, `activeSkills`, and `toolContextMode` |
-| `docs/plans/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md` | This document |
+| `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md` | This archived document |
 | `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md` | Updated 3 sections to note direct reasoning mode bypasses frontier |
 | `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md` | Added section on Direct Reasoning Mode tool set |
 | `web/public/js/pages/config.js` | Updated `preferFrontierForRepoGrounded` description |

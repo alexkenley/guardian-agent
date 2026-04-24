@@ -1,7 +1,10 @@
 # Intent Gateway And Delegated Execution Realignment Plan
 
-**Status:** Canonical plan
+**Status:** Archived historical remediation record. Future orchestration work is superseded by `../DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`.
 **Date:** 2026-04-22
+**Superseded by:** `../DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`
+
+> Cleanup note (2026-04-24): This plan documents the gateway/delegated-execution realignment that led to the direct-reasoning split. It should no longer be treated as the active remediation plan for hybrid read/write, recovery, or timeline failures. Those failures should be addressed through the durable execution graph, typed artifacts, graph events, and graph-native recovery.
 
 **Replaces:**
 - `docs/plans/EXECUTION-EVIDENCE-AND-ORCHESTRATION-REARCHITECTURE-PLAN.md`

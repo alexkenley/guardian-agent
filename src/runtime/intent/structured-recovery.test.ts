@@ -76,4 +76,25 @@ describe('normalizeIntentGatewayDecision', () => {
     );
     expect(hasCiteStep).toBe(false);
   });
+
+  it('replaces collapsed model plans with synthesized read/write hybrid steps', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'run',
+      summary: 'Tell me the current coding workspace path, then create a file containing that path.',
+      planned_steps: [
+        {
+          kind: 'tool_call',
+          summary: 'Tell me the current coding workspace path, then create tmp/manual-web/workspace-check.txt containing that path.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Tell me the current coding workspace path, then create tmp/manual-web/workspace-check.txt containing that path.',
+    });
+
+    expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['answer', 'write']);
+    expect(decision.plannedSteps?.[1]?.dependsOn).toEqual(['step_1']);
+  });
 });

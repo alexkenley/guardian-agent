@@ -7207,9 +7207,12 @@ describe('ToolExecutor', () => {
       origin: 'web',
     });
     expect(byContent.success).toBe(true);
-    const byContentOutput = byContent.output as { matches: Array<{ relativePath: string; matchType: string; snippet?: string }> };
+    const byContentOutput = byContent.output as {
+      matches: Array<{ relativePath: string; matchType: string; lineNumber?: number; snippet?: string }>;
+    };
     const contentMatch = byContentOutput.matches.find((m) => m.relativePath.endsWith('five-notes.txt') && m.matchType === 'content');
     expect(contentMatch).toBeDefined();
+    expect(contentMatch?.lineNumber).toBe(1);
     expect(contentMatch?.snippet).toContain('Code GRC');
   });
 

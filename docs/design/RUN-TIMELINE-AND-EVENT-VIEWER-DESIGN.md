@@ -1,6 +1,6 @@
 # Run Timeline And Event Viewer Design
 
-**Status:** Implemented current architecture
+**Status:** Implemented current architecture, with durable execution graph event ingestion planned
 **Date:** 2026-03-31
 **Roadmap:** [UI-TARS Uplift Roadmap](/mnt/s/Development/GuardianAgent/docs/plans/UI-TARS-UPLIFT-ROADMAP.md)
 **Primary Runtime:** [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts), [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
@@ -30,6 +30,12 @@ Current as-built deltas:
 - delegated worker titles now prefer `orchestrationLabel` over generic `agentName` so the UI surfaces the specialist role when the backend knows it
 - assistant-dispatch runs now project bounded `provider_call` nodes so operators can see final model provenance, model id, duration, and token/cache usage without exposing raw prompts
 - context-assembly nodes now carry bounded compaction diagnostics, including pre/post prompt size, applied stages, and compacted-summary preview when context had to be shortened for budget
+
+Forward target:
+- `RunTimelineStore` should ingest durable execution graph events as the primary execution view for direct reasoning, synthesis, mutation, approval, verification, and recovery nodes.
+- Intent-routing trace rows should remain diagnostic routing/provider evidence, not the authoritative record of execution.
+- Direct reasoning tool calls should appear as graph/timeline tool-call nodes rather than only as `direct_reasoning_tool_call` entries in `intent-routing-trace`.
+- The canonical implementation plan is `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`.
 
 ## Problem Statement
 

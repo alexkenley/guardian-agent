@@ -62,6 +62,11 @@ import {
   buildDelegatedExecutionMetadata,
 } from '../runtime/execution/metadata.js';
 import {
+  buildRecoveryAdvisorMessages,
+  parseRecoveryAdvisorProposal,
+  type RecoveryAdvisorRequest,
+} from '../runtime/execution/recovery-advisor.js';
+import {
   buildDelegatedTaskContract,
 } from '../runtime/execution/verifier.js';
 import {
@@ -238,6 +243,8 @@ export interface WorkerMessageHandleParams {
   /** Run this turn through the brokered direct-reasoning read-only loop. */
   directReasoning?: boolean;
   directReasoningTrace?: DirectReasoningTraceContext;
+  /** Run a no-tools recovery advisor call for a failed delegated contract. */
+  recoveryAdvisor?: RecoveryAdvisorRequest;
 }
 
 function buildApprovalPendingActionMetadata(
@@ -637,6 +644,14 @@ function buildDelegatedTaskPlanGuidance(taskContract: DelegatedTaskContract): st
           'Required final answer criteria:',
           ...answerSteps.map((step) => `- ${step.stepId}: ${step.summary}`),
           'Do not treat the run as complete until the final answer satisfies every required answer step above.',
+        ]
+      : []),
+    ...(requiredSteps.some((step) => step.kind === 'write')
+      ? [
+          'Write-step completion rule:',
+          'A write step is satisfied only by a successful filesystem mutation tool receipt such as fs_write, fs_mkdir, fs_delete, fs_move, or fs_copy. A chat answer saying the file was written is not sufficient.',
+          'When a write step names an output path, call fs_write/fs_mkdir for that exact path before ending the turn. This still applies when the preceding search found no rows; create the requested output with safe empty or no-match content that respects the user format constraint.',
+          'For security or credential scans, never write secret values to the output file. Write only the sanitized fields requested by the user, such as file paths and line numbers.',
         ]
       : []),
   ].join('\n');
@@ -1580,6 +1595,45 @@ export class BrokeredWorkerSession {
     return `${userId}::${channel}`;
   }
 
+  private async handleRecoveryAdvisorMessage(
+    request: RecoveryAdvisorRequest,
+    chatFn: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
+    selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    try {
+      const response = await chatFn(buildRecoveryAdvisorMessages(request), {
+        responseFormat: { type: 'json_object' },
+        tools: [],
+        maxTokens: 900,
+        temperature: 0,
+      });
+      const proposal = parseRecoveryAdvisorProposal(response.content);
+      return {
+        content: proposal?.decision === 'retry'
+          ? 'Recovery advisor proposed a bounded retry.'
+          : 'Recovery advisor did not propose a retry.',
+        metadata: {
+          executionProfile: selectedExecutionProfile ?? undefined,
+          recoveryAdvisor: {
+            available: !!proposal,
+            ...(proposal ? { proposal } : {}),
+          },
+        },
+      };
+    } catch (error) {
+      return {
+        content: 'Recovery advisor failed.',
+        metadata: {
+          executionProfile: selectedExecutionProfile ?? undefined,
+          recoveryAdvisor: {
+            available: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+      };
+    }
+  }
+
   async handleMessage(params: WorkerMessageHandleParams): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
     if (codeContext?.workspaceRoot) {
@@ -1603,6 +1657,10 @@ export class BrokeredWorkerSession {
         : undefined,
     );
     const chatFn = buildChatFn(selectedExecutionProfile);
+
+    if (params.recoveryAdvisor) {
+      return this.handleRecoveryAdvisorMessage(params.recoveryAdvisor, chatFn, selectedExecutionProfile);
+    }
 
     if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
       return this.resumeSuspendedSessionAfterApproval(
@@ -1700,6 +1758,9 @@ export class BrokeredWorkerSession {
         }),
         trace: {
           record: (entry) => this.client.recordTrace(entry as unknown as Record<string, unknown>),
+        },
+        graphEvents: {
+          emit: (event) => this.client.recordExecutionGraphEvent(event),
         },
       });
       this.rememberToolReportScope(params.message, codeContext, toolExecutor);

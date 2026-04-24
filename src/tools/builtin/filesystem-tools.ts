@@ -164,6 +164,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
         path: string;
         relativePath: string;
         matchType: 'name' | 'content';
+        lineNumber?: number;
         snippet?: string;
       }> = [];
 
@@ -231,6 +232,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
               path: fullPath,
               relativePath,
               matchType: 'content',
+              lineNumber: countLineNumberAtIndex(text, idx),
               snippet: makeContentSnippet(text, idx, query.length),
             });
           }
@@ -622,4 +624,15 @@ function makeContentSnippet(text: string, matchIndex: number, queryLength: numbe
   const prefix = start > 0 ? '...' : '';
   const suffix = end < text.length ? '...' : '';
   return `${prefix}${text.slice(start, end).replace(/\s+/g, ' ')}${suffix}`;
+}
+
+function countLineNumberAtIndex(text: string, matchIndex: number): number {
+  let lineNumber = 1;
+  const end = Math.max(0, Math.min(matchIndex, text.length));
+  for (let index = 0; index < end; index += 1) {
+    if (text.charCodeAt(index) === 10) {
+      lineNumber += 1;
+    }
+  }
+  return lineNumber;
 }

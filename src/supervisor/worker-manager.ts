@@ -47,6 +47,7 @@ import {
 } from '../runtime/intent-gateway.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
+import { isExecutionGraphEvent } from '../runtime/execution-graph/graph-events.js';
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
@@ -66,6 +67,15 @@ import {
   buildDelegatedTaskContract,
   verifyDelegatedResult,
 } from '../runtime/execution/verifier.js';
+import {
+  buildDeterministicRecoveryAdvice,
+  buildRecoveryAdvisorAdditionalSection,
+  validateRecoveryAdvisorProposal,
+  type RecoveryAdvisorAction,
+  type RecoveryAdvisorJobSnapshot,
+  type RecoveryAdvisorProposal,
+  type RecoveryAdvisorRequest,
+} from '../runtime/execution/recovery-advisor.js';
 import type { DirectReasoningTraceContext } from '../runtime/direct-reasoning-mode.js';
 import type {
   DelegatedResultEnvelope,
@@ -266,7 +276,7 @@ export interface WorkerDelegationMetadata {
 
 export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
-  runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents'>;
+  runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
   now?: () => number;
 }
 
@@ -305,6 +315,12 @@ interface DelegatedJobSnapshot {
   resultPreview?: string;
   error?: string;
 }
+
+const DELEGATED_REQUEST_JOB_LOOKUP_LIMIT = 500;
+const DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT = 120;
+const HYBRID_HANDOFF_JOB_LINE_LIMIT = 12;
+const HYBRID_HANDOFF_REF_LIMIT = 8;
+const HYBRID_EVIDENCE_PATH_PATTERN = /[A-Za-z]:(?:\\\\|\\|\/)[^"',\]\s}]+|(?:src|docs|web|scripts|config|tmp|policies|skills|native)(?:\\\\|\\|\/)[^"',\]\s}]+/gi;
 
 type DelegatedTaskPlanStep = DelegatedResultEnvelope['taskContract']['plan']['steps'][number];
 
@@ -615,6 +631,7 @@ export class WorkerManager {
       taskContract: input.taskContract,
       directResultContent: resultContent,
       priorSatisfiedStepReceipts,
+      jobSnapshots: drain.snapshots,
       directFailed,
     });
     this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
@@ -631,6 +648,110 @@ export class WorkerManager {
       additionalSection,
       ...(priorSatisfiedStepReceipts.length > 0 ? { priorSatisfiedStepReceipts } : {}),
     };
+  }
+
+  private async requestRecoveryAdvisorGuidance(input: {
+    request: WorkerMessageRequest;
+    worker: WorkerProcess;
+    target: ResolvedDelegatedTargetMetadata;
+    taskContract: DelegatedResultEnvelope['taskContract'];
+    verification: VerificationDecision;
+    jobSnapshots: DelegatedJobSnapshot[];
+    requestId: string;
+    taskRunId: string;
+    dispatchBase: {
+      message: UserMessage;
+      systemPrompt: string;
+      history: Array<{ role: 'user' | 'assistant'; content: string }>;
+      knowledgeBases: PromptAssemblyKnowledgeBase[];
+      activeSkills: ResolvedSkill[];
+      additionalSections: PromptAssemblyAdditionalSection[];
+      toolContext: string;
+      runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+      executionProfile?: SelectedExecutionProfile;
+      continuity?: PromptAssemblyContinuity | null;
+      pendingAction?: PromptAssemblyPendingAction | null;
+      pendingApprovalNotice?: string;
+      hasFallbackProvider?: boolean;
+    };
+  }): Promise<PromptAssemblyAdditionalSection | null> {
+    const advisorRequest: RecoveryAdvisorRequest = {
+      originalRequest: input.request.message.content,
+      taskContract: input.taskContract,
+      verification: input.verification,
+      jobSnapshots: input.jobSnapshots.slice(0, 20).map(toRecoveryAdvisorJobSnapshot),
+    };
+
+    this.observability.intentRoutingTrace?.record({
+      stage: 'recovery_advisor_started',
+      requestId: input.requestId,
+      messageId: input.request.message.id,
+      userId: input.request.userId,
+      channel: input.request.message.channel,
+      agentId: input.target.agentId,
+      contentPreview: input.request.message.content,
+      details: {
+        ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+        ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+        taskExecutionId: input.taskRunId,
+        unsatisfiedStepIds: input.verification.unsatisfiedStepIds,
+        missingEvidenceKinds: input.verification.missingEvidenceKinds,
+      },
+    });
+
+    const advisorResult = await this.dispatchToWorker(input.worker, {
+      ...input.dispatchBase,
+      recoveryAdvisor: advisorRequest,
+    });
+    const proposal = readRecoveryAdvisorProposal(advisorResult.metadata);
+    let advice = validateRecoveryAdvisorProposal(proposal, advisorRequest);
+    let adviceSource: 'llm' | 'deterministic' = 'llm';
+    if (!advice) {
+      advice = buildDeterministicRecoveryAdvice(advisorRequest);
+      adviceSource = 'deterministic';
+    }
+    if (!advice) {
+      this.observability.intentRoutingTrace?.record({
+        stage: 'recovery_advisor_rejected',
+        requestId: input.requestId,
+        messageId: input.request.message.id,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        contentPreview: input.request.message.content,
+        details: {
+          ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+          ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+          taskExecutionId: input.taskRunId,
+          reason: 'advisor_proposal_invalid_or_empty',
+        },
+      });
+      return null;
+    }
+
+    this.observability.intentRoutingTrace?.record({
+      stage: 'recovery_advisor_completed',
+      requestId: input.requestId,
+      messageId: input.request.message.id,
+      userId: input.request.userId,
+      channel: input.request.message.channel,
+      agentId: input.target.agentId,
+      contentPreview: input.request.message.content,
+      details: {
+        ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+        ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+        taskExecutionId: input.taskRunId,
+        adviceSource,
+        actionCount: advice.actions.length,
+        actions: advice.actions.map((action) => ({
+          stepId: action.stepId,
+          strategy: action.strategy,
+          ...(action.toolName ? { toolName: action.toolName } : {}),
+        })),
+      },
+    });
+
+    return buildRecoveryAdvisorAdditionalSection(advice, input.taskContract);
   }
 
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -922,6 +1043,88 @@ export class WorkerManager {
             });
           }
           jobSnapshots = retryDrain.snapshots;
+          verifiedResult = verifyDelegatedWorkerResult({
+            metadata: result.metadata,
+            intentDecision: effectiveIntentDecision ?? undefined,
+            executionProfile: effectiveExecutionProfile,
+            taskContract: effectiveTaskContract,
+            jobSnapshots,
+          });
+          if (shouldAdoptDelegatedTaskContract(effectiveTaskContract, verifiedResult.envelope.taskContract)) {
+            effectiveTaskContract = verifiedResult.envelope.taskContract;
+          }
+          insufficiency = buildDelegatedRetryableFailure(verifiedResult.decision, verifiedResult.envelope);
+        }
+      }
+      if (insufficiency) {
+        const recoverySection = await this.requestRecoveryAdvisorGuidance({
+          request: effectiveInput,
+          worker,
+          target: delegatedTarget,
+          taskContract: effectiveTaskContract,
+          verification: verifiedResult.decision,
+          jobSnapshots,
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          dispatchBase: {
+            ...baseDispatchParams,
+            message: effectiveInput.message,
+            systemPrompt: effectiveInput.systemPrompt,
+            history: effectiveInput.history,
+            knowledgeBases: effectiveInput.knowledgeBases ?? [],
+            activeSkills: effectiveInput.activeSkills ?? [],
+            toolContext: effectiveInput.toolContext ?? '',
+            runtimeNotices: effectiveInput.runtimeNotices ?? [],
+            executionProfile: effectiveExecutionProfile,
+            continuity: effectiveInput.continuity,
+            pendingAction: effectiveInput.pendingAction,
+            pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
+          },
+        });
+        if (recoverySection) {
+          const recoveryAdditionalSections = appendPromptAdditionalSection(
+            baseDispatchParams.additionalSections,
+            recoverySection,
+          );
+          this.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
+            requestId,
+            taskRunId: delegatedTaskRunId,
+            lifecycle: 'running',
+            workerId: worker.id,
+            taskContract: effectiveTaskContract,
+            additionalSections: recoveryAdditionalSections,
+            reason: 'Retrying delegated worker with validated Recovery Manager guidance after deterministic verification failed.',
+          });
+          result = await this.dispatchToWorker(worker, {
+            ...baseDispatchParams,
+            message: effectiveInput.message,
+            systemPrompt: effectiveInput.systemPrompt,
+            history: effectiveInput.history,
+            knowledgeBases: effectiveInput.knowledgeBases ?? [],
+            activeSkills: effectiveInput.activeSkills ?? [],
+            toolContext: effectiveInput.toolContext ?? '',
+            runtimeNotices: effectiveInput.runtimeNotices ?? [],
+            additionalSections: recoveryAdditionalSections,
+            executionProfile: effectiveExecutionProfile,
+            continuity: effectiveInput.continuity,
+            pendingAction: effectiveInput.pendingAction,
+            pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
+            priorSatisfiedStepReceipts: filterDependencySatisfiedStepReceipts(
+              effectiveTaskContract.plan,
+              verifiedResult.envelope.stepReceipts,
+            ),
+          });
+          const recoveryDrain = await awaitPendingDelegatedJobs(this.tools, requestId);
+          if (recoveryDrain.inFlightRemaining > 0) {
+            this.recordDelegatedWorkerTrace('delegated_job_wait_expired', effectiveInput, delegatedTarget, {
+              requestId,
+              taskRunId: delegatedTaskRunId,
+              lifecycle: 'running',
+              taskContract: effectiveTaskContract,
+              reason: `${recoveryDrain.inFlightRemaining} delegated job(s) remained in flight after ${recoveryDrain.waitedMs}ms drain (recovery)`,
+            });
+          }
+          jobSnapshots = recoveryDrain.snapshots;
           verifiedResult = verifyDelegatedWorkerResult({
             metadata: result.metadata,
             intentDecision: effectiveIntentDecision ?? undefined,
@@ -1371,19 +1574,16 @@ export class WorkerManager {
       .filter((entry): entry is NonNullable<typeof entry> => !!entry)
       .slice(-6);
 
-    const jobSnapshots = typeof (this.tools as { listJobs?: unknown }).listJobs === 'function'
-      ? this.tools.listJobs(100)
-        .filter((job) => job.requestId === requestId)
-        .slice(0, 12)
-        .map((job) => ({
-          jobId: job.id,
-          toolName: job.toolName,
-          status: job.status,
-          argsPreview: job.argsPreview,
-          resultPreview: job.resultPreview,
-          error: job.error,
-        }))
-      : [];
+    const jobSnapshots = listDelegatedRequestJobSnapshots(this.tools, requestId)
+      .slice(0, 24)
+      .map((job) => ({
+        jobId: job.id,
+        toolName: job.toolName,
+        status: job.status,
+        argsPreview: job.argsPreview,
+        resultPreview: job.resultPreview,
+        error: job.error,
+      }));
 
     return {
       verificationFailureDiagnostics: {
@@ -1956,6 +2156,11 @@ export class WorkerManager {
           });
           return;
         }
+
+        if (notification.method === 'execution_graph.event' && isExecutionGraphEvent(notification.params)) {
+          this.observability.runTimeline?.ingestExecutionGraphEvent(notification.params);
+          return;
+        }
       },
     });
 
@@ -2061,6 +2266,7 @@ export class WorkerManager {
       priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
       directReasoning?: boolean;
       directReasoningTrace?: DirectReasoningTraceContext;
+      recoveryAdvisor?: RecoveryAdvisorRequest;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const queuedDispatch = worker.dispatchQueue.then(() => this.dispatchToWorkerNow(worker, params));
@@ -2087,6 +2293,7 @@ export class WorkerManager {
       priorSatisfiedStepReceipts?: DelegatedResultEnvelope['stepReceipts'];
       directReasoning?: boolean;
       directReasoningTrace?: DirectReasoningTraceContext;
+      recoveryAdvisor?: RecoveryAdvisorRequest;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     if (!this.workers.has(worker.id) || worker.status !== 'ready') {
@@ -2740,6 +2947,7 @@ function buildHybridDirectReasoningHandoffSection(input: {
   taskContract: DelegatedResultEnvelope['taskContract'];
   directResultContent: string;
   priorSatisfiedStepReceipts: DelegatedResultEnvelope['stepReceipts'];
+  jobSnapshots: DelegatedJobSnapshot[];
   directFailed: boolean;
 }): PromptAssemblyAdditionalSection {
   const satisfiedLines = input.priorSatisfiedStepReceipts.length > 0
@@ -2754,13 +2962,16 @@ function buildHybridDirectReasoningHandoffSection(input: {
   const directSummary = input.directResultContent
     ? truncateInlineText(input.directResultContent, 2400)
     : 'The direct reasoning phase did not return a usable summary.';
+  const ledgerSummary = buildHybridDirectToolLedgerSummary(input.jobSnapshots);
   return {
     section: 'Hybrid Direct Reasoning Handoff',
     mode: 'hybrid_direct_reasoning',
     itemCount: input.priorSatisfiedStepReceipts.length,
     content: [
       'This delegated turn has a read/search phase followed by a write phase.',
-      'A brokered direct-reasoning pass already ran with read-only tools. Use the satisfied read/search receipts below as dependency evidence, then execute only the remaining write/mutation steps unless the evidence is contradictory.',
+      'A brokered direct-reasoning pass already ran with read-only tools. Use the satisfied read/search receipts and server tool ledger below as dependency evidence, then execute only the remaining write/mutation steps unless the evidence is contradictory.',
+      'Your immediate job is the remaining write step. For a file write, call fs_write before sending a final response.',
+      'If the direct phase failed to produce prose, write a concise summary from the server tool ledger instead of re-running the completed search.',
       '',
       'Satisfied read/search steps:',
       satisfiedLines,
@@ -2771,8 +2982,94 @@ function buildHybridDirectReasoningHandoffSection(input: {
       `Direct phase status: ${input.directFailed ? 'failed_or_partial' : 'completed'}`,
       'Direct phase evidence summary:',
       directSummary,
+      '',
+      'Server tool ledger evidence:',
+      ledgerSummary,
     ].join('\n'),
   };
+}
+
+function buildHybridDirectToolLedgerSummary(jobSnapshots: DelegatedJobSnapshot[]): string {
+  const sortedSnapshots = [...jobSnapshots]
+    .filter((snapshot) => isSuccessfulHybridReadJob(snapshot))
+    .sort((left, right) => (
+      (left.startedAt ?? left.createdAt ?? 0) - (right.startedAt ?? right.createdAt ?? 0)
+    ));
+  const lines: string[] = [];
+  const refs = new Set<string>();
+
+  for (const snapshot of sortedSnapshots) {
+    if (lines.length >= HYBRID_HANDOFF_JOB_LINE_LIMIT) {
+      break;
+    }
+    const args = parseDelegatedJobArgsPreview(snapshot.argsPreview);
+    const lineRefs = extractHybridEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview);
+    for (const ref of lineRefs) {
+      if (refs.size >= HYBRID_HANDOFF_REF_LIMIT) break;
+      refs.add(ref);
+    }
+    lines.push(describeHybridEvidenceJob(snapshot, args, lineRefs));
+  }
+
+  if (lines.length === 0) {
+    return 'No successful read/search tool receipts were available from the server ledger.';
+  }
+
+  return [
+    ...lines,
+    ...(refs.size > 0 ? [`Key evidence paths: ${[...refs].join(', ')}`] : []),
+  ].join('\n');
+}
+
+function isSuccessfulHybridReadJob(snapshot: DelegatedJobSnapshot): boolean {
+  const status = snapshot.status.trim().toLowerCase();
+  return status === 'succeeded'
+    && (snapshot.toolName === 'fs_search' || snapshot.toolName === 'fs_read' || snapshot.toolName === 'fs_list');
+}
+
+function describeHybridEvidenceJob(
+  snapshot: DelegatedJobSnapshot,
+  args: Record<string, unknown>,
+  refs: string[],
+): string {
+  const query = typeof args.query === 'string' && args.query.trim()
+    ? ` query="${truncateInlineText(args.query, 80)}"`
+    : '';
+  const path = typeof args.path === 'string' && args.path.trim()
+    ? ` path="${truncateInlineText(normalizeHybridEvidenceRef(args.path) ?? args.path, 120)}"`
+    : '';
+  const refSummary = refs.length > 0
+    ? ` -> ${refs.slice(0, 4).join(', ')}`
+    : '';
+  return `- ${snapshot.toolName}${query}${path}${refSummary}`;
+}
+
+function extractHybridEvidenceRefs(...values: Array<string | undefined>): string[] {
+  const refs = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    const matches = value.match(HYBRID_EVIDENCE_PATH_PATTERN) ?? [];
+    for (const match of matches) {
+      const normalized = normalizeHybridEvidenceRef(match);
+      if (!normalized) continue;
+      refs.add(normalized);
+      if (refs.size >= HYBRID_HANDOFF_REF_LIMIT) {
+        return [...refs];
+      }
+    }
+  }
+  return [...refs];
+}
+
+function normalizeHybridEvidenceRef(value: string | undefined): string | null {
+  let normalized = value?.trim().replace(/\\\\/g, '/').replace(/\\/g, '/').replace(/^["']|["']$/g, '') ?? '';
+  normalized = normalized.replace(/\/+/g, '/').replace(/\.\.\.$/, '').trim();
+  if (!normalized) return null;
+  const workspaceRelativeMatch = normalized.match(/(?:^|\/)(src|docs|web|scripts|config|tmp|policies|skills|native)\/.+$/i);
+  if (workspaceRelativeMatch?.index !== undefined && workspaceRelativeMatch.index >= 0) {
+    return normalized.slice(workspaceRelativeMatch.index + (normalized[workspaceRelativeMatch.index] === '/' ? 1 : 0));
+  }
+  return normalized;
 }
 
 function buildDelegatedInsufficientResultHandoff(
@@ -3135,7 +3432,7 @@ function synthesizeDelegatedEvidenceReceiptsFromJobs(
       sourceType: 'tool_call',
       toolName: snapshot.toolName,
       status: receiptStatus,
-      refs: [],
+      refs: extractHybridEvidenceRefs(snapshot.argsPreview, snapshot.resultPreview),
       summary: snapshot.error?.trim()
         || snapshot.resultPreview?.trim()
         || `${snapshot.toolName} ${snapshot.status}.`,
@@ -3186,9 +3483,9 @@ function listDelegatedRequestJobSnapshots(
   if (!requestId || typeof (tools as { listJobs?: unknown }).listJobs !== 'function') {
     return [];
   }
-  return tools.listJobs(100)
+  return tools.listJobs(DELEGATED_REQUEST_JOB_LOOKUP_LIMIT)
     .filter((job) => job.requestId === requestId)
-    .slice(0, 24)
+    .slice(0, DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT)
     .map((job) => ({
       id: job.id,
       toolName: job.toolName,
@@ -3889,6 +4186,38 @@ function mergeUniquePaths(...groups: Array<string[] | undefined>): string[] {
     }
   }
   return [...merged];
+}
+
+function toRecoveryAdvisorJobSnapshot(snapshot: DelegatedJobSnapshot): RecoveryAdvisorJobSnapshot {
+  return {
+    toolName: snapshot.toolName,
+    status: snapshot.status,
+    ...(snapshot.argsPreview ? { argsPreview: snapshot.argsPreview } : {}),
+    ...(snapshot.resultPreview ? { resultPreview: snapshot.resultPreview } : {}),
+  };
+}
+
+function readRecoveryAdvisorProposal(metadata: Record<string, unknown> | undefined): RecoveryAdvisorProposal | null {
+  const recoveryAdvisor = isRecord(metadata?.recoveryAdvisor) ? metadata.recoveryAdvisor : null;
+  const proposal = isRecord(recoveryAdvisor?.proposal) ? recoveryAdvisor.proposal : null;
+  if (!proposal) return null;
+  const decision = proposal.decision === 'retry' || proposal.decision === 'give_up'
+    ? proposal.decision
+    : null;
+  if (!decision) return null;
+  const actions = Array.isArray(proposal.actions)
+    ? proposal.actions
+        .filter((entry): entry is RecoveryAdvisorAction => (
+          isRecord(entry)
+          && typeof entry.stepId === 'string'
+          && typeof entry.strategy === 'string'
+        ))
+    : undefined;
+  return {
+    decision,
+    ...(typeof proposal.reason === 'string' ? { reason: proposal.reason } : {}),
+    ...(actions && actions.length > 0 ? { actions } : {}),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

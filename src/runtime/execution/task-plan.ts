@@ -142,7 +142,10 @@ function shouldUseGatewayPlannedSteps(
         || step.expectedToolCategories?.some(isWriteToolCategory));
     case 'tool_execution':
       return steps.some((step) => step.kind === 'tool_call'
-        || step.expectedToolCategories?.some(isExecutionToolCategory));
+        || step.kind === 'search'
+        || step.kind === 'read'
+        || step.kind === 'write'
+        || step.expectedToolCategories?.some(isActionToolCategory));
     case 'general_answer':
     case 'repo_inspection':
     case 'security_analysis':
@@ -165,6 +168,19 @@ function isExecutionToolCategory(value: string): boolean {
     || value === 'execute_code'
     || value === 'shell'
     || value === 'command';
+}
+
+function isActionToolCategory(value: string): boolean {
+  return isExecutionToolCategory(value)
+    || isWriteToolCategory(value)
+    || value === 'search'
+    || value === 'read'
+    || value === 'fs_search'
+    || value === 'code_symbol_search'
+    || value === 'fs_read'
+    || value === 'fs_list'
+    || value === 'web_search'
+    || value === 'web_fetch';
 }
 
 function ensureExactFileReferenceReadStep(

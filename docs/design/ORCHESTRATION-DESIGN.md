@@ -1,6 +1,8 @@
 # Orchestration Design
 
-**Status:** Implemented current architecture
+**Status:** Implemented current architecture, with durable execution graph uplift planned
+
+**Forward plan:** `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`
 
 Guardian has distinct orchestration layers. They solve different problems and should not be collapsed into one vague “orchestrator” concept.
 
@@ -151,6 +153,8 @@ Current as-built delegation foundations:
 - exact repo-grounded delegated inspections now pass through a server-owned sufficiency gate; if the first completed child answer still admits truncation or uncertainty without returning the exact file references requested, orchestration may retry once on a stronger eligible execution profile and otherwise fails the delegated outcome instead of accepting the weak answer
 - retry directives are shaped by the unsatisfied planned-step kind; for example, failed filesystem write steps retry as filesystem mutation work instead of broad repo-inspection work
 - hybrid read/write turns are managed as one delegated job with a read-only direct-reasoning exploration phase followed by delegated mutation; WorkerManager derives satisfied read/search receipts from the supervisor-owned tool job ledger and passes them into the delegated write phase as `priorSatisfiedStepReceipts`
+- last-resort recovery is manager-owned and advisory: after deterministic verification still finds missing evidence, WorkerManager may ask the brokered worker for a no-tools JSON recovery proposal, validate it against the unsatisfied planned steps, and use it only as one retry guidance section
+- recovery-advisor output never satisfies a contract, approves a blocked action, changes sandbox/tool policy, or bypasses receipts; the normal verifier remains the authority
 - non-terminal delegated completions such as progress-only replies are also treated as retryable coordinator failures; Guardian may escalate those once onto a stronger eligible profile before surfacing a terminal failure to the operator
 - operator-facing assistant job views now merge primary assistant jobs with delegated-worker jobs
 - delegated run classes now exist for `in_invocation`, `short_lived`, `long_running`, and `automation_owned`
@@ -166,7 +170,32 @@ Current as-built delegation foundations:
 Current limitation:
 - delegated worker completion is still normalized around bounded handoff metadata plus result content
 - the sufficiency gate and retry policy prevent weak delegated completions from being treated as success, but they do not by themselves remove upstream tool-result truncation or guarantee that the first worker picked the best possible tool plan
+- recovery-advisor retry can repair some late failures, but it is intentionally bounded to one validated retry and should not become a second planner or an unbounded loop
 - the stronger split into distinct user-facing summary, evidence bundle, and machine-readable next-action channels is still follow-on work
+
+## 5b. Target Uplift: Durable Execution Graph
+
+The next orchestration uplift should replace the binary direct-reasoning/delegated-orchestration split with a durable execution graph. The current split remains the shipped behavior until that uplift lands, but future remediation should not add more prompt-specific or worker-manager-specific repair paths.
+
+The graph should make these concepts first-class:
+
+- request-scoped execution graph identity
+- typed execution nodes for classification, read-only exploration, synthesis, mutation, approval interrupt, delegated worker execution, verification, recovery, and finalization
+- immutable typed artifacts for search results, file reads, evidence ledgers, synthesis drafts, write specs, mutation receipts, and verification results
+- append-only graph events ingested by `RunTimelineStore`
+- graph-native pending-action interrupts for approvals, clarification, auth, workspace switch, and policy blockers
+- bounded recovery proposals that may retry or edit graph nodes but cannot execute tools, approve actions, or mark work complete
+
+Direct reasoning becomes an `explore_readonly` node. Delegated workers become `delegated_worker` or `mutate` node runners. Grounded synthesis becomes a no-tools `synthesize` node over typed evidence artifacts. Hybrid read/write requests should pass artifacts between nodes instead of prose between workers.
+
+Security invariants remain unchanged:
+
+- the Intent Gateway remains the only semantic route classifier
+- brokered workers cannot access supervisor `Runtime`, `ToolExecutor`, provider objects, channel adapters, or raw filesystem authority
+- all mutations execute through supervisor-owned `ToolExecutor`, Guardian policy, approvals, and audit
+- graph events and run-timeline payloads must use bounded previews and must not expose raw prompts, raw secrets, or unbounded tool output
+
+The implementation plan is `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`.
 
 ## 5a. System-Owned Background Maintenance
 

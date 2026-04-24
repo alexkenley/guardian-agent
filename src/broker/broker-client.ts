@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
+import type { ExecutionGraphEvent } from '../runtime/execution-graph/graph-events.js';
 import type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './types.js';
 import { stringifyJsonTransport, toJsonTransportValue } from './json-safe.js';
 
@@ -71,6 +72,10 @@ export class BrokerClient {
 
   recordTrace(params: Record<string, unknown>): void {
     this.sendNotification('trace.record', params);
+  }
+
+  recordExecutionGraphEvent(event: ExecutionGraphEvent): void {
+    this.sendNotification('execution_graph.event', event as unknown as Record<string, unknown>);
   }
 
   async listLoadedTools(input?: { codeContext?: { workspaceRoot: string; sessionId?: string } }): Promise<ToolDefinition[]> {

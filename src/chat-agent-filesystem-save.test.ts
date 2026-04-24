@@ -149,7 +149,7 @@ describe('LLMChatAgent direct filesystem save', () => {
     const previousOutput = 'Top 3 risks:\n1. Replayable approval outcome.\n2. Policy bypass via broker.\n3. Stuck running lifecycle.';
     conversationService.recordTurn(conversationKey, 'Review the security files.', previousOutput);
 
-    const response = await (agent as any).tryDirectFilesystemSave(
+    const response = await (agent as any).tryDirectFilesystemIntent(
       createMessage('Can you save that last output to a file called test5 in S:\\Development'),
       createCtx(),
       'owner:web',
@@ -161,7 +161,7 @@ describe('LLMChatAgent direct filesystem save', () => {
         operation: 'save',
         summary: 'Save the last output.',
         confidence: 'high',
-        turnRelation: 'new_request',
+        turnRelation: 'follow_up',
         resolution: 'ready',
         missingFields: [],
         entities: { path: 'S:\\Development' },

@@ -44,8 +44,14 @@ export type IntentRoutingTraceStage =
   | 'approval_continuation_resolved'
   | 'direct_reasoning_started'
   | 'direct_reasoning_tool_call'
+  | 'direct_reasoning_synthesis_started'
+  | 'direct_reasoning_synthesis_completed'
+  | 'direct_reasoning_synthesis_rejected'
   | 'direct_reasoning_completed'
-  | 'direct_reasoning_failed';
+  | 'direct_reasoning_failed'
+  | 'recovery_advisor_started'
+  | 'recovery_advisor_completed'
+  | 'recovery_advisor_rejected';
 
 export interface IntentRoutingTraceEntry {
   id: string;

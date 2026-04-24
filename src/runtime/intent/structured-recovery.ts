@@ -361,17 +361,19 @@ export function normalizeIntentGatewayDecision(
       };
     })
     .filter((step): step is IntentGatewayPlannedStep => !!step);
-  const synthesizedPlannedSteps = plannedSteps.length > 0
-    ? []
-    : synthesizeIntentGatewayPlannedSteps({
-        sourceContent: repairContext?.sourceContent,
-        route,
-        operation,
-        executionClass,
-        requireExactFileReferences,
-        requiresRepoGrounding,
-      });
-  const effectivePlannedSteps = plannedSteps.length > 0 ? plannedSteps : synthesizedPlannedSteps;
+  const synthesizedPlannedSteps = synthesizeIntentGatewayPlannedSteps({
+    sourceContent: repairContext?.sourceContent,
+    route,
+    operation,
+    executionClass,
+    requireExactFileReferences,
+    requiresRepoGrounding,
+  });
+  const effectivePlannedSteps = shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps)
+    ? synthesizedPlannedSteps
+    : plannedSteps.length > 0
+      ? plannedSteps
+      : synthesizedPlannedSteps;
   const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
   const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
   const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
@@ -513,6 +515,28 @@ function synthesizeIntentGatewayPlannedSteps(input: {
   }
 
   return [];
+}
+
+function shouldPreferSynthesizedPlannedSteps(
+  parsedSteps: IntentGatewayPlannedStep[],
+  synthesizedSteps: IntentGatewayPlannedStep[],
+): boolean {
+  if (parsedSteps.length === 0 || synthesizedSteps.length < 2) {
+    return false;
+  }
+  const synthesizedRequired = synthesizedSteps.filter((step) => step.required !== false);
+  const parsedRequired = parsedSteps.filter((step) => step.required !== false);
+  const synthesizedHasWrite = synthesizedRequired.some((step) => step.kind === 'write'
+    || step.expectedToolCategories?.includes('write'));
+  if (!synthesizedHasWrite) {
+    return false;
+  }
+  const parsedHasWrite = parsedRequired.some((step) => step.kind === 'write'
+    || step.expectedToolCategories?.includes('write'));
+  if (!parsedHasWrite) {
+    return true;
+  }
+  return parsedRequired.length < synthesizedRequired.length;
 }
 
 const MODIFIER_CLAUSE_LEADERS = [

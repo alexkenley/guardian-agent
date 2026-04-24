@@ -138,6 +138,8 @@ Read-only direct reasoning is an execution mode inside the brokered worker, not 
 
 Direct reasoning must not call supervisor `ToolExecutor` or provider objects directly when brokered isolation is enabled. If the read-only loop exhausts its budget, the direct turn fails closed instead of automatically falling into delegated orchestration.
 
+Forward target: `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md` moves direct reasoning from a standalone execution mode into a durable graph `explore_readonly` node. This does not weaken the broker boundary. The worker still receives only broker-backed LLM/tool/event dependencies, and the supervisor remains the owner of graph state, tool execution, approvals, audit, and run-timeline projection.
+
 ## Capability Tokens
 
 Capability tokens are held only in supervisor memory.
@@ -288,5 +290,6 @@ The following remain follow-up work, not implemented behavior:
 - worker response streaming
 - finer-grained capability-token authorization
 - explicit broker RPC for memory/event/dispatch
+- graph-event notification support for durable execution graph node events
 - taint-aware broker policy
 - dedicated worker tests beyond the focused brokered harness

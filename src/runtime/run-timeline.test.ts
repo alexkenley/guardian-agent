@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CodeSessionRecord } from './code-sessions.js';
+import { createExecutionGraphEvent } from './execution-graph/graph-events.js';
 import type { AssistantDispatchTrace } from './orchestrator.js';
 import { RunTimelineStore } from './run-timeline.js';
 
@@ -690,5 +691,77 @@ describe('RunTimelineStore', () => {
     expect(run?.liveSummary.items.some((item) => item.title === 'Prepared request')).toBe(false);
     expect(run?.liveSummary.items.some((item) => item.title === 'Assembled context')).toBe(false);
     expect(run?.liveSummary.items.some((item) => item.title.startsWith('Model response'))).toBe(false);
+  });
+
+  it('ingests direct reasoning execution graph tool events as run timeline items', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestExecutionGraphEvent(createExecutionGraphEvent({
+      eventId: 'graph-tool-started',
+      graphId: 'execution-graph:exec-direct:direct-reasoning',
+      executionId: 'exec-direct',
+      rootExecutionId: 'exec-direct',
+      requestId: 'req-direct',
+      runId: 'req-direct',
+      nodeId: 'node:exec-direct:explore_readonly',
+      nodeKind: 'explore_readonly',
+      kind: 'tool_call_started',
+      timestamp: 120,
+      sequence: 1,
+      producer: 'brokered_worker',
+      channel: 'web',
+      agentId: 'guardian',
+      codeSessionId: 'code-direct',
+      payload: {
+        toolName: 'fs_search',
+        argsPreview: '{"query":"RunTimelineStore"}',
+      },
+    }));
+    store.ingestExecutionGraphEvent(createExecutionGraphEvent({
+      eventId: 'graph-tool-completed',
+      graphId: 'execution-graph:exec-direct:direct-reasoning',
+      executionId: 'exec-direct',
+      rootExecutionId: 'exec-direct',
+      requestId: 'req-direct',
+      runId: 'req-direct',
+      nodeId: 'node:exec-direct:explore_readonly',
+      nodeKind: 'explore_readonly',
+      kind: 'tool_call_completed',
+      timestamp: 140,
+      sequence: 2,
+      producer: 'brokered_worker',
+      channel: 'web',
+      agentId: 'guardian',
+      codeSessionId: 'code-direct',
+      payload: {
+        toolName: 'fs_search',
+        resultStatus: 'succeeded',
+        resultPreview: 'Search results for RunTimelineStore (2 matches).',
+      },
+    }));
+
+    const run = store.getRun('req-direct');
+    expect(run?.summary).toMatchObject({
+      runId: 'req-direct',
+      executionId: 'exec-direct',
+      rootExecutionId: 'exec-direct',
+      codeSessionId: 'code-direct',
+      status: 'running',
+      title: 'Direct reasoning exploration',
+    });
+    expect(run?.items.map((item) => item.type)).toEqual([
+      'tool_call_started',
+      'tool_call_completed',
+    ]);
+    expect(run?.items[0]).toMatchObject({
+      source: 'execution_graph',
+      title: 'Tool started: Fs Search',
+      toolName: 'fs_search',
+    });
+    expect(run?.items[1]).toMatchObject({
+      source: 'execution_graph',
+      title: 'Tool completed: Fs Search',
+      status: 'succeeded',
+      detail: 'Search results for RunTimelineStore (2 matches).',
+    });
   });
 });
