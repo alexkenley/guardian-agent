@@ -774,6 +774,9 @@ export async function executeDirectReasoningLoop(input: {
           artifactCount: artifactState.artifacts.length,
         }, 'synthesis:completed');
       } else {
+        if (!finalResponse) {
+          timedOut = true;
+        }
         if (finalContent.trim()) {
           recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_rejected', {
             route: input.input.gateway?.decision.route,

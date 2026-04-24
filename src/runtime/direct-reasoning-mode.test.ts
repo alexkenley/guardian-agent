@@ -860,6 +860,59 @@ describe('direct reasoning mode', () => {
     });
   });
 
+  it('reports timedOut when grounded synthesis times out before deterministic fallback evidence', async () => {
+    vi.useFakeTimers();
+    try {
+      const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+        if (options?.tools && options.tools.length > 0) {
+          return chatResponse({
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call-1',
+                name: 'fs_read',
+                arguments: JSON.stringify({ path: 'src/runtime/direct-reasoning-mode.ts' }),
+              },
+            ],
+          });
+        }
+        return new Promise<ChatResponse>(() => {});
+      });
+      const executeTool = vi.fn(async () => ({
+        success: true,
+        status: 'succeeded',
+        output: {
+          path: 'src/runtime/direct-reasoning-mode.ts',
+          content: 'export async function handleDirectReasoningMode() {}',
+        },
+      }));
+
+      const pending = handleDirectReasoningMode({
+        message: 'Inspect this repo and cite direct reasoning implementation files. Do not edit anything.',
+        gateway: gateway({ operation: 'inspect' }),
+        selectedExecutionProfile: profile(),
+        maxTurns: 1,
+        maxTotalTimeMs: 5_000,
+      }, {
+        chat,
+        executeTool,
+        now: () => 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      const result = await pending;
+
+      expect(result.content).toContain('Relevant implementation evidence found from brokered read-only tools:');
+      expect(result.metadata?.directReasoningStats).toMatchObject({
+        toolCallCount: 1,
+        timedOut: true,
+        synthesized: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('replaces an unsupported exploration draft with the grounded synthesis answer', async () => {
     const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
       if (chat.mock.calls.length === 1) {
