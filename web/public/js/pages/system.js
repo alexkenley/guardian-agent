@@ -897,6 +897,12 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
 function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRuns, scheduledTaskRuns, codeSessionRuns }) {
   const continuityKey = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.continuityKey);
   const activeExecutionRef = normalizeRoutingTraceFilterValue(systemUiState.runtimeTimelineFilters?.activeExecutionRef);
+  const graphSummary = summarizeExecutionGraphRuns([
+    ...assistantDispatchRuns,
+    ...delegatedTaskRuns,
+    ...scheduledTaskRuns,
+    ...codeSessionRuns,
+  ]);
   const section = document.createElement('div');
   section.className = 'table-container';
   section.innerHTML = `
@@ -905,12 +911,12 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
         <h3>Runtime Execution</h3>
         ${renderInfoButton('Runtime Execution', {
           whatItIs: 'This section is the operator-facing execution timeline for assistant dispatches, scheduled routine work, and code-session activity.',
-          whatSeeing: 'You are seeing separate recent run tables for assistant dispatches, scheduled tasks and routines, and code-session timeline entries.',
-          whatCanDo: 'Use it to follow non-automation execution, reconstruct what happened in a run, and inspect event-level timeline detail.',
+          whatSeeing: 'You are seeing separate recent run tables for assistant dispatches, scheduled tasks and routines, code-session timeline entries, and any durable execution-graph events projected into those runs.',
+          whatCanDo: 'Use it to follow non-automation execution, reconstruct what happened in a run, and inspect graph node, tool, approval, verification, and recovery events.',
           howLinks: 'Automations owns automation output and automation execution. System owns the broader assistant and routine runtime detail.',
         })}
       </div>
-      <div class="ops-task-sub">Automations shows automation execution only. Assistant, routine, and code-session runs live here.</div>
+      <div class="ops-task-sub">Automations shows automation execution only. Assistant, routine, code-session, and execution-graph projections live here.</div>
     </div>
     <form id="system-runtime-execution-filter-form" style="padding:0 1rem 1rem;display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
       <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
@@ -931,6 +937,7 @@ function createRuntimeExecutionSection({ assistantDispatchRuns, delegatedTaskRun
       ${renderMiniCard('Delegated', delegatedTaskRuns.length, 'Specialist and worker child-task runs', delegatedTaskRuns.length > 0 ? 'accent' : 'success', 'Recent delegated specialist and worker task execution visible on the System page.')}
       ${renderMiniCard('Scheduled', scheduledTaskRuns.length, 'Routines and other scheduled work', scheduledTaskRuns.length > 0 ? 'accent' : 'success', 'Recent scheduled-task execution, including Second Brain routine scans, visible on the System page.')}
       ${renderMiniCard('Code', codeSessionRuns.length, 'Code-session timeline runs', codeSessionRuns.length > 0 ? 'warning' : 'success', 'Recent coding-session execution visible on the System page.')}
+      ${renderMiniCard('Graph Events', graphSummary.graphEventCount, `${graphSummary.graphRunCount} run${graphSummary.graphRunCount === 1 ? '' : 's'} with graph state`, graphSummary.graphEventCount > 0 ? 'accent' : 'success', 'Durable execution graph events projected into the run timeline, including direct reasoning tools, approvals, verification, and recovery.')}
     </div>
     <div style="padding:0 1rem 1rem;display:flex;flex-direction:column;gap:1rem">
       ${renderRuntimeExecutionTable('Assistant Dispatch', 'assistant_dispatch', assistantDispatchRuns, 'No recent assistant dispatch runs.')}
@@ -1037,6 +1044,25 @@ function formatRuntimeExecutionOwner(kind, summary) {
   return summary.agentId || summary.channel || '-';
 }
 
+function summarizeExecutionGraphRuns(runs) {
+  const graphRuns = new Set();
+  let graphEventCount = 0;
+  for (const run of Array.isArray(runs) ? runs : []) {
+    const summary = run?.summary || {};
+    const tags = Array.isArray(summary.tags) ? summary.tags : [];
+    const items = Array.isArray(run?.items) ? run.items : [];
+    const eventCount = items.filter((item) => item?.source === 'execution_graph').length;
+    if (tags.includes('execution-graph') || eventCount > 0) {
+      graphRuns.add(summary.runId || `run-${graphRuns.size + 1}`);
+    }
+    graphEventCount += eventCount;
+  }
+  return {
+    graphRunCount: graphRuns.size,
+    graphEventCount,
+  };
+}
+
 function renderRuntimeExecutionTimelineItems(items, runId) {
   if (!Array.isArray(items) || items.length === 0) {
     return '<span class="ops-task-sub">No visible events.</span>';
@@ -1051,16 +1077,18 @@ function renderRuntimeExecutionTimelineItems(items, runId) {
         ${recent.map((item) => {
           const contextAssembly = normalizeRunTimelineContextAssembly(item?.contextAssembly);
           const highlighted = requestedItemId && item?.id === requestedItemId;
+          const graphEvent = item?.source === 'execution_graph';
           return `
             <div
               id="system-execution-item-${escAttr(item.id || '')}"
-              style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);${highlighted ? 'outline:2px solid var(--accent);outline-offset:2px;' : ''}"
+              style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-left:${graphEvent ? '3px solid var(--accent)' : '1px solid var(--border)'};border-radius:0;background:var(--bg-secondary);${highlighted ? 'outline:2px solid var(--accent);outline-offset:2px;' : ''}"
             >
               <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between">
                 <strong>${esc(item.title || item.type || 'Event')}</strong>
                 <span style="color:${timelineStatusColor(item.status)}">${esc(item.status || 'info')}</span>
               </div>
               <div class="ops-task-sub">${esc(formatTime(item.timestamp))}</div>
+              ${renderRuntimeExecutionEventMeta(item)}
               ${item.detail ? `<div style="margin-top:0.35rem;color:var(--text-secondary)">${esc(item.detail)}</div>` : ''}
               ${renderRunTimelineContextAssembly(contextAssembly, esc)}
             </div>
@@ -1068,6 +1096,22 @@ function renderRuntimeExecutionTimelineItems(items, runId) {
         }).join('')}
       </div>
     </details>
+  `;
+}
+
+function renderRuntimeExecutionEventMeta(item) {
+  if (!item || typeof item !== 'object') return '';
+  const pills = [];
+  if (item.source === 'execution_graph') pills.push('execution graph');
+  if (item.nodeId) pills.push(`node ${shortGraphToken(item.nodeId)}`);
+  if (item.toolName) pills.push(`tool ${item.toolName}`);
+  if (item.approvalId) pills.push(`approval ${shortId(item.approvalId)}`);
+  if (item.verificationKind) pills.push(`verification ${item.verificationKind}`);
+  if (pills.length === 0) return '';
+  return `
+    <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.35rem">
+      ${pills.map((pill) => `<span style="display:inline-flex;align-items:center;padding:0.1rem 0.38rem;border:1px solid var(--border);border-radius:0;font-size:0.72rem;color:var(--text-secondary)">${esc(pill)}</span>`).join('')}
+    </div>
   `;
 }
 
@@ -1569,6 +1613,14 @@ function formatDateTime(timestamp) {
 
 function shortId(id) {
   return String(id || '').slice(0, 8);
+}
+
+function shortGraphToken(value) {
+  const text = String(value || '').trim();
+  if (!text) return '-';
+  const parts = text.split(':').filter(Boolean);
+  const tail = parts[parts.length - 1] || text;
+  return tail.length > 18 ? `${tail.slice(0, 17)}...` : tail;
 }
 
 function renderSystemApprovalActionsMarkup(approval) {
