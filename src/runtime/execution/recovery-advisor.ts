@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../../llm/types.js';
 import { parseStructuredJsonObject } from '../../util/structured-json.js';
+import type { RecoveryProposalCandidate } from '../execution-graph/node-recovery.js';
 import type { PromptAssemblyAdditionalSection } from '../context-assembly.js';
 import type {
   DelegatedResultEnvelope,
@@ -44,6 +45,24 @@ export interface RecoveryAdvisorRequest {
 export interface ValidatedRecoveryAdvice {
   reason: string;
   actions: RecoveryAdvisorAction[];
+}
+
+export function buildGraphRecoveryProposalCandidateFromAdvice(
+  advice: ValidatedRecoveryAdvice,
+  failedNodeId: string,
+): RecoveryProposalCandidate {
+  return {
+    reason: advice.reason,
+    actions: advice.actions.map((action) => ({
+      kind: action.strategy === 'answer_from_existing_evidence'
+        ? 'insert_synthesize_node'
+        : 'retry_node',
+      targetNodeId: failedNodeId,
+      insertAfterNodeId: failedNodeId,
+      retryBudget: 1,
+      reason: action.reason ?? describeRecoveryStrategy(action.strategy),
+    })),
+  };
 }
 
 const RECOVERY_ADVISOR_SCHEMA = {

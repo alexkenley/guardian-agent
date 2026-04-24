@@ -76,4 +76,36 @@ describe('execution graph timeline adapter', () => {
     });
     expect(approval?.items[0]?.detail).not.toContain('raw prompt');
   });
+
+  it('projects recovery proposals as warning timeline items', () => {
+    const recovery = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
+      eventId: 'event-recovery',
+      graphId: 'graph-1',
+      executionId: 'exec-1',
+      rootExecutionId: 'exec-1',
+      requestId: 'req-1',
+      runId: 'req-1',
+      nodeId: 'recover-1',
+      nodeKind: 'recover',
+      kind: 'recovery_proposed',
+      timestamp: 300,
+      sequence: 7,
+      producer: 'runtime',
+      payload: {
+        failedNodeId: 'mutate-1',
+        proposalArtifactId: 'recovery-1',
+        summary: 'Retry the failed mutation once from the existing WriteSpec.',
+        advisoryOnly: true,
+      },
+    }));
+
+    expect(recovery?.items[0]).toMatchObject({
+      type: 'note',
+      status: 'warning',
+      source: 'execution_graph',
+      title: 'Recovery proposed',
+      detail: 'Retry the failed mutation once from the existing WriteSpec.',
+      nodeId: 'recover-1',
+    });
+  });
 });

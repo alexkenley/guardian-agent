@@ -94,6 +94,28 @@ export interface VerificationResultContent {
   checks: VerificationCheckRecord[];
 }
 
+export type RecoveryProposalActionKind =
+  | 'retry_node'
+  | 'insert_synthesize_node'
+  | 'request_approval'
+  | 'request_clarification'
+  | 'fail_graph';
+
+export interface RecoveryProposalActionContent {
+  kind: RecoveryProposalActionKind;
+  targetNodeId?: string;
+  insertAfterNodeId?: string;
+  retryBudget?: number;
+  reason?: string;
+}
+
+export interface RecoveryProposalContent {
+  failedNodeId: string;
+  reason: string;
+  actions: RecoveryProposalActionContent[];
+  advisoryOnly: true;
+}
+
 export interface SynthesisDraftValidationResult {
   valid: boolean;
   missingArtifactIds: string[];
@@ -111,6 +133,7 @@ export type ExecutionArtifactContent =
   | WriteSpecContent
   | MutationReceiptContent
   | VerificationResultContent
+  | RecoveryProposalContent
   | Record<string, unknown>;
 
 export interface ExecutionArtifact<TContent extends ExecutionArtifactContent = ExecutionArtifactContent> {
@@ -456,6 +479,50 @@ export function buildVerificationResultArtifact(input: {
       subjectArtifactId: input.subjectArtifactId,
       valid,
       checks: input.checks.map((check) => ({ ...check })),
+    },
+    createdAt: input.createdAt,
+  };
+}
+
+export function buildRecoveryProposalArtifact(input: {
+  graphId: string;
+  nodeId: string;
+  artifactId?: string;
+  failedNodeId: string;
+  reason: string;
+  actions: RecoveryProposalActionContent[];
+  createdAt: number;
+}): ExecutionArtifact<RecoveryProposalContent> {
+  const reason = truncateText(input.reason, 500) ?? 'Recovery proposal generated.';
+  const actions = input.actions.slice(0, 3).map((action) => ({
+    kind: action.kind,
+    ...(normalizeText(action.targetNodeId) ? { targetNodeId: normalizeText(action.targetNodeId) } : {}),
+    ...(normalizeText(action.insertAfterNodeId) ? { insertAfterNodeId: normalizeText(action.insertAfterNodeId) } : {}),
+    ...(typeof action.retryBudget === 'number' && Number.isFinite(action.retryBudget)
+      ? { retryBudget: Math.max(1, Math.floor(action.retryBudget)) }
+      : {}),
+    ...(normalizeText(action.reason) ? { reason: truncateText(action.reason, 300) } : {}),
+  }));
+  const actionSummary = actions.map((action) => action.kind).join(', ') || 'none';
+  return {
+    artifactId: input.artifactId ?? `artifact:${randomUUID()}`,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    artifactType: 'RecoveryProposal',
+    label: 'Recovery proposal',
+    preview: truncateText(`Recovery proposal for ${input.failedNodeId}: ${actionSummary}.`, MAX_PREVIEW_CHARS),
+    refs: uniqueStrings([
+      input.failedNodeId,
+      ...actions.flatMap((action) => [action.targetNodeId ?? '', action.insertAfterNodeId ?? '']),
+    ]),
+    trustLevel: 'trusted',
+    taintReasons: [],
+    redactionPolicy: 'recovery_proposal_summary_only',
+    content: {
+      failedNodeId: input.failedNodeId,
+      reason,
+      actions,
+      advisoryOnly: true,
     },
     createdAt: input.createdAt,
   };

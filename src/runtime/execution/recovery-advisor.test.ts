@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DelegatedResultEnvelope, VerificationDecision } from './types.js';
 import {
+  buildGraphRecoveryProposalCandidateFromAdvice,
   buildDeterministicRecoveryAdvice,
   buildRecoveryAdvisorAdditionalSection,
   parseRecoveryAdvisorProposal,
@@ -77,6 +78,15 @@ describe('recovery advisor', () => {
     expect(section.content).toContain('successful filesystem mutation receipt');
     expect(section.content).toContain('Write retry requirements');
     expect(section.content).toContain('step_2');
+
+    expect(buildGraphRecoveryProposalCandidateFromAdvice(advice!, 'mutate-1')).toMatchObject({
+      reason: 'The write step has no filesystem mutation receipt.',
+      actions: [{
+        kind: 'retry_node',
+        targetNodeId: 'mutate-1',
+        retryBudget: 1,
+      }],
+    });
   });
 
   it('builds deterministic write-step advice when the advisor proposal is unavailable', () => {

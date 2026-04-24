@@ -4,6 +4,7 @@ import {
   artifactRefFromArtifact,
   buildEvidenceLedgerArtifact,
   buildFileReadSetArtifact,
+  buildRecoveryProposalArtifact,
   buildSearchResultSetArtifact,
   buildSynthesisDraftArtifact,
   formatEvidenceArtifactsForSynthesis,
@@ -123,5 +124,35 @@ describe('execution graph artifacts', () => {
 
     expect(store.getArtifact('old-artifact')).toBeNull();
     expect(store.listArtifacts().map((artifact) => artifact.artifactId)).toEqual(['new-artifact']);
+  });
+
+  it('creates bounded advisory recovery proposal artifacts', () => {
+    const artifact = buildRecoveryProposalArtifact({
+      graphId: 'graph-1',
+      nodeId: 'recover-1',
+      artifactId: 'recovery-1',
+      failedNodeId: 'mutate-1',
+      reason: 'Retry the failed mutation once from the existing WriteSpec.',
+      actions: [{
+        kind: 'retry_node',
+        targetNodeId: 'mutate-1',
+        retryBudget: 1,
+      }],
+      createdAt: 300,
+    });
+
+    expect(artifact.artifactType).toBe('RecoveryProposal');
+    expect(artifact.preview).toBe('Recovery proposal for mutate-1: retry_node.');
+    expect(artifact.redactionPolicy).toBe('recovery_proposal_summary_only');
+    expect(artifact.content).toEqual({
+      failedNodeId: 'mutate-1',
+      reason: 'Retry the failed mutation once from the existing WriteSpec.',
+      actions: [{
+        kind: 'retry_node',
+        targetNodeId: 'mutate-1',
+        retryBudget: 1,
+      }],
+      advisoryOnly: true,
+    });
   });
 });
