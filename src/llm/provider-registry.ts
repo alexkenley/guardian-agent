@@ -4,8 +4,9 @@
  * All providers are curated and ship with the codebase. No external
  * plugin loading or dynamic imports — this eliminates supply chain risk.
  *
- * OpenAI-compatible providers (Groq, Mistral, DeepSeek, Together, xAI,
- * Google Gemini) reuse the OpenAIProvider with appropriate defaults.
+ * OpenAI-compatible providers (OpenRouter, Groq, Mistral, DeepSeek,
+ * Together, xAI, Google Gemini) reuse the OpenAIProvider with
+ * appropriate defaults.
  */
 
 import type { LLMProvider } from './types.js';
@@ -28,6 +29,7 @@ export interface ProviderTypeInfo {
   locality: ProviderLocality;
   tier: ProviderTier;
   requiresCredential: boolean;
+  defaultBaseUrl?: string;
 }
 
 type ProviderFactory = (config: LLMConfig) => LLMProvider;
@@ -70,6 +72,7 @@ export class ProviderRegistry {
       locality: metadata.locality,
       tier: metadata.tier,
       requiresCredential: metadata.requiresCredential,
+      defaultBaseUrl: metadata.defaultBaseUrl,
     });
   }
 
@@ -119,6 +122,7 @@ export class ProviderRegistry {
       locality: type.locality,
       tier: type.tier,
       requiresCredential: type.requiresCredential,
+      defaultBaseUrl: type.defaultBaseUrl,
     }));
   }
 }

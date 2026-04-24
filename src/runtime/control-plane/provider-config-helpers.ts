@@ -71,6 +71,7 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
     switch (providerType.trim().toLowerCase()) {
       case 'ollama': return 'llama3.2';
       case 'ollama_cloud': return 'gpt-oss:120b';
+      case 'openrouter': return 'qwen/qwen3.6-plus';
       case 'anthropic': return 'claude-sonnet-4-6';
       case 'openai': return 'gpt-4o';
       case 'groq': return 'llama-3.3-70b-versatile';

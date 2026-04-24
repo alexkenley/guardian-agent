@@ -223,6 +223,57 @@ describe('execution profiles', () => {
     });
   });
 
+  it('uses OpenRouter role bindings when the OpenRouter managed-cloud family is selected', () => {
+    const config = createConfig();
+    config.llm['openrouter-general'] = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.llm['openrouter-coding'] = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-coder',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.assistant.tools.preferredProviders = {
+      ...config.assistant.tools.preferredProviders,
+      managedCloud: 'openrouter',
+    };
+    config.assistant.tools.modelSelection = {
+      ...(config.assistant.tools.modelSelection || {}),
+      managedCloudRouting: {
+        enabled: true,
+        providerRoleBindings: {
+          ollama_cloud: {
+            coding: 'ollama-cloud-coding',
+          },
+          openrouter: {
+            general: 'openrouter-general',
+            coding: 'openrouter-coding',
+          },
+        },
+        roleBindings: {
+          coding: 'ollama-cloud-coding',
+        },
+      },
+    };
+
+    const profile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision(),
+      mode: 'managed-cloud-only',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'openrouter-coding',
+      providerModel: 'qwen/qwen3.6-coder',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
+    });
+    expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'openrouter-coding'");
+  });
+
   it('uses the managed-cloud coding profile for explicit remote sandbox runs in balanced auto mode', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),

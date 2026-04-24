@@ -110,6 +110,7 @@ export type RoutingTierMode = 'auto' | 'local-only' | 'managed-cloud-only' | 'fr
 export type PreferredProviderKey = 'local' | 'managedCloud' | 'frontier' | 'external';
 export type AutoModelSelectionPolicy = 'balanced' | 'quality_first';
 export type ManagedCloudRoutingRole = 'general' | 'direct' | 'toolLoop' | 'coding';
+export type ManagedCloudRoleBindingMap = Partial<Record<ManagedCloudRoutingRole, string>>;
 
 export interface OllamaOptionsConfig {
   numa?: boolean;
@@ -154,17 +155,10 @@ export interface AssistantCredentialsConfig {
 export interface ManagedCloudRoutingConfig {
   /** Whether managed-cloud role routing is enabled. Default: true. */
   enabled: boolean;
-  /** Optional managed-cloud provider overrides for specific Guardian workload shapes. */
-  roleBindings?: {
-    /** Fallback managed-cloud profile used when no more specific role binding matches. */
-    general?: string;
-    /** Preferred managed-cloud profile for low-pressure direct-answer external work. */
-    direct?: string;
-    /** Preferred managed-cloud profile for tool-loop and provider-CRUD external work. */
-    toolLoop?: string;
-    /** Preferred managed-cloud profile for managed-cloud coding and repo-grounded work. */
-    coding?: string;
-  };
+  /** Optional per-provider-family managed-cloud profile overrides. Keys are managed-cloud provider families such as ollama_cloud or openrouter. */
+  providerRoleBindings?: Record<string, ManagedCloudRoleBindingMap>;
+  /** Legacy cross-family managed-cloud profile overrides kept for backward compatibility with older single-family configs. */
+  roleBindings?: ManagedCloudRoleBindingMap;
 }
 
 /** High-level routing policy above concrete provider defaults. */
@@ -201,7 +195,7 @@ export interface AssistantModelSelectionConfig {
 
 /** Configuration for a single LLM provider. */
 export interface LLMConfig {
-  /** Provider type. Built-in families come from the runtime registry, including ollama, ollama_cloud, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
+  /** Provider type. Built-in families come from the runtime registry, including ollama, ollama_cloud, openrouter, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
   provider: string;
   /** Whether this configured provider profile is active for runtime routing. Default: true. */
   enabled?: boolean;
@@ -1578,7 +1572,7 @@ export interface AssistantToolsConfig {
   /** When true, tools are automatically routed between local and external providers based on task type.
    * When false, all tools use the derived primary provider only. Default: true. */
   providerRoutingEnabled?: boolean;
-  /** Preferred provider profile for each routed tier. `external` remains a legacy alias for older configs. */
+  /** Preferred provider for each routed tier. `managedCloud` now points at the managed-cloud provider family (for example ollama_cloud or openrouter). `external` remains a legacy alias for older configs. */
   preferredProviders?: {
     local?: string;
     managedCloud?: string;

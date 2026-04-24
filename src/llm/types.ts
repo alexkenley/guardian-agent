@@ -106,7 +106,7 @@ export interface ChatOptions {
 
 /** Unified LLM provider interface. */
 export interface LLMProvider {
-  /** Provider type name (for example 'ollama', 'ollama_cloud', 'anthropic', or 'openai'). */
+  /** Provider type name (for example 'ollama', 'ollama_cloud', 'openrouter', 'anthropic', or 'openai'). */
   readonly name: string;
 
   /** Send a chat completion request. */

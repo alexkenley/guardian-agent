@@ -11,6 +11,11 @@ import yaml from 'js-yaml';
 import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
 import { applyDerivedDefaultProvider } from './default-provider-resolution.js';
+import {
+  isManagedCloudProfileForProviderType,
+  isManagedCloudProviderType,
+  resolveManagedCloudProviderTypeSelection,
+} from './managed-cloud-routing.js';
 import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.js';
 import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import { enforceSecurityBaseline, logSecurityBaselineEnforcement } from '../guardian/security-baseline.js';
@@ -249,12 +254,10 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
   }
   if (preferredProviders?.managedCloud?.trim()) {
-    const providerName = preferredProviders.managedCloud.trim();
-    const provider = config.llm[providerName];
-    if (!provider) {
-      errors.push(`assistant.tools.preferredProviders.managedCloud references unknown provider '${providerName}'`);
-    } else if (getProviderTier(provider.provider) !== 'managed_cloud') {
-      errors.push(`assistant.tools.preferredProviders.managedCloud must reference a managed-cloud provider, got '${providerName}'`);
+    const providerSelection = preferredProviders.managedCloud.trim();
+    const resolved = resolveManagedCloudProviderTypeSelection(config, providerSelection);
+    if (!resolved.providerType) {
+      errors.push(`assistant.tools.preferredProviders.managedCloud must reference a managed-cloud provider family or legacy managed-cloud profile, got '${providerSelection}'`);
     }
   }
   if (preferredProviders?.frontier?.trim()) {
@@ -315,6 +318,43 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
                 errors.push(`assistant.tools.modelSelection.managedCloudRouting.roleBindings.${role} references unknown provider '${trimmed}'`);
               } else if (getProviderTier(provider.provider) !== 'managed_cloud') {
                 errors.push(`assistant.tools.modelSelection.managedCloudRouting.roleBindings.${role} must reference a managed-cloud provider, got '${trimmed}'`);
+              }
+            }
+          }
+        }
+        const providerRoleBindings = managedCloudRouting.providerRoleBindings;
+        if (providerRoleBindings !== undefined) {
+          if (typeof providerRoleBindings !== 'object' || providerRoleBindings === null || Array.isArray(providerRoleBindings)) {
+            errors.push('assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings must be an object');
+          } else {
+            for (const [providerType, bindings] of Object.entries(providerRoleBindings)) {
+              const normalizedProviderType = providerType.trim().toLowerCase();
+              if (!normalizedProviderType) {
+                errors.push('assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings keys must be non-empty managed-cloud provider family names');
+                continue;
+              }
+              if (!isManagedCloudProviderType(normalizedProviderType)) {
+                errors.push(`assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.${providerType} must use a managed-cloud provider family name`);
+                continue;
+              }
+              if (typeof bindings !== 'object' || bindings === null || Array.isArray(bindings)) {
+                errors.push(`assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.${providerType} must be an object`);
+                continue;
+              }
+              for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+                const providerName = bindings[role];
+                if (providerName === undefined) continue;
+                const trimmed = providerName.trim();
+                if (!trimmed) {
+                  errors.push(`assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.${providerType}.${role} must be a non-empty string when provided`);
+                  continue;
+                }
+                const provider = config.llm[trimmed];
+                if (!provider) {
+                  errors.push(`assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.${providerType}.${role} references unknown provider '${trimmed}'`);
+                } else if (!isManagedCloudProfileForProviderType(config, trimmed, normalizedProviderType)) {
+                  errors.push(`assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.${providerType}.${role} must reference a managed-cloud provider profile from the ${normalizedProviderType} family, got '${trimmed}'`);
+                }
               }
             }
           }

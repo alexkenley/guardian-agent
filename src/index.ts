@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { DEFAULT_CONFIG_PATH, loadConfig } from './config/loader.js';
+import { resolvePreferredManagedCloudProviderType } from './config/managed-cloud-routing.js';
 import { createBootstrapRuntimeContext } from './bootstrap/runtime-factory.js';
 import { startBootstrapChannels, type BootstrapWebChannel } from './bootstrap/channel-startup.js';
 import {
@@ -1566,7 +1567,7 @@ function buildDashboardCallbacks(
       ...runtimeProvidersByName.keys(),
     ]);
     const preferredLocal = currentConfig.assistant.tools.preferredProviders?.local?.trim();
-    const preferredManagedCloud = currentConfig.assistant.tools.preferredProviders?.managedCloud?.trim();
+    const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(currentConfig);
     const preferredFrontier = currentConfig.assistant.tools.preferredProviders?.frontier?.trim();
     const legacyPreferredExternal = currentConfig.assistant.tools.preferredProviders?.external?.trim();
     const defaultProvider = currentConfig.defaultProvider.trim();
@@ -1578,8 +1579,7 @@ function buildDashboardCallbacks(
         const runtimeInfo = runtimeProvidersByName.get(name);
         const providerType = configured?.provider ?? runtimeInfo?.type ?? 'unknown';
         const tier = getProviderTier(providerType) ?? runtimeInfo?.tier ?? 'frontier';
-        const isManagedCloudDefault = name === preferredManagedCloud
-          || (!preferredManagedCloud && name === legacyPreferredExternal && tier === 'managed_cloud');
+        const isManagedCloudDefault = tier === 'managed_cloud' && providerType.trim().toLowerCase() === preferredManagedCloudType;
         const isFrontierDefault = name === preferredFrontier
           || (!preferredFrontier && name === legacyPreferredExternal && tier === 'frontier');
         return {

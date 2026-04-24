@@ -723,6 +723,12 @@ export interface RedactedConfig {
         preferFrontierForSecurity: boolean;
         managedCloudRouting?: {
           enabled: boolean;
+          providerRoleBindings?: Record<string, {
+            general?: string;
+            direct?: string;
+            toolLoop?: string;
+            coding?: string;
+          }>;
           roleBindings?: {
             general?: string;
             direct?: string;
@@ -871,7 +877,7 @@ export interface DashboardProviderInfo {
   tier?: 'local' | 'managed_cloud' | 'frontier';
   /** Whether the provider is currently reachable. */
   connected: boolean;
-  /** Available models (for Ollama discovery). */
+  /** Available models discovered from the provider when supported. */
   availableModels?: string[];
 }
 
@@ -883,6 +889,7 @@ export interface DashboardProviderTypeInfo {
   locality: 'local' | 'external';
   tier: 'local' | 'managed_cloud' | 'frontier';
   requiresCredential: boolean;
+  defaultBaseUrl?: string;
 }
 
 export interface DashboardProviderModelsInput {
@@ -2126,6 +2133,12 @@ export interface ConfigUpdate {
         preferFrontierForSecurity?: boolean;
         managedCloudRouting?: {
           enabled?: boolean;
+          providerRoleBindings?: Record<string, {
+            general?: string;
+            direct?: string;
+            toolLoop?: string;
+            coding?: string;
+          }>;
           roleBindings?: {
             general?: string;
             direct?: string;

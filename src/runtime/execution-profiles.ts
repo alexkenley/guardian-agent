@@ -6,6 +6,13 @@ import type {
   RoutingTierMode,
 } from '../config/types.js';
 import {
+  getManagedCloudRoleBindingsForProviderType,
+  isManagedCloudProfileForProviderType,
+  listConfiguredManagedCloudProfilesForType,
+  resolvePreferredManagedCloudSelection,
+  resolvePreferredManagedCloudProviderType,
+} from '../config/managed-cloud-routing.js';
+import {
   getProviderLocality,
   getProviderTier,
   type ProviderLocality,
@@ -123,6 +130,26 @@ export function findProviderByTier(
   config: GuardianAgentConfig,
   tier: ProviderTier,
 ): string | null {
+  if (tier === 'managed_cloud') {
+    const preferredManagedCloud = resolvePreferredManagedCloudSelection(config);
+    const preferredManagedCloudType = preferredManagedCloud.providerType;
+    if (preferredManagedCloudType) {
+      const bindings = getManagedCloudRoleBindingsForProviderType(config, preferredManagedCloudType);
+      const general = bindings.general?.trim();
+      if (general && isManagedCloudProfileForProviderType(config, general, preferredManagedCloudType)) {
+        return general;
+      }
+      const legacyProviderName = preferredManagedCloud.legacyProviderName?.trim();
+      if (legacyProviderName && providerMatchesTier(config.llm[legacyProviderName], tier)) {
+        return legacyProviderName;
+      }
+      const preferredFamilyProviders = listConfiguredManagedCloudProfilesForType(config, preferredManagedCloudType);
+      if (preferredFamilyProviders.length > 0) {
+        return preferredFamilyProviders[0];
+      }
+    }
+  }
+
   const preferredProviders = config.assistant.tools.preferredProviders ?? {};
   const preferredKey = getPreferredProviderKeyForTier(tier);
   const preferred = preferredProviders[preferredKey]?.trim();
@@ -216,12 +243,10 @@ function inferManagedCloudRoleFromProviderName(providerName: string): ManagedClo
 
 function findManagedCloudProviderByHeuristic(
   config: GuardianAgentConfig,
+  providerType: string | undefined,
   desiredRole: ManagedCloudRoutingRole,
 ): string | null {
-  const managedCloudProviders = Object.entries(config.llm)
-    .filter(([, llmCfg]) => providerMatchesTier(llmCfg, 'managed_cloud'))
-    .map(([name]) => name)
-    .sort((left, right) => left.localeCompare(right));
+  const managedCloudProviders = listConfiguredManagedCloudProfilesForType(config, providerType);
   const specific = managedCloudProviders.find((providerName) => inferManagedCloudRoleFromProviderName(providerName) === desiredRole);
   if (specific) return specific;
   if (desiredRole === 'general') return null;
@@ -233,6 +258,7 @@ function getManagedCloudProviderSelection(input: {
   decision: IntentGatewayDecision | null | undefined;
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
 }): { providerName: string; reasonSuffix?: string } | null {
+  const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(input.config);
   const preferred = findProviderByTier(input.config, 'managed_cloud');
   if (!preferred) return null;
 
@@ -245,11 +271,13 @@ function getManagedCloudProviderSelection(input: {
     decision: input.decision,
     preferredAnswerPath: input.preferredAnswerPath,
   });
-  const roleBindings = managedCloudRouting?.roleBindings;
+  const roleBindings = preferredManagedCloudType
+    ? getManagedCloudRoleBindingsForProviderType(input.config, preferredManagedCloudType)
+    : {};
   const validateManagedCloudProvider = (providerName: string | undefined): string | null => {
     const trimmed = providerName?.trim();
-    if (!trimmed) return null;
-    return providerMatchesTier(input.config.llm[trimmed], 'managed_cloud') ? trimmed : null;
+    if (!trimmed || !preferredManagedCloudType) return null;
+    return isManagedCloudProfileForProviderType(input.config, trimmed, preferredManagedCloudType) ? trimmed : null;
   };
 
   const specific = validateManagedCloudProvider(roleBindings?.[desiredRole]);
@@ -266,11 +294,11 @@ function getManagedCloudProviderSelection(input: {
   if (general) {
     return {
       providerName: general,
-      reasonSuffix: `managed-cloud role '${desiredRole}' fell back to general provider '${general}'`,
+      reasonSuffix: `managed-cloud role '${desiredRole}' fell back to general provider '${general}' in family '${preferredManagedCloudType}'`,
     };
   }
 
-  const inferred = findManagedCloudProviderByHeuristic(input.config, desiredRole);
+  const inferred = findManagedCloudProviderByHeuristic(input.config, preferredManagedCloudType || undefined, desiredRole);
   if (inferred) {
     const inferredRole = inferManagedCloudRoleFromProviderName(inferred);
     return {

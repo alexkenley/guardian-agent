@@ -252,6 +252,11 @@ describe('redactConfig', () => {
       model: 'qwen3-coder:480b',
       credentialRef: 'llm.ollama_cloud.coding',
     };
+    config.llm.openrouter = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.default',
+    };
     config.assistant.tools.modelSelection = {
       autoPolicy: 'quality_first',
       preferManagedCloudForLowPressureExternal: true,
@@ -259,6 +264,11 @@ describe('redactConfig', () => {
       preferFrontierForSecurity: true,
       managedCloudRouting: {
         enabled: true,
+        providerRoleBindings: {
+          openrouter: {
+            coding: 'openrouter',
+          },
+        },
         roleBindings: {
           general: 'ollama-cloud-general',
           coding: 'ollama-cloud-coding',
@@ -275,6 +285,11 @@ describe('redactConfig', () => {
       preferFrontierForSecurity: true,
       managedCloudRouting: {
         enabled: true,
+        providerRoleBindings: {
+          openrouter: {
+            coding: 'openrouter',
+          },
+        },
         roleBindings: {
           general: 'ollama-cloud-general',
           coding: 'ollama-cloud-coding',
@@ -290,5 +305,38 @@ describe('redactConfig', () => {
     const redacted = redactConfig(config);
 
     expect(redacted.llm.ollama.enabled).toBe(false);
+  });
+
+  it('omits empty legacy managed-cloud role bindings in GET /api/config responses', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm.openrouter = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.default',
+    };
+    config.assistant.tools.modelSelection = {
+      autoPolicy: 'balanced',
+      preferManagedCloudForLowPressureExternal: true,
+      preferFrontierForRepoGrounded: true,
+      preferFrontierForSecurity: true,
+      managedCloudRouting: {
+        enabled: true,
+        providerRoleBindings: {
+          openrouter: {
+            coding: 'openrouter',
+          },
+        },
+        roleBindings: {},
+      },
+    };
+
+    const redacted = redactConfig(config);
+
+    expect(redacted.assistant.tools.modelSelection?.managedCloudRouting?.providerRoleBindings).toEqual({
+      openrouter: {
+        coding: 'openrouter',
+      },
+    });
+    expect(redacted.assistant.tools.modelSelection?.managedCloudRouting?.roleBindings).toBeUndefined();
   });
 });

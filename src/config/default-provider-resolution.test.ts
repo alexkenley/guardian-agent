@@ -104,4 +104,95 @@ describe('resolveDerivedDefaultProvider', () => {
 
     expect(resolveDerivedDefaultProvider(config)).toBe('ollama-cloud-coding');
   });
+
+  it('treats OpenRouter profiles as managed-cloud candidates', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm = {
+      ollama: config.llm.ollama,
+      openrouterGeneral: {
+        provider: 'openrouter',
+        model: 'qwen/qwen3.6-plus',
+        credentialRef: 'llm.openrouter.primary',
+      },
+      anthropic: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        credentialRef: 'llm.anthropic.primary',
+      },
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'openrouterGeneral',
+      frontier: 'anthropic',
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('openrouterGeneral');
+  });
+
+  it('uses the selected managed-cloud provider family general binding', () => {
+    const config = createConfig();
+    config.llm.openrouterGeneral = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.llm.openrouterCoding = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-coder',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'openrouter',
+      frontier: 'anthropic',
+    };
+    config.assistant.tools.modelSelection = {
+      ...config.assistant.tools.modelSelection,
+      managedCloudRouting: {
+        enabled: true,
+        providerRoleBindings: {
+          ollama_cloud: {
+            general: 'ollama-cloud-general',
+          },
+          openrouter: {
+            general: 'openrouterGeneral',
+            coding: 'openrouterCoding',
+          },
+        },
+        roleBindings: {
+          general: 'ollama-cloud-general',
+        },
+      },
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('openrouterGeneral');
+  });
+
+  it('falls back to the first enabled profile inside the selected managed-cloud family', () => {
+    const config = createConfig();
+    config.llm.openrouterGeneral = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'openrouter',
+      frontier: 'anthropic',
+    };
+    config.assistant.tools.modelSelection = {
+      ...config.assistant.tools.modelSelection,
+      managedCloudRouting: {
+        enabled: true,
+        providerRoleBindings: {
+          openrouter: {},
+        },
+        roleBindings: {
+          general: 'ollama-cloud-general',
+        },
+      },
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('openrouterGeneral');
+  });
 });

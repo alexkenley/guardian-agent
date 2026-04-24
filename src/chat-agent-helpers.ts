@@ -1620,6 +1620,18 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   }
   const searchConfig = config.assistant.tools.search;
   const searchSources = Array.isArray(searchConfig?.sources) ? searchConfig.sources : [];
+  const managedCloudRouting = config.assistant.tools.modelSelection?.managedCloudRouting;
+  const managedCloudProviderRoleBindingEntries = managedCloudRouting?.providerRoleBindings
+    ? Object.entries(managedCloudRouting.providerRoleBindings)
+      .map(([providerType, bindings]) => [providerType, { ...bindings }] as const)
+      .filter(([, bindings]) => Object.keys(bindings).length > 0)
+    : [];
+  const managedCloudRoleBindings = managedCloudRouting?.roleBindings && Object.keys(managedCloudRouting.roleBindings).length > 0
+    ? { ...managedCloudRouting.roleBindings }
+    : undefined;
+  const managedCloudProviderRoleBindings = managedCloudProviderRoleBindingEntries.length > 0
+    ? Object.fromEntries(managedCloudProviderRoleBindingEntries)
+    : undefined;
 
   return {
     llm,
@@ -1858,9 +1870,8 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
             managedCloudRouting: config.assistant.tools.modelSelection.managedCloudRouting
               ? {
                 enabled: config.assistant.tools.modelSelection.managedCloudRouting.enabled,
-                roleBindings: config.assistant.tools.modelSelection.managedCloudRouting.roleBindings
-                  ? { ...config.assistant.tools.modelSelection.managedCloudRouting.roleBindings }
-                  : undefined,
+                providerRoleBindings: managedCloudProviderRoleBindings,
+                roleBindings: managedCloudRoleBindings,
               }
               : undefined,
           }

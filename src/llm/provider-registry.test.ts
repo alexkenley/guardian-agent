@@ -42,6 +42,11 @@ describe('ProviderRegistry', () => {
 
   // ─── OpenAI-Compatible Providers ────────────────────────
 
+  it('creates openrouter provider (OpenAI-compatible managed cloud)', () => {
+    const provider = registry.createProvider(makeLLMConfig('openrouter', { apiKey: 'test' }));
+    expect(provider.name).toBe('openrouter');
+  });
+
   it('creates groq provider (OpenAI-compatible)', () => {
     const provider = registry.createProvider(makeLLMConfig('groq', { apiKey: 'gsk_test' }));
     expect(provider.name).toBe('groq');
@@ -103,6 +108,7 @@ describe('ProviderRegistry', () => {
     const names = registry.listProviderNames();
     expect(names).toContain('ollama');
     expect(names).toContain('ollama_cloud');
+    expect(names).toContain('openrouter');
     expect(names).toContain('anthropic');
     expect(names).toContain('openai');
     expect(names).toContain('groq');
@@ -111,7 +117,7 @@ describe('ProviderRegistry', () => {
     expect(names).toContain('together');
     expect(names).toContain('xai');
     expect(names).toContain('google');
-    expect(names.length).toBe(10);
+    expect(names.length).toBe(11);
   });
 
   it('listProviderTypes returns metadata for all providers', () => {
@@ -127,6 +133,13 @@ describe('ProviderRegistry', () => {
     expect(ollamaCloud?.compatible).toBe(false);
     expect(ollamaCloud?.tier).toBe('managed_cloud');
     expect(ollamaCloud?.requiresCredential).toBe(true);
+
+    const openrouter = types.find(t => t.name === 'openrouter');
+    expect(openrouter?.displayName).toBe('OpenRouter');
+    expect(openrouter?.compatible).toBe(true);
+    expect(openrouter?.tier).toBe('managed_cloud');
+    expect(openrouter?.requiresCredential).toBe(true);
+    expect(openrouter?.defaultBaseUrl).toBe('https://openrouter.ai/api/v1');
 
     const groq = types.find(t => t.name === 'groq');
     expect(groq?.displayName).toBe('Groq');

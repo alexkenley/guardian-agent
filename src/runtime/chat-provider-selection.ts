@@ -1,5 +1,9 @@
 import type { GuardianAgentConfig } from '../config/types.js';
 import {
+  getManagedCloudRoleBindingsForProviderType,
+  resolvePreferredManagedCloudProviderType,
+} from '../config/managed-cloud-routing.js';
+import {
   formatProviderTierLabel,
   getProviderLocality,
   getProviderTier,
@@ -72,20 +76,40 @@ function buildProviderOptionLabel(
 
 function buildPreferredProviderRanks(config: GuardianAgentConfig): Map<string, number> {
   const preferredProviders = config.assistant.tools.preferredProviders ?? {};
-  const preferredOrder = [
-    preferredProviders.local,
-    preferredProviders.managedCloud,
-    preferredProviders.frontier,
-    preferredProviders.external,
-  ]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
   const ranks = new Map<string, number>();
-  preferredOrder.forEach((providerName, index) => {
-    if (!ranks.has(providerName)) {
-      ranks.set(providerName, index);
+  const preferredLocal = preferredProviders.local?.trim();
+  if (preferredLocal && isEnabledProvider(config, preferredLocal)) {
+    ranks.set(preferredLocal, 0);
+  }
+
+  const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(config);
+  if (preferredManagedCloudType) {
+    const bindings = getManagedCloudRoleBindingsForProviderType(config, preferredManagedCloudType);
+    const general = bindings.general?.trim();
+    if (general && isEnabledProvider(config, general) && !ranks.has(general)) {
+      ranks.set(general, 1);
     }
-  });
+    Object.entries(config.llm)
+      .filter(([, llmCfg]) => llmCfg.enabled !== false && llmCfg.provider?.trim().toLowerCase() === preferredManagedCloudType)
+      .map(([providerName]) => providerName)
+      .sort((left, right) => left.localeCompare(right))
+      .forEach((providerName) => {
+        if (!ranks.has(providerName)) {
+          ranks.set(providerName, 2);
+        }
+      });
+  }
+
+  const preferredFrontier = preferredProviders.frontier?.trim();
+  if (preferredFrontier && isEnabledProvider(config, preferredFrontier) && !ranks.has(preferredFrontier)) {
+    ranks.set(preferredFrontier, 3);
+  }
+
+  const legacyExternal = preferredProviders.external?.trim();
+  if (legacyExternal && isEnabledProvider(config, legacyExternal) && !ranks.has(legacyExternal)) {
+    ranks.set(legacyExternal, 4);
+  }
+
   return ranks;
 }
 

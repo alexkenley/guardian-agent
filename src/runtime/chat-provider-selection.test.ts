@@ -97,4 +97,27 @@ describe('chat provider selection', () => {
       config,
     )).toBeNull();
   });
+
+  it('labels OpenRouter profiles as managed cloud in selector options', () => {
+    const config = createConfig();
+    config.llm.openrouter = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.assistant.tools.preferredProviders = {
+      ...config.assistant.tools.preferredProviders,
+      managedCloud: 'openrouter',
+    };
+
+    expect(buildChatProviderSelectorOptions(config)).toContainEqual({
+      value: 'openrouter',
+      label: 'OpenRouter (managed cloud · qwen/qwen3.6-plus)',
+      providerName: 'openrouter',
+      providerType: 'openrouter',
+      providerTier: 'managed_cloud',
+      providerLocality: 'external',
+      model: 'qwen/qwen3.6-plus',
+    });
+  });
 });

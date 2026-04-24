@@ -28,7 +28,7 @@ export interface SetupStatus {
 export interface SetupApplyInput {
   llmMode: 'ollama' | 'external';
   providerName?: string;
-  /** Built-in provider type from the runtime registry (for example ollama/openai/anthropic/groq/mistral/deepseek/together/xai/google). */
+  /** Built-in provider type from the runtime registry (for example ollama/ollama_cloud/openrouter/openai/anthropic/groq/mistral/deepseek/together/xai/google). */
   providerType?: string;
   model?: string;
   apiKey?: string;

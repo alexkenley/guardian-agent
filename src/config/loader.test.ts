@@ -377,13 +377,91 @@ describe('validateConfig', () => {
       ...DEFAULT_CONFIG,
       llm: {
         ...DEFAULT_CONFIG.llm,
-        groqMain: { provider: 'groq', model: 'llama-3.3-70b-versatile', credentialRef: 'llm.groq.primary' },
+        openrouterCoding: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
       },
       assistant: {
         ...DEFAULT_CONFIG.assistant,
         credentials: {
           refs: {
-            'llm.groq.primary': { source: 'env', env: 'GROQ_API_KEY' },
+            'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should accept OpenRouter as a managed-cloud preferred provider family', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        openrouterGeneral: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
+        claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            local: 'ollama',
+            managedCloud: 'openrouter',
+            frontier: 'claude',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should accept managed-cloud role bindings scoped by provider family', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        ollamaCloud: { provider: 'ollama_cloud', model: 'gpt-oss:120b', credentialRef: 'llm.ollama_cloud.primary' },
+        openrouterGeneral: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
+        openrouterCoding: { provider: 'openrouter', model: 'qwen/qwen3.6-coder', credentialRef: 'llm.openrouter.primary' },
+        claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.ollama_cloud.primary': { source: 'env', env: 'OLLAMA_API_KEY' },
+            'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            local: 'ollama',
+            managedCloud: 'openrouter',
+            frontier: 'claude',
+          },
+          modelSelection: {
+            ...DEFAULT_CONFIG.assistant.tools.modelSelection,
+            managedCloudRouting: {
+              enabled: true,
+              providerRoleBindings: {
+                ollama_cloud: {
+                  general: 'ollamaCloud',
+                },
+                openrouter: {
+                  general: 'openrouterGeneral',
+                  coding: 'openrouterCoding',
+                },
+              },
+            },
           },
         },
       },
@@ -466,7 +544,7 @@ describe('validateConfig', () => {
     };
 
     expect(validateConfig(config)).toContain(
-      "assistant.tools.preferredProviders.managedCloud must reference a managed-cloud provider, got 'claude'",
+      "assistant.tools.preferredProviders.managedCloud must reference a managed-cloud provider family or legacy managed-cloud profile, got 'claude'",
     );
   });
 
@@ -506,6 +584,80 @@ describe('validateConfig', () => {
 
     expect(validateConfig(config)).toContain(
       "assistant.tools.modelSelection.managedCloudRouting.roleBindings.direct must reference a managed-cloud provider, got 'claude'",
+    );
+  });
+
+  it('should reject managed-cloud provider role bindings keyed by a frontier provider family', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        openrouterGeneral: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          modelSelection: {
+            ...DEFAULT_CONFIG.assistant.tools.modelSelection,
+            managedCloudRouting: {
+              enabled: true,
+              providerRoleBindings: {
+                openai: {
+                  general: 'openrouterGeneral',
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain(
+      'assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.openai must use a managed-cloud provider family name',
+    );
+  });
+
+  it('should reject managed-cloud provider role bindings that point across provider families', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        ollamaCloud: { provider: 'ollama_cloud', model: 'gpt-oss:120b', credentialRef: 'llm.ollama_cloud.primary' },
+        openrouterGeneral: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.ollama_cloud.primary': { source: 'env', env: 'OLLAMA_API_KEY' },
+            'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          modelSelection: {
+            ...DEFAULT_CONFIG.assistant.tools.modelSelection,
+            managedCloudRouting: {
+              enabled: true,
+              providerRoleBindings: {
+                openrouter: {
+                  general: 'ollamaCloud',
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain(
+      "assistant.tools.modelSelection.managedCloudRouting.providerRoleBindings.openrouter.general must reference a managed-cloud provider profile from the openrouter family, got 'ollamaCloud'",
     );
   });
 

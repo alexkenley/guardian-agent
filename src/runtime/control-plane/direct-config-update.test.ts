@@ -146,7 +146,14 @@ describe('direct config update', () => {
   });
 
   it('persists provider enabled toggles and re-derives the primary provider from enabled profiles', async () => {
-    const { configRef, rawState, handler } = createHandlerHarness(createConfig());
+    const config = createConfig();
+    config.assistant.tools.modelSelection!.managedCloudRouting!.providerRoleBindings = {
+      ollama_cloud: {
+        general: 'ollama-cloud-general',
+        coding: 'ollama-cloud-coding',
+      },
+    };
+    const { configRef, rawState, handler } = createHandlerHarness(config);
 
     const result = await handler({
       llm: {
@@ -157,11 +164,115 @@ describe('direct config update', () => {
     expect(result).toEqual({ success: true, message: 'Saved' });
     expect(configRef.current.llm['ollama-cloud-general'].enabled).toBe(false);
     expect(configRef.current.defaultProvider).toBe('ollama-cloud-coding');
+    expect(configRef.current.assistant.tools.preferredProviders).toEqual({
+      local: 'ollama',
+      frontier: 'anthropic',
+    });
+    expect(configRef.current.assistant.tools.modelSelection?.managedCloudRouting).toEqual({
+      enabled: true,
+      roleBindings: {
+        coding: 'ollama-cloud-coding',
+      },
+      providerRoleBindings: {
+        ollama_cloud: {
+          coding: 'ollama-cloud-coding',
+        },
+      },
+    });
 
     const rawConfig = rawState.current as Record<string, unknown>;
     const rawLlm = rawConfig.llm as Record<string, Record<string, unknown>>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const rawTools = rawAssistant.tools as Record<string, unknown>;
+    const rawModelSelection = rawTools.modelSelection as Record<string, unknown>;
+    const rawManagedCloudRouting = rawModelSelection.managedCloudRouting as Record<string, unknown>;
     expect(rawLlm['ollama-cloud-general']?.enabled).toBe(false);
     expect(rawConfig.defaultProvider).toBe('ollama-cloud-coding');
+    expect(rawTools.preferredProviders).toEqual({
+      local: 'ollama',
+      frontier: 'anthropic',
+    });
+    expect(rawManagedCloudRouting.roleBindings).toEqual({
+      coding: 'ollama-cloud-coding',
+    });
+    expect(rawManagedCloudRouting.providerRoleBindings).toEqual({
+      ollama_cloud: {
+        coding: 'ollama-cloud-coding',
+      },
+    });
+  });
+
+  it('persists provider-scoped managed-cloud role bindings and clears legacy role bindings', async () => {
+    const config = createConfig();
+    config.llm.openrouter = {
+      provider: 'openrouter',
+      model: 'qwen/qwen3.6-plus',
+      credentialRef: 'llm.openrouter.primary',
+    };
+    config.assistant.credentials.refs['llm.openrouter.primary'] = {
+      source: 'env',
+      env: 'OPENROUTER_API_KEY',
+    };
+    const { configRef, rawState, handler } = createHandlerHarness(config);
+
+    const result = await handler({
+      assistant: {
+        tools: {
+          preferredProviders: {
+            managedCloud: 'openrouter',
+          },
+          modelSelection: {
+            managedCloudRouting: {
+              enabled: true,
+              providerRoleBindings: {
+                ollama_cloud: {
+                  general: 'ollama-cloud-general',
+                  coding: 'ollama-cloud-coding',
+                },
+                openrouter: {
+                  coding: 'openrouter',
+                },
+              },
+              roleBindings: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.defaultProvider).toBe('openrouter');
+    expect(configRef.current.assistant.tools.preferredProviders?.managedCloud).toBe('openrouter');
+    expect(configRef.current.assistant.tools.modelSelection?.managedCloudRouting).toEqual({
+      enabled: true,
+      providerRoleBindings: {
+        ollama_cloud: {
+          general: 'ollama-cloud-general',
+          coding: 'ollama-cloud-coding',
+        },
+        openrouter: {
+          coding: 'openrouter',
+        },
+      },
+    });
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const rawTools = rawAssistant.tools as Record<string, unknown>;
+    const rawModelSelection = rawTools.modelSelection as Record<string, unknown>;
+    const rawManagedCloudRouting = rawModelSelection.managedCloudRouting as Record<string, unknown>;
+    expect(rawConfig.defaultProvider).toBe('openrouter');
+    expect((rawTools.preferredProviders as Record<string, unknown>).managedCloud).toBe('openrouter');
+    expect(rawManagedCloudRouting.roleBindings).toBeUndefined();
+    expect(rawManagedCloudRouting.providerRoleBindings).toEqual({
+      ollama_cloud: {
+        general: 'ollama-cloud-general',
+        coding: 'ollama-cloud-coding',
+      },
+      openrouter: {
+        coding: 'openrouter',
+      },
+    });
   });
 
   it('rejects updates that would disable every AI provider', async () => {

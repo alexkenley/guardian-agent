@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { deepMerge, validateConfig } from '../../config/loader.js';
 import { applyDerivedDefaultProvider } from '../../config/default-provider-resolution.js';
 import { normalizeOptionalHttpUrlInput } from '../../config/input-normalization.js';
+import { isManagedCloudProviderType } from '../../config/managed-cloud-routing.js';
 import type { CredentialRefConfig, GuardianAgentConfig } from '../../config/types.js';
 import type { ConfigUpdate, DashboardMutationResult } from '../../channels/web-types.js';
 import type { AssistantJobTracker } from '../assistant-jobs.js';
@@ -109,50 +110,73 @@ function countEnabledProviders(llm: GuardianAgentConfig['llm']): number {
   return Object.values(llm).filter((provider) => provider.enabled !== false).length;
 }
 
-function pruneDeletedProviderReferences(
+function pruneUnavailableProviderReferences(
   config: GuardianAgentConfig,
-  removedProviderNames: Set<string>,
+  unavailableProviderNames: Set<string>,
 ): void {
-  if (removedProviderNames.size === 0) return;
+  if (unavailableProviderNames.size === 0) return;
 
   if (Array.isArray(config.fallbacks)) {
-    config.fallbacks = config.fallbacks.filter((name) => !removedProviderNames.has(name) && name !== config.defaultProvider);
+    config.fallbacks = config.fallbacks.filter((name) => !unavailableProviderNames.has(name) && name !== config.defaultProvider);
   }
 
   const preferredProviders = config.assistant.tools?.preferredProviders;
   if (preferredProviders) {
     for (const key of ['local', 'managedCloud', 'frontier', 'external'] as const) {
-      if (preferredProviders[key] && removedProviderNames.has(preferredProviders[key])) {
+      const preferred = preferredProviders[key];
+      if (
+        preferred
+        && unavailableProviderNames.has(preferred)
+        && !(key === 'managedCloud' && isManagedCloudProviderType(preferred))
+      ) {
         delete preferredProviders[key];
       }
     }
   }
 
-  const roleBindings = config.assistant.tools?.modelSelection?.managedCloudRouting?.roleBindings;
+  const managedCloudRouting = config.assistant.tools?.modelSelection?.managedCloudRouting;
+  const roleBindings = managedCloudRouting?.roleBindings;
   if (roleBindings) {
     for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
-      if (roleBindings[role] && removedProviderNames.has(roleBindings[role])) {
+      if (roleBindings[role] && unavailableProviderNames.has(roleBindings[role])) {
         delete roleBindings[role];
       }
     }
     if (Object.keys(roleBindings).length === 0) {
-      delete config.assistant.tools.modelSelection!.managedCloudRouting!.roleBindings;
+      delete managedCloudRouting!.roleBindings;
+    }
+  }
+
+  const providerRoleBindings = managedCloudRouting?.providerRoleBindings;
+  if (providerRoleBindings) {
+    for (const [providerType, bindings] of Object.entries(providerRoleBindings)) {
+      for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+        if (bindings?.[role] && unavailableProviderNames.has(bindings[role])) {
+          delete bindings[role];
+        }
+      }
+      if (!bindings || Object.keys(bindings).length === 0) {
+        delete providerRoleBindings[providerType];
+      }
+    }
+    if (Object.keys(providerRoleBindings).length === 0) {
+      delete managedCloudRouting!.providerRoleBindings;
     }
   }
 }
 
-function pruneDeletedProviderReferencesFromRawConfig(
+function pruneUnavailableProviderReferencesFromRawConfig(
   rawConfig: Record<string, unknown>,
-  removedProviderNames: Set<string>,
+  unavailableProviderNames: Set<string>,
   defaultProvider: string,
 ): void {
-  if (removedProviderNames.size === 0) return;
+  if (unavailableProviderNames.size === 0) return;
 
   const rawFallbacks = Array.isArray(rawConfig.fallbacks) ? rawConfig.fallbacks : undefined;
   if (rawFallbacks) {
     rawConfig.fallbacks = rawFallbacks.filter((name) => (
       typeof name === 'string'
-      && !removedProviderNames.has(name)
+      && !unavailableProviderNames.has(name)
       && name !== defaultProvider
     ));
   }
@@ -163,7 +187,11 @@ function pruneDeletedProviderReferencesFromRawConfig(
   if (rawPreferredProviders) {
     for (const key of ['local', 'managedCloud', 'frontier', 'external'] as const) {
       const value = rawPreferredProviders[key];
-      if (typeof value === 'string' && removedProviderNames.has(value)) {
+      if (
+        typeof value === 'string'
+        && unavailableProviderNames.has(value)
+        && !(key === 'managedCloud' && isManagedCloudProviderType(value))
+      ) {
         delete rawPreferredProviders[key];
       }
     }
@@ -176,12 +204,32 @@ function pruneDeletedProviderReferencesFromRawConfig(
   if (rawRoleBindings) {
     for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
       const value = rawRoleBindings[role];
-      if (typeof value === 'string' && removedProviderNames.has(value)) {
+      if (typeof value === 'string' && unavailableProviderNames.has(value)) {
         delete rawRoleBindings[role];
       }
     }
     if (rawManagedCloudRouting && Object.keys(rawRoleBindings).length === 0) {
       delete rawManagedCloudRouting.roleBindings;
+    }
+  }
+
+  const rawProviderRoleBindings = rawManagedCloudRouting?.providerRoleBindings as Record<string, unknown> | undefined;
+  if (rawProviderRoleBindings) {
+    for (const [providerType, bindings] of Object.entries(rawProviderRoleBindings)) {
+      if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) continue;
+      const roleBindingsByType = bindings as Record<string, unknown>;
+      for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+        const value = roleBindingsByType[role];
+        if (typeof value === 'string' && unavailableProviderNames.has(value)) {
+          delete roleBindingsByType[role];
+        }
+      }
+      if (Object.keys(roleBindingsByType).length === 0) {
+        delete rawProviderRoleBindings[providerType];
+      }
+    }
+    if (rawManagedCloudRouting && Object.keys(rawProviderRoleBindings).length === 0) {
+      delete rawManagedCloudRouting.providerRoleBindings;
     }
   }
 }
@@ -218,12 +266,15 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         const nextCredentialRefs = updates.assistant?.credentials?.refs
           ? options.normalizeCredentialRefUpdates(updates.assistant.credentials.refs)
           : { ...diskRefsForBase, ...(currentConfig.assistant.credentials.refs ?? {}) };
-        const removedProviderNames = new Set<string>();
+        const unavailableProviderNames = new Set<string>();
         const llmPatch: Record<string, LlmConfigUpdate> | undefined = updates.llm
           ? Object.fromEntries(Object.entries(updates.llm).map(([name, providerUpdates]) => {
             if (providerUpdates.remove === true) {
-              removedProviderNames.add(name);
+              unavailableProviderNames.add(name);
               return [name, { remove: true }];
+            }
+            if (providerUpdates.enabled === false) {
+              unavailableProviderNames.add(name);
             }
             let credentialRef = providerUpdates.credentialRef;
             if (providerUpdates.apiKey?.trim()) {
@@ -326,8 +377,8 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         if (llmPatch) {
           nextConfig.llm = buildNextLlmConfig(currentConfig.llm, llmPatch);
         }
-        if (removedProviderNames.size > 0) {
-          pruneDeletedProviderReferences(nextConfig, removedProviderNames);
+        if (unavailableProviderNames.size > 0) {
+          pruneUnavailableProviderReferences(nextConfig, unavailableProviderNames);
         }
         applyDerivedDefaultProvider(nextConfig);
         if (countEnabledProviders(nextConfig.llm) === 0) {
@@ -412,8 +463,8 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
         }
 
         rawConfig.defaultProvider = nextConfig.defaultProvider;
-        if (removedProviderNames.size > 0) {
-          pruneDeletedProviderReferencesFromRawConfig(rawConfig, removedProviderNames, nextConfig.defaultProvider);
+        if (unavailableProviderNames.size > 0) {
+          pruneUnavailableProviderReferencesFromRawConfig(rawConfig, unavailableProviderNames, nextConfig.defaultProvider);
         }
 
         if (telegramUpdates) {
@@ -847,20 +898,56 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
             }
 
             const roleBindingsUpdates = managedCloudRoutingUpdates.roleBindings;
-            if (roleBindingsUpdates && typeof roleBindingsUpdates === 'object') {
-              rawManagedCloudRouting.roleBindings = {
-                ...((rawManagedCloudRouting.roleBindings as Record<string, unknown> | undefined) ?? {}),
-              };
-              const rawRoleBindings = rawManagedCloudRouting.roleBindings as Record<string, unknown>;
+            if (options.hasOwn(managedCloudRoutingUpdates, 'roleBindings') && roleBindingsUpdates && typeof roleBindingsUpdates === 'object' && !Array.isArray(roleBindingsUpdates)) {
+              const rawRoleBindings: Record<string, unknown> = {};
               for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
                 if (roleBindingsUpdates[role] === undefined) continue;
                 const trimmed = roleBindingsUpdates[role]?.trim();
                 if (trimmed) rawRoleBindings[role] = trimmed;
-                else delete rawRoleBindings[role];
               }
               if (Object.keys(rawRoleBindings).length === 0) {
                 delete rawManagedCloudRouting.roleBindings;
+              } else {
+                rawManagedCloudRouting.roleBindings = rawRoleBindings;
               }
+            } else if (options.hasOwn(managedCloudRoutingUpdates, 'roleBindings')) {
+              delete rawManagedCloudRouting.roleBindings;
+            }
+
+            const providerRoleBindingsUpdates = managedCloudRoutingUpdates.providerRoleBindings;
+            if (
+              options.hasOwn(managedCloudRoutingUpdates, 'providerRoleBindings')
+              && providerRoleBindingsUpdates
+              && typeof providerRoleBindingsUpdates === 'object'
+              && !Array.isArray(providerRoleBindingsUpdates)
+            ) {
+              const rawProviderRoleBindings: Record<string, unknown> = {};
+              for (const [providerType, bindings] of Object.entries(providerRoleBindingsUpdates)) {
+                const normalizedProviderType = providerType.trim().toLowerCase();
+                if (!normalizedProviderType || !bindings || typeof bindings !== 'object' || Array.isArray(bindings)) {
+                  continue;
+                }
+                const bindingUpdatesByType = bindings as Record<string, unknown>;
+                const rawBindingsByType: Record<string, string> = {};
+                for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+                  const providerName = typeof bindingUpdatesByType[role] === 'string'
+                    ? bindingUpdatesByType[role].trim()
+                    : '';
+                  if (providerName) {
+                    rawBindingsByType[role] = providerName;
+                  }
+                }
+                if (Object.keys(rawBindingsByType).length > 0) {
+                  rawProviderRoleBindings[normalizedProviderType] = rawBindingsByType;
+                }
+              }
+              if (Object.keys(rawProviderRoleBindings).length === 0) {
+                delete rawManagedCloudRouting.providerRoleBindings;
+              } else {
+                rawManagedCloudRouting.providerRoleBindings = rawProviderRoleBindings;
+              }
+            } else if (options.hasOwn(managedCloudRoutingUpdates, 'providerRoleBindings')) {
+              delete rawManagedCloudRouting.providerRoleBindings;
             }
 
             if (Object.keys(rawManagedCloudRouting).length === 0) {

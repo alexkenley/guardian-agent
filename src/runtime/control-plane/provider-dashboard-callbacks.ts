@@ -18,6 +18,7 @@ interface ProviderRegistryLike {
     locality: 'local' | 'external';
     tier: 'local' | 'managed_cloud' | 'frontier';
     requiresCredential: boolean;
+    defaultBaseUrl?: string;
   }>;
   hasProvider(name: string): boolean;
   createProvider(config: LLMConfig): {

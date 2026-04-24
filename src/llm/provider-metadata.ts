@@ -31,6 +31,15 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     requiresCredential: true,
     defaultBaseUrl: 'https://ollama.com',
   },
+  openrouter: {
+    name: 'openrouter',
+    displayName: 'OpenRouter',
+    compatible: true,
+    locality: 'external',
+    tier: 'managed_cloud',
+    requiresCredential: true,
+    defaultBaseUrl: 'https://openrouter.ai/api/v1',
+  },
   openai: {
     name: 'openai',
     displayName: 'OpenAI',
@@ -106,6 +115,7 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
 const PROVIDER_TYPE_ORDER = [
   'ollama',
   'ollama_cloud',
+  'openrouter',
   'openai',
   'anthropic',
   'groq',

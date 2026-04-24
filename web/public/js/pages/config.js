@@ -43,21 +43,22 @@ const configUiState = {
   },
 };
 const FALLBACK_PROVIDER_TYPES = [
-  { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local', tier: 'local', requiresCredential: false },
-  { name: 'ollama_cloud', displayName: 'Ollama Cloud', compatible: false, locality: 'external', tier: 'managed_cloud', requiresCredential: true },
+  { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local', tier: 'local', requiresCredential: false, defaultBaseUrl: 'http://127.0.0.1:11434' },
+  { name: 'ollama_cloud', displayName: 'Ollama Cloud', compatible: false, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://ollama.com' },
+  { name: 'openrouter', displayName: 'OpenRouter', compatible: true, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://openrouter.ai/api/v1' },
   { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
   { name: 'anthropic', displayName: 'Anthropic', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'mistral', displayName: 'Mistral AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'deepseek', displayName: 'DeepSeek', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
-  { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true },
+  { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.groq.com/openai/v1' },
+  { name: 'mistral', displayName: 'Mistral AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.mistral.ai/v1' },
+  { name: 'deepseek', displayName: 'DeepSeek', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.deepseek.com' },
+  { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.together.xyz/v1' },
+  { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.x.ai/v1' },
+  { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
 ];
 const CONFIG_HELP = {
   aiSearch: {
     'AI Provider Configuration': {
-      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud Ollama Cloud, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
+      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud providers such as Ollama Cloud and OpenRouter, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
       whatSeeing: 'You are seeing separate local, managed-cloud, and frontier provider groups, saved provider-profile buttons, provider-type selectors, alphabetized model controls, credential fields, endpoint overrides, advanced Ollama runtime fields, and test, save, and delete actions.',
       whatCanDo: 'Add a new provider, edit or delete an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profiles exist for routing and fallback.',
       howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here, while the Model Auto Selection Policy below decides how Guardian prefers between those profiles at runtime.',
@@ -309,7 +310,7 @@ function renderAiProvidersTab(panel) {
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
     kicker: 'AI Providers',
     compact: true,
-    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing, including local Ollama profiles and hosted provider APIs.',
+    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing, including local Ollama, managed-cloud providers such as Ollama Cloud or OpenRouter, and hosted model APIs.',
     whatSeeing: 'You are seeing provider editors, configured provider status, model auto-selection controls, and shared credential-reference management.',
     whatCanDo: 'Add local or hosted providers, test connectivity, choose models, manage provider defaults and managed-cloud role routing, and manage the credential refs those providers can use.',
     howLinks: 'These provider profiles drive the model paths used across the rest of the product.',
@@ -551,13 +552,14 @@ function createProviderPanel(config, providers, panel) {
   const providerTypes = getProviderTypeCatalog();
   const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
   const managedCloudRoleRouting = config?.assistant?.tools?.modelSelection?.managedCloudRouting || {};
-  const managedCloudRoleBindings = managedCloudRoleRouting.roleBindings || {};
   const managedCloudRoleRoutingEnabled = managedCloudRoleRouting.enabled !== false;
   const credentialRefOptions = renderCredentialRefOptions(
     config?.assistant?.credentials?.refs || {},
     (meta) => meta?.source === 'env',
   );
-  const externalDefaultKeyPlaceholder = 'Paste once to store securely';
+  const getProviderDisplayName = (providerType) => getProviderTypeMeta(providerType)?.displayName || String(providerType || '').trim() || 'Provider';
+  const getProviderCredentialLabel = (providerType) => `${getProviderDisplayName(providerType)} API key`;
+  const getDefaultApiKeyPlaceholder = (providerType) => `Paste ${getProviderDisplayName(providerType)} API key once to store securely`;
 
   const providerMap = Object.entries(config.llm || {}).reduce((acc, [name, cfg]) => {
     const live = providers.find(p => p.name === name);
@@ -572,7 +574,7 @@ function createProviderPanel(config, providers, panel) {
     return acc;
   }, {});
   const preferredLocal = getPreferredProviderNameForBucket(preferredProviders, 'local', providerMap);
-  const preferredManagedCloud = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap);
+  const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(preferredProviders, providerMap);
   const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
 
   const providerSides = ['local', 'cloud', 'external'];
@@ -585,12 +587,7 @@ function createProviderPanel(config, providers, panel) {
   const getSidePrefix = (side) => (side === 'local' ? 'cfg-local' : side === 'cloud' ? 'cfg-mcloud' : 'cfg-ext');
   const getSideNames = (side) => (side === 'local' ? localNames : side === 'cloud' ? cloudNames : externalNames);
   const getDefaultProviderTypeForSide = (side) => (side === 'local' ? 'ollama' : side === 'cloud' ? 'ollama_cloud' : 'openai');
-  const getSideLabel = (side) => (side === 'local' ? 'Local' : side === 'cloud' ? 'Ollama Cloud' : 'Frontier');
-  const getSideEditorTitle = (side) => (side === 'local'
-    ? 'Local Provider Settings'
-    : side === 'cloud'
-      ? 'Ollama Cloud Settings'
-      : 'Frontier Provider Settings');
+  const getSideLabel = (side) => (side === 'local' ? 'Local' : side === 'cloud' ? 'Managed Cloud' : 'Frontier');
   const getProviderEditorSide = (entry) => {
     if (!entry) return 'external';
     if (entry.locality === 'local') return 'local';
@@ -654,7 +651,7 @@ function createProviderPanel(config, providers, panel) {
     <details class="cfg-provider-accordion" id="cfg-provider-panel" open>
       <summary class="cfg-provider-summary">
         <h3 class="section-header cfg-provider-summary-title" style="margin:0;font-size:0.92rem;">AI Provider Configuration</h3>
-        <span class="cfg-provider-summary-note">Provider configuration is split into local Ollama, managed-cloud Ollama Cloud, and frontier hosted providers. Managed-cloud and frontier profiles both support direct stored credentials or env-backed credential refs.</span>
+        <span class="cfg-provider-summary-note">Provider configuration is split into local Ollama, managed-cloud providers, and frontier hosted providers. Managed-cloud and frontier profiles both support direct stored credentials or env-backed credential refs.</span>
       </summary>
       <div class="cfg-center-body">
         <datalist id="cfg-credential-ref-options">${credentialRefOptions}</datalist>
@@ -740,23 +737,23 @@ function createProviderPanel(config, providers, panel) {
 
             <div id="cfg-mcloud-panel" style="display: none;">
               <div class="table-header" style="padding-left:0;padding-right:0;">
-                <h3>Ollama Cloud Settings</h3>
-                <span class="cfg-header-note">Managed-cloud Ollama between the local lane and frontier providers</span>
+                <h3>Managed Cloud Provider Settings</h3>
+                <span class="cfg-header-note">Managed-cloud providers between the local lane and frontier providers</span>
               </div>
               <div id="cfg-mcloud-active-note" style="margin:0.5rem 0 0.75rem;font-size:0.72rem;color:var(--text-muted);"></div>
               <div class="cfg-form-grid">
                 <div class="cfg-field"><label>Provider Name</label><input id="cfg-mcloud-name" type="text" placeholder="ollama-cloud"></div>
                 <div class="cfg-field"><label>Provider Type</label><select id="cfg-mcloud-type">${cloudProviderTypeOptions}</select></div>
                 <div class="cfg-field"><label>Model</label><select id="cfg-mcloud-model-select" style="display:none"></select><input id="cfg-mcloud-model" type="text" placeholder="gpt-oss:120b"></div>
-                <div class="cfg-field"><label>Ollama Cloud API Key</label><input id="cfg-mcloud-key" type="password" placeholder="Paste Ollama Cloud key once to store securely"></div>
+                <div class="cfg-field"><label>API Key</label><input id="cfg-mcloud-key" type="password" placeholder="Paste provider API key once to store securely"></div>
                 <div class="cfg-field"><label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-mcloud-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store"> Enable Credential Ref</label><input id="cfg-mcloud-credential-ref" type="text" list="cfg-credential-ref-options" placeholder="llm.ollama-cloud.primary" disabled></div>
-                <div class="cfg-field"><label>Base URL</label><input id="cfg-mcloud-url" type="text" placeholder="https://ollama.com"></div>
+                <div class="cfg-field"><label>Base URL</label><input id="cfg-mcloud-url" type="text" placeholder="Provider default endpoint"></div>
               </div>
               <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-                Paste an Ollama Cloud API key once and Guardian stores it in the encrypted local secret store. Leave the key blank and use an env-backed credential ref when you want Guardian to resolve the credential from the runtime environment instead.
+                Paste a managed-cloud provider API key once and Guardian stores it in the encrypted local secret store. Leave the key blank and use an env-backed credential ref when you want Guardian to resolve the credential from the runtime environment instead.
               </div>
               <details id="cfg-mcloud-advanced-wrap" style="margin-top:1rem;">
-                <summary style="cursor:pointer;font-weight:600;">Advanced Ollama Cloud Settings</summary>
+                <summary style="cursor:pointer;font-weight:600;">Advanced Runtime Settings</summary>
                 <div class="cfg-form-grid" style="margin-top:0.85rem;">
                   <div class="cfg-field"><label>Max Tokens</label><input id="cfg-mcloud-max-tokens" class="cfg-provider-number" type="number" min="1" placeholder="2048"></div>
                   <div class="cfg-field"><label>Temperature</label><input id="cfg-mcloud-temperature" class="cfg-provider-number" type="number" step="0.1" placeholder="0.7"></div>
@@ -769,7 +766,7 @@ function createProviderPanel(config, providers, panel) {
                   <textarea id="cfg-mcloud-ollama-options" rows="7" placeholder='{"num_ctx": 32768, "repeat_penalty": 1.1}' style="width:100%;"></textarea>
                 </div>
                 <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-                  These values are passed through to the native Ollama SDK request for Ollama Cloud.
+                  These values are only used for Ollama-family providers in the managed-cloud tier.
                 </div>
               </details>
               <div id="cfg-mcloud-secret-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
@@ -784,14 +781,14 @@ function createProviderPanel(config, providers, panel) {
             <div id="cfg-ext-panel" style="display: none;">
               <div class="table-header" style="padding-left:0;padding-right:0;">
                 <h3>Frontier Provider Settings</h3>
-                <span class="cfg-header-note">Premium frontier provider families used beyond local and managed-cloud Ollama</span>
+                <span class="cfg-header-note">Premium frontier provider families used beyond local and managed-cloud providers</span>
               </div>
               <div id="cfg-ext-active-note" style="margin:0.5rem 0 0.75rem;font-size:0.72rem;color:var(--text-muted);"></div>
               <div class="cfg-form-grid">
                 <div class="cfg-field"><label>Provider Name</label><input id="cfg-ext-name" type="text" placeholder="claude"></div>
                 <div class="cfg-field"><label>Provider Type</label><select id="cfg-ext-type">${externalProviderTypeOptions}</select></div>
                 <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
-                <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="${externalDefaultKeyPlaceholder}"></div>
+                <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="Paste provider API key once to store securely"></div>
                 <div class="cfg-field"><label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-ext-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store"> Enable Credential Ref</label><input id="cfg-ext-credential-ref" type="text" list="cfg-credential-ref-options" placeholder="llm.openai.primary" disabled></div>
                 <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
               </div>
@@ -861,6 +858,11 @@ function createProviderPanel(config, providers, panel) {
       if (inferredRole === 'direct') return 'minimax-m2.1';
       return 'gpt-oss:120b';
     }
+    if (normalizedType === 'openrouter') {
+      const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
+      if (inferredRole === 'direct' || inferredRole === 'toolLoop') return 'moonshotai/kimi-k2.6';
+      return 'qwen/qwen3.6-plus';
+    }
     if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
     if (normalizedType === 'openai') return 'gpt-4o';
     if (normalizedType === 'groq') return 'llama-3.3-70b-versatile';
@@ -887,9 +889,6 @@ function createProviderPanel(config, providers, panel) {
     const isCloud = side === 'cloud';
     const prefix = getSidePrefix(side);
     const names = getSideNames(side);
-    const defaultKeyPlaceholder = isCloud
-      ? 'Paste Ollama Cloud key once to store securely'
-      : externalDefaultKeyPlaceholder;
 
     const profilesEl = section.querySelector(`#${prefix}-profiles`);
     const newBtnEl = section.querySelector(`#${prefix}-new`);
@@ -916,7 +915,13 @@ function createProviderPanel(config, providers, panel) {
     if (credentialRefCheckbox && credentialRefEl) {
       credentialRefCheckbox.addEventListener('change', () => {
         credentialRefEl.disabled = !credentialRefCheckbox.checked;
-        if (!credentialRefCheckbox.checked) credentialRefEl.value = '';
+        if (credentialRefCheckbox.checked) {
+          refreshCredentialInputHints(typeEl?.value, true);
+        } else {
+          credentialRefEl.value = '';
+        }
+        refreshSecretNote(typeEl?.value);
+        void refreshLiveModels({ currentModel: modelEl.value.trim() });
       });
     }
     let selectedProfile = activeProviderSelection?.side === side && names.includes(activeProviderSelection.name)
@@ -962,6 +967,20 @@ function createProviderPanel(config, providers, panel) {
       return modelInputEl.dataset.userEdited === 'true' || modelSelectEl.dataset.userEdited === 'true';
     }
 
+    function refreshSuggestedName(providerType = typeEl?.value, force = false) {
+      const suggestedName = getSuggestedName(side, providerType);
+      const lastSuggestedName = nameEl?.dataset.lastSuggestedName || '';
+      const currentName = nameEl?.value.trim() || '';
+      if (force || !currentName || currentName === lastSuggestedName) {
+        nameEl.value = suggestedName;
+      }
+      if (nameEl) {
+        nameEl.dataset.lastSuggestedType = providerType || '';
+        nameEl.dataset.lastSuggestedName = suggestedName;
+      }
+      return nameEl?.value || suggestedName;
+    }
+
     function refreshSuggestedModel(providerType = typeEl?.value, providerName = nameEl?.value, force = false) {
       const suggestedModel = getDefaultModel(side, providerType, providerName);
       const lastSuggestedModel = nameEl?.dataset.lastSuggestedModel || '';
@@ -977,6 +996,42 @@ function createProviderPanel(config, providers, panel) {
         modelInputEl.placeholder = suggestedModel;
       }
       return suggestedModel;
+    }
+
+    function refreshSuggestedBaseUrl(providerType = typeEl?.value, force = false) {
+      const suggestedBaseUrl = getDefaultProviderBaseUrl(providerType);
+      const lastSuggestedBaseUrl = urlEl?.dataset.lastSuggestedUrl || '';
+      const currentBaseUrl = urlEl?.value.trim() || '';
+      if (force || !currentBaseUrl || currentBaseUrl === lastSuggestedBaseUrl) {
+        urlEl.value = suggestedBaseUrl;
+      }
+      if (urlEl) {
+        urlEl.dataset.lastSuggestedUrl = suggestedBaseUrl;
+      }
+      return urlEl?.value || suggestedBaseUrl;
+    }
+
+    function getSuggestedCredentialRef(providerType = typeEl?.value) {
+      const normalized = String(providerType || '').trim().toLowerCase().replace(/_/g, '-');
+      return normalized ? `llm.${normalized}.primary` : 'llm.provider.primary';
+    }
+
+    function refreshCredentialInputHints(providerType = typeEl?.value, forceCredentialRefValue = false) {
+      if (keyEl) {
+        keyEl.placeholder = getDefaultApiKeyPlaceholder(providerType);
+      }
+      if (!credentialRefEl) return '';
+      const suggestedRef = getSuggestedCredentialRef(providerType);
+      const lastSuggestedRef = credentialRefEl.dataset.lastSuggestedRef || '';
+      const currentRef = credentialRefEl.value.trim();
+      if (credentialRefCheckbox?.checked && (forceCredentialRefValue || !currentRef || currentRef === lastSuggestedRef)) {
+        credentialRefEl.value = suggestedRef;
+      } else if (!credentialRefCheckbox?.checked && (forceCredentialRefValue || currentRef === lastSuggestedRef)) {
+        credentialRefEl.value = '';
+      }
+      credentialRefEl.placeholder = suggestedRef;
+      credentialRefEl.dataset.lastSuggestedRef = suggestedRef;
+      return suggestedRef;
     }
 
     function toggleAdvancedVisibility(providerType = typeEl?.value) {
@@ -1049,7 +1104,7 @@ function createProviderPanel(config, providers, panel) {
 
     function refreshSecretNote(nextProviderType = typeEl?.value) {
       if (!secretNoteEl) return;
-      const credentialLabel = isCloud ? 'Ollama Cloud API key' : 'API key';
+      const credentialLabel = getProviderCredentialLabel(nextProviderType);
       const explicitRef = credentialRefEl?.value.trim();
       if (keyEl?.value.trim()) {
         secretNoteEl.textContent = `A newly pasted ${credentialLabel} will be stored in Guardian's encrypted local secret store when you save.`;
@@ -1065,9 +1120,7 @@ function createProviderPanel(config, providers, panel) {
       const existingRef = entry?.credentialRef?.trim();
       const existingMeta = getCredentialRefMeta(existingRef);
       if (!entry || !existingRef) {
-        secretNoteEl.textContent = isCloud
-          ? 'No Ollama Cloud credential is configured yet. Paste an Ollama Cloud API key for the simple path or choose an env-backed credential ref for the advanced path.'
-          : 'No credential is configured yet. Paste an API key for the simple path or choose an env-backed credential ref for the advanced path.';
+        secretNoteEl.textContent = `No credential is configured yet. Paste ${credentialLabel} for the simple path or choose an env-backed credential ref for the advanced path.`;
         return;
       }
       if (isProviderTypeChanged(nextProviderType)) {
@@ -1075,9 +1128,7 @@ function createProviderPanel(config, providers, panel) {
         return;
       }
       if (existingMeta?.source === 'local') {
-        secretNoteEl.textContent = isCloud
-          ? 'This profile already has an Ollama Cloud key stored in Guardian\'s encrypted local secret store. Leave the key blank to keep it, or paste a new key to replace it.'
-          : 'This profile already has a key stored in Guardian\'s encrypted local secret store. Leave API Key blank to keep it, or paste a new key to replace it.';
+        secretNoteEl.textContent = `This profile already has ${credentialLabel} stored in Guardian's encrypted local secret store. Leave API Key blank to keep it, or paste a new key to replace it.`;
         return;
       }
       if (existingMeta?.source === 'env') {
@@ -1090,6 +1141,7 @@ function createProviderPanel(config, providers, panel) {
 
     async function refreshLiveModels(options = {}) {
       const providerType = typeEl?.value.trim().toLowerCase() || getDefaultProviderTypeForSide(side);
+      const providerDisplayName = getProviderDisplayName(providerType);
       const currentModel = options.currentModel || modelEl.value.trim() || getDefaultModel(side, providerType, nameEl?.value);
       const requestId = ++liveModelsRequestId;
       if (!providerType || !isKnownProviderType(side, providerType)) {
@@ -1104,14 +1156,12 @@ function createProviderPanel(config, providers, panel) {
         if (requestId !== liveModelsRequestId) return;
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
-        activeNoteEl.textContent = isCloud
-          ? 'Paste an Ollama Cloud API key or choose an env-backed credential ref to load the live model list.'
-          : 'Select a provider type, then paste an API key or choose an env-backed credential ref to load the live model list.';
+        activeNoteEl.textContent = `Paste ${getProviderCredentialLabel(providerType)} or choose an env-backed credential ref to load the live model list.`;
         return;
       }
 
       try {
-        activeNoteEl.textContent = `Loading ${providerType} models...`;
+        activeNoteEl.textContent = `Loading ${providerDisplayName} models...`;
         const result = await api.providerModels({
           providerType,
           model: currentModel,
@@ -1128,18 +1178,18 @@ function createProviderPanel(config, providers, panel) {
             modelEl.value = sortedModels[0];
             markModelEdited(false);
           }
-          activeNoteEl.textContent = `${providerType} models loaded.`;
+          activeNoteEl.textContent = `${providerDisplayName} models loaded.`;
         } else {
           updateModelSelector([], currentModel);
           modelInputEl.value = currentModel;
-          activeNoteEl.textContent = `${providerType} did not return any models. You can still enter a model ID manually.`;
+          activeNoteEl.textContent = `${providerDisplayName} did not return any models. You can still enter a model ID manually.`;
         }
       } catch (err) {
         if (requestId !== liveModelsRequestId) return;
         updateModelSelector([], currentModel);
         modelInputEl.value = currentModel;
         const reason = err instanceof Error ? err.message : String(err);
-        activeNoteEl.textContent = `Could not load ${providerType} models yet: ${reason}`;
+        activeNoteEl.textContent = `Could not load ${providerDisplayName} models yet: ${reason}`;
       }
     }
 
@@ -1153,13 +1203,13 @@ function createProviderPanel(config, providers, panel) {
         const roleBadges = [];
         const preferredBucket = getPreferredProviderBucketForEntry(info);
         if (preferredBucket === 'local' && preferredLocal === name) roleBadges.push('local');
-        if (preferredBucket === 'managedCloud' && preferredManagedCloud === name) roleBadges.push('managed cloud');
         if (preferredBucket === 'frontier' && preferredFrontier === name) roleBadges.push('frontier');
         if (managedCloudRoleRoutingEnabled && info.tier === 'managed_cloud') {
-          if (managedCloudRoleBindings.general === name) roleBadges.push('general');
-          if (managedCloudRoleBindings.direct === name) roleBadges.push('direct');
-          if (managedCloudRoleBindings.toolLoop === name) roleBadges.push('tool loop');
-          if (managedCloudRoleBindings.coding === name) roleBadges.push('coding');
+          const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, info.provider);
+          if (familyBindings.general === name) roleBadges.push('general');
+          if (familyBindings.direct === name) roleBadges.push('direct');
+          if (familyBindings.toolLoop === name) roleBadges.push('tool loop');
+          if (familyBindings.coding === name) roleBadges.push('coding');
         }
         const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
         return `
@@ -1277,7 +1327,7 @@ function createProviderPanel(config, providers, panel) {
         if (titleEl) titleEl.textContent = side === 'local'
           ? 'Add New Local Provider'
           : side === 'cloud'
-            ? 'Add New Ollama Cloud Provider'
+            ? 'Add New Managed Cloud Provider'
             : 'Add New Frontier Provider';
         if (saveBtnEl) saveBtnEl.textContent = 'Create Provider';
         if (deleteBtnEl) deleteBtnEl.style.display = 'none';
@@ -1285,26 +1335,26 @@ function createProviderPanel(config, providers, panel) {
         if (nameEl) nameEl.disabled = false;
         const pt = getDefaultProviderTypeForSide(side);
         if (typeEl) typeEl.value = pt;
-        nameEl.value = getSuggestedName(side, pt);
+        const defaultName = refreshSuggestedName(pt, true);
         markModelEdited(false);
-        const defaultModel = refreshSuggestedModel(pt, nameEl.value, true);
+        const defaultModel = refreshSuggestedModel(pt, defaultName, true);
         updateModelSelector([], null);
-        urlEl.value = getDefaultProviderBaseUrl(pt);
+        refreshSuggestedBaseUrl(pt, true);
         if (keyEl) {
           keyEl.value = '';
-          keyEl.placeholder = defaultKeyPlaceholder;
         }
         if (credentialRefEl) {
           credentialRefEl.value = '';
           credentialRefEl.disabled = true;
           if (credentialRefCheckbox) credentialRefCheckbox.checked = false;
         }
+        refreshCredentialInputHints(pt, true);
         setAdvancedValues(null, pt);
         configUiState.selectedProviderProfiles[side] = null;
         activeNoteEl.textContent = isLocal
           ? 'Creating a new local provider. Choose the provider type from the dropdown, then set its name and model.'
           : isCloud
-            ? 'Creating a new Ollama Cloud provider. Set the provider name, model, and credential so Guardian can use the managed-cloud lane explicitly. Common patterns are one general profile plus optional direct, tool-loop, and coding profiles.'
+            ? 'Creating a new managed-cloud provider. Set the provider name, model, and credential so Guardian can use the managed-cloud lane explicitly. Common patterns are one general profile plus optional direct, tool-loop, and coding profiles.'
             : 'Creating a new frontier provider. All supported frontier provider families are listed in the Provider Type dropdown.';
         syncTestButtonState();
         refreshSecretNote(pt);
@@ -1321,19 +1371,24 @@ function createProviderPanel(config, providers, panel) {
       if (nameEl) nameEl.disabled = true;
       nameEl.value = name;
       nameEl.dataset.lastSuggestedModel = '';
+      nameEl.dataset.lastSuggestedName = '';
+      nameEl.dataset.lastSuggestedType = '';
       if (typeEl) typeEl.value = entry.provider || '';
       updateModelSelector(entry.availableModels, entry.model || '');
       if (!entry.availableModels?.length) modelInputEl.value = entry.model || '';
       modelInputEl.placeholder = getDefaultModel(side, entry.provider || '', name);
       markModelEdited(false);
       urlEl.value = entry.baseUrl || '';
+      urlEl.dataset.lastSuggestedUrl = '';
       if (keyEl) {
         keyEl.value = '';
-        keyEl.placeholder = getSecretFieldPlaceholder(entry.credentialRef, defaultKeyPlaceholder);
+        keyEl.placeholder = getSecretFieldPlaceholder(entry.credentialRef, getDefaultApiKeyPlaceholder(entry.provider || typeEl?.value));
       }
       if (credentialRefEl) {
         const editableRef = getEditableCredentialRef(entry.credentialRef);
         credentialRefEl.value = editableRef;
+        credentialRefEl.placeholder = getSuggestedCredentialRef(entry.provider || typeEl?.value);
+        credentialRefEl.dataset.lastSuggestedRef = '';
         if (credentialRefCheckbox) {
           credentialRefCheckbox.checked = !!editableRef;
           credentialRefEl.disabled = !editableRef;
@@ -1403,7 +1458,8 @@ function createProviderPanel(config, providers, panel) {
 
     typeEl?.addEventListener('change', () => {
       cancelPendingLiveModels();
-      if (!isLocal && isProviderTypeChanged(typeEl.value)) {
+      const nextProviderType = typeEl.value;
+      if (!isLocal && isProviderTypeChanged(nextProviderType)) {
         if (credentialRefEl) {
           credentialRefEl.value = '';
           credentialRefEl.disabled = true;
@@ -1411,22 +1467,16 @@ function createProviderPanel(config, providers, panel) {
         }
         if (keyEl) keyEl.value = '';
       }
-      toggleAdvancedVisibility(typeEl.value);
+      toggleAdvancedVisibility(nextProviderType);
       if (!selectedProfile) {
-        const lastSuggestedName = nameEl.dataset.lastSuggestedName || '';
-        if (!nameEl.value.trim() || nameEl.value === lastSuggestedName) {
-          nameEl.value = getSuggestedName(side, typeEl.value);
-        }
+        refreshSuggestedName(nextProviderType);
         markModelEdited(false);
-        refreshSuggestedModel(typeEl.value, nameEl.value);
-        if (!urlEl.value.trim()) {
-          urlEl.value = getDefaultProviderBaseUrl(typeEl.value);
-        }
-        nameEl.dataset.lastSuggestedType = typeEl.value;
-        nameEl.dataset.lastSuggestedName = nameEl.value;
+        refreshSuggestedModel(nextProviderType, nameEl.value);
+        refreshSuggestedBaseUrl(nextProviderType);
       }
-      refreshSecretNote(typeEl.value);
-      void refreshLiveModels({ currentModel: modelEl.value.trim() || getDefaultModel(side, typeEl.value, nameEl.value) });
+      refreshCredentialInputHints(nextProviderType);
+      refreshSecretNote(nextProviderType);
+      void refreshLiveModels({ currentModel: modelEl.value.trim() || getDefaultModel(side, nextProviderType, nameEl.value) });
     });
 
     nameEl?.addEventListener('input', () => {
@@ -1616,6 +1666,85 @@ function getPreferredProviderBucketForEntry(entry) {
   return 'frontier';
 }
 
+function getProviderDisplayName(providerType) {
+  return getProviderTypeMeta(providerType)?.displayName || String(providerType || '').trim() || 'Provider';
+}
+
+function normalizeProviderTypeName(providerType) {
+  return String(providerType || '').trim().toLowerCase();
+}
+
+function getManagedCloudProviderTypes(providerMap) {
+  return [...new Set(
+    Object.values(providerMap || {})
+      .filter((entry) => entry?.tier === 'managed_cloud' && isProviderConfigEnabled(entry))
+      .map((entry) => normalizeProviderTypeName(entry.provider))
+      .filter(Boolean),
+  )].sort((left, right) => left.localeCompare(right));
+}
+
+function getManagedCloudProfilesForProviderType(providerMap, providerType) {
+  const normalizedType = normalizeProviderTypeName(providerType);
+  if (!normalizedType) return [];
+  return Object.entries(providerMap || {})
+    .filter(([, entry]) => isProviderConfigEnabled(entry) && entry?.tier === 'managed_cloud' && normalizeProviderTypeName(entry.provider) === normalizedType)
+    .map(([name]) => name)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function resolvePreferredManagedCloudProviderType(preferredProviders, providerMap) {
+  const explicitType = resolveExplicitManagedCloudProviderType(preferredProviders, providerMap);
+  if (explicitType) return explicitType;
+  return getManagedCloudProviderTypes(providerMap)[0] || null;
+}
+
+function resolveExplicitManagedCloudProviderType(preferredProviders, providerMap) {
+  const explicit = String(preferredProviders?.managedCloud || '').trim();
+  if (explicit) {
+    if (providerMap?.[explicit]?.tier === 'managed_cloud' && isProviderConfigEnabled(providerMap[explicit])) {
+      return normalizeProviderTypeName(providerMap[explicit].provider);
+    }
+    if (getProviderTypeMeta(explicit)?.tier === 'managed_cloud') {
+      return normalizeProviderTypeName(explicit);
+    }
+  }
+  const legacy = String(preferredProviders?.external || '').trim();
+  if (legacy && providerMap?.[legacy]?.tier === 'managed_cloud' && isProviderConfigEnabled(providerMap[legacy])) {
+    return normalizeProviderTypeName(providerMap[legacy].provider);
+  }
+  return null;
+}
+
+function getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRouting, providerType) {
+  const normalizedType = normalizeProviderTypeName(providerType);
+  if (!normalizedType) return {};
+  const explicitBindings = managedCloudRouting?.providerRoleBindings?.[normalizedType];
+  if (explicitBindings && typeof explicitBindings === 'object' && !Array.isArray(explicitBindings)) {
+    const filtered = {};
+    for (const role of ['general', 'direct', 'toolLoop', 'coding']) {
+      const providerName = String(explicitBindings?.[role] || '').trim();
+      if (!providerName || !providerMap?.[providerName] || !isProviderConfigEnabled(providerMap[providerName])) continue;
+      if (providerMap[providerName]?.tier === 'managed_cloud' && normalizeProviderTypeName(providerMap[providerName].provider) === normalizedType) {
+        filtered[role] = providerName;
+      }
+    }
+    return filtered;
+  }
+  const legacyBindings = managedCloudRouting?.roleBindings;
+  if (!legacyBindings || typeof legacyBindings !== 'object' || Array.isArray(legacyBindings)) {
+    return {};
+  }
+  const filtered = {};
+  for (const role of ['general', 'direct', 'toolLoop', 'coding']) {
+    const providerName = String(legacyBindings?.[role] || '').trim();
+    if (!providerName || !providerMap?.[providerName] || !isProviderConfigEnabled(providerMap[providerName])) continue;
+    if (normalizeProviderTypeName(providerMap[providerName].provider) === normalizedType) {
+      filtered[role] = providerName;
+    }
+  }
+  return filtered;
+}
+
 function getPreferredProviderNameForBucket(preferredProviders, bucket, providerMap) {
   const explicit = preferredProviders?.[bucket];
   if (explicit && providerMap?.[explicit] && isProviderConfigEnabled(providerMap[explicit])) return explicit;
@@ -1631,30 +1760,21 @@ function getPreferredProviderBucketLabel(bucket) {
   return 'Frontier';
 }
 
-function describeManagedCloudAutoFallback(role, bindings, managedCloudDefault) {
+function describeManagedCloudAutoFallback(role, providerType, bindings, providerMap) {
+  const providerDisplayName = getProviderTypeMeta(providerType)?.displayName || providerType;
+  const familyProfiles = getManagedCloudProfilesForProviderType(providerMap, providerType);
+  const familyFallback = familyProfiles.length > 0
+    ? `${providerDisplayName} family default (${familyProfiles[0]})`
+    : `${providerDisplayName} family default`;
   if (role !== 'general' && bindings.general) {
-    const steps = [`general profile (${bindings.general})`, 'auto-detect by profile name'];
-    if (managedCloudDefault) {
-      steps.push(`managed-cloud routed default (${managedCloudDefault})`);
-    } else {
-      steps.push('managed-cloud routed default');
-    }
-    return `Use ${steps.join(', then ')}`;
+    return `Use general profile (${bindings.general}), then auto-detect within ${providerDisplayName}, then ${familyFallback}`;
   }
-  const steps = ['auto-detect by profile name'];
-  if (managedCloudDefault) {
-    steps.push(`managed-cloud routed default (${managedCloudDefault})`);
-  } else {
-    steps.push('managed-cloud routed default');
-  }
-  return `Use ${steps.join(', then ')}`;
+  return `Auto-detect within ${providerDisplayName}, then ${familyFallback}`;
 }
 
 function getDefaultProviderBaseUrl(providerType) {
   const normalized = String(providerType || '').trim().toLowerCase();
-  if (normalized === 'ollama') return 'http://127.0.0.1:11434';
-  if (normalized === 'ollama_cloud') return 'https://ollama.com';
-  return '';
+  return getProviderTypeMeta(normalized)?.defaultBaseUrl || '';
 }
 
 function isOllamaProviderType(providerType) {
@@ -1897,7 +2017,7 @@ function createProviderStatusTable(config, providers, panel) {
     return acc;
   }, {});
   const preferredLocal = getPreferredProviderNameForBucket(preferredProviders, 'local', providerMap);
-  const preferredManagedCloud = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap);
+  const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(preferredProviders, providerMap);
   const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
   const rows = sortConfiguredProviders(providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
@@ -1910,7 +2030,7 @@ function createProviderStatusTable(config, providers, panel) {
     const isPreferredBucket = preferredBucket === 'local'
       ? preferredLocal === name
       : preferredBucket === 'managedCloud'
-        ? preferredManagedCloud === name
+        ? false
         : preferredFrontier === name;
     const preferredBucketLabel = getPreferredProviderBucketLabel(preferredBucket);
     const statusBadge = enabled
@@ -1922,9 +2042,13 @@ function createProviderStatusTable(config, providers, panel) {
     ].join('');
     const preferredActionBtn = !enabled
       ? '<span class="config-provider-current" title="' + escAttr('Enable this provider before using it in model routing.') + '">Disabled for routing</span>'
-      : isPreferredBucket
-      ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
-      : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Set ' + preferredBucketLabel + ' Default</button>';
+      : preferredBucket === 'managedCloud'
+        ? normalizeProviderTypeName(cfg.provider) === preferredManagedCloudType
+          ? '<span class="config-provider-current" title="' + escAttr('The active managed-cloud provider family is selected in Model Auto Selection Policy.') + '">Current ' + esc(getProviderDisplayName(cfg.provider)) + ' family</span>'
+          : '<span class="config-provider-current" title="' + escAttr('Choose the active managed-cloud provider family in Model Auto Selection Policy.') + '">Set in Model Policy</span>'
+        : isPreferredBucket
+          ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
+          : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Set ' + preferredBucketLabel + ' Default</button>';
     return {
       name,
       provider: cfg.provider,
@@ -1999,22 +2123,61 @@ function createProviderSelectionPolicyPanel(config, panel) {
     };
     return acc;
   }, {});
-  const managedCloudProviders = Object.keys(providerMap)
-    .filter((name) => providerMap[name].tier === 'managed_cloud' && isProviderConfigEnabled(providerMap[name]))
-    .sort((left, right) => left.localeCompare(right));
   const preferredProviders = config?.assistant?.tools?.preferredProviders || {};
-  const managedCloudDefault = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap) || '';
+  const managedCloudProviderTypes = getManagedCloudProviderTypes(providerMap);
+  const managedCloudDefaultProviderType = resolveExplicitManagedCloudProviderType(preferredProviders, providerMap) || '';
   const managedCloudRouting = selection.managedCloudRouting || {};
-  const managedCloudRoleBindings = managedCloudRouting.roleBindings || {};
   const managedCloudRoutingEnabled = managedCloudRouting.enabled !== false;
-  const renderManagedCloudRoleOptions = (role, selectedValue) => {
-    const fallbackLabel = describeManagedCloudAutoFallback(role, managedCloudRoleBindings, managedCloudDefault);
+  const renderManagedCloudFamilyOptions = () => {
+    const fallbackType = managedCloudProviderTypes[0] || '';
+    const fallbackLabel = fallbackType
+      ? `Automatic (${getProviderDisplayName(fallbackType)})`
+      : 'Automatic';
     const options = [
       `<option value="">${esc(fallbackLabel)}</option>`,
-      ...managedCloudProviders.map((name) => `<option value="${escAttr(name)}"${selectedValue === name ? ' selected' : ''}>${esc(name)}</option>`),
+      ...managedCloudProviderTypes.map((providerType) => `<option value="${escAttr(providerType)}"${managedCloudDefaultProviderType === providerType ? ' selected' : ''}>${esc(getProviderDisplayName(providerType))}</option>`),
     ];
     return options.join('');
   };
+  const renderManagedCloudRoleOptions = (providerType, role, selectedValue) => {
+    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRouting, providerType);
+    const fallbackLabel = describeManagedCloudAutoFallback(role, providerType, familyBindings, providerMap);
+    const familyProfiles = getManagedCloudProfilesForProviderType(providerMap, providerType);
+    const options = [
+      `<option value="">${esc(fallbackLabel)}</option>`,
+      ...familyProfiles.map((name) => `<option value="${escAttr(name)}"${selectedValue === name ? ' selected' : ''}>${esc(name)}</option>`),
+    ];
+    return options.join('');
+  };
+  const renderManagedCloudFamilySections = () => managedCloudProviderTypes.map((providerType) => {
+    const normalizedType = normalizeProviderTypeName(providerType);
+    const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRouting, normalizedType);
+    const familyLabel = getProviderDisplayName(normalizedType);
+    return `
+      <div class="cfg-divider"></div>
+      <div style="margin-top:0.85rem;">
+        <div style="font-weight:600; margin-bottom:0.65rem;">${esc(familyLabel)} Profiles</div>
+        <div class="cfg-form-grid">
+          <div class="cfg-field">
+            <label>General</label>
+            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-general">${renderManagedCloudRoleOptions(normalizedType, 'general', familyBindings.general || '')}</select>
+          </div>
+          <div class="cfg-field">
+            <label>Direct Answers</label>
+            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-direct">${renderManagedCloudRoleOptions(normalizedType, 'direct', familyBindings.direct || '')}</select>
+          </div>
+          <div class="cfg-field">
+            <label>Tool Loops / Provider CRUD</label>
+            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-tool-loop">${renderManagedCloudRoleOptions(normalizedType, 'toolLoop', familyBindings.toolLoop || '')}</select>
+          </div>
+          <div class="cfg-field">
+            <label>Managed-Cloud Coding</label>
+            <select id="cfg-managed-cloud-role-${escAttr(normalizedType)}-coding">${renderManagedCloudRoleOptions(normalizedType, 'coding', familyBindings.coding || '')}</select>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
 
   section.innerHTML = `
     <div class="table-header">
@@ -2035,7 +2198,7 @@ function createProviderSelectionPolicyPanel(config, panel) {
           <input id="cfg-model-selection-managed-cloud" type="checkbox"${preferManagedCloud ? ' checked' : ''}>
           <span>
             <strong>Prefer managed cloud for lower-pressure external work</strong><br>
-            <span style="font-size:0.72rem;color:var(--text-muted);">Use Ollama Cloud first for lighter external requests when it is configured.</span>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Use the managed-cloud tier first for lighter external requests when it is configured.</span>
           </span>
         </label>
       </div>
@@ -2058,37 +2221,31 @@ function createProviderSelectionPolicyPanel(config, panel) {
         </label>
       </div>
       <div class="cfg-divider"></div>
+      ${managedCloudProviderTypes.length > 0 ? `
+      <div class="cfg-form-grid" style="margin-top:0.85rem;">
+        <div class="cfg-field">
+          <label>Managed-Cloud Provider Family</label>
+          <select id="cfg-managed-cloud-provider-type">${renderManagedCloudFamilyOptions()}</select>
+        </div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Choose which managed-cloud provider family Auto mode should use when work is routed into the managed-cloud tier. Profile routing below stays scoped inside each family.
+      </div>
+      ` : ''}
       <div class="cfg-field" style="margin-top:0.85rem;">
         <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
           <input id="cfg-managed-cloud-role-routing-enabled" type="checkbox"${managedCloudRoutingEnabled ? ' checked' : ''}>
           <span>
             <strong>Enable managed-cloud profile routing</strong><br>
-            <span style="font-size:0.72rem;color:var(--text-muted);">Route different managed-cloud Guardian workloads to different named Ollama Cloud profiles instead of treating the tier as one undifferentiated slot. If a role is left blank, Guardian uses the explicit general profile first when one is set, otherwise it can infer a likely profile from the provider name before falling back to the managed-cloud default.</span>
+            <span style="font-size:0.72rem;color:var(--text-muted);">Route different managed-cloud Guardian workloads to different named profiles inside each managed-cloud provider family instead of treating the tier as one undifferentiated slot.</span>
           </span>
         </label>
       </div>
-      ${managedCloudProviders.length > 0 ? `
-      <div class="cfg-form-grid" style="margin-top:0.85rem;">
-        <div class="cfg-field">
-          <label>General Managed-Cloud Profile</label>
-          <select id="cfg-managed-cloud-role-general">${renderManagedCloudRoleOptions('general', managedCloudRoleBindings.general || '')}</select>
-        </div>
-        <div class="cfg-field">
-          <label>Direct Answers</label>
-          <select id="cfg-managed-cloud-role-direct">${renderManagedCloudRoleOptions('direct', managedCloudRoleBindings.direct || '')}</select>
-        </div>
-        <div class="cfg-field">
-          <label>Tool Loops / Provider CRUD</label>
-          <select id="cfg-managed-cloud-role-tool-loop">${renderManagedCloudRoleOptions('toolLoop', managedCloudRoleBindings.toolLoop || '')}</select>
-        </div>
-        <div class="cfg-field">
-          <label>Managed-Cloud Coding</label>
-          <select id="cfg-managed-cloud-role-coding">${renderManagedCloudRoleOptions('coding', managedCloudRoleBindings.coding || '')}</select>
-        </div>
-      </div>
+      ${managedCloudProviderTypes.length > 0 ? `
+      ${renderManagedCloudFamilySections()}
       ` : `
       <div style="margin-top:0.85rem;font-size:0.72rem;color:var(--text-muted);">
-        Add one or more managed-cloud provider profiles in AI Provider Configuration before binding them to direct, tool-loop, or coding roles here.
+        Add one or more managed-cloud provider profiles in AI Provider Configuration before choosing the managed-cloud provider family or binding family-specific profiles here.
       </div>
       `}
       <div class="cfg-actions" style="margin-top: 1rem;">
@@ -2101,6 +2258,7 @@ function createProviderSelectionPolicyPanel(config, panel) {
   section.querySelector('#cfg-model-selection-save')?.addEventListener('click', async () => {
     const statusEl = section.querySelector('#cfg-model-selection-status');
     const saveBtn = section.querySelector('#cfg-model-selection-save');
+    const nextManagedCloudProviderType = section.querySelector('#cfg-managed-cloud-provider-type')?.value || '';
     const nextPolicy = {
       autoPolicy: section.querySelector('#cfg-model-selection-policy')?.value === 'quality_first'
         ? 'quality_first'
@@ -2110,12 +2268,20 @@ function createProviderSelectionPolicyPanel(config, panel) {
       preferFrontierForSecurity: section.querySelector('#cfg-model-selection-security')?.checked === true,
       managedCloudRouting: {
         enabled: section.querySelector('#cfg-managed-cloud-role-routing-enabled')?.checked === true,
-        roleBindings: {
-          general: section.querySelector('#cfg-managed-cloud-role-general')?.value || undefined,
-          direct: section.querySelector('#cfg-managed-cloud-role-direct')?.value || undefined,
-          toolLoop: section.querySelector('#cfg-managed-cloud-role-tool-loop')?.value || undefined,
-          coding: section.querySelector('#cfg-managed-cloud-role-coding')?.value || undefined,
-        },
+        providerRoleBindings: managedCloudProviderTypes.reduce((acc, providerType) => {
+          const normalizedType = normalizeProviderTypeName(providerType);
+          const bindings = {
+            general: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-general`)?.value || undefined,
+            direct: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-direct`)?.value || undefined,
+            toolLoop: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-tool-loop`)?.value || undefined,
+            coding: section.querySelector(`#cfg-managed-cloud-role-${normalizedType}-coding`)?.value || undefined,
+          };
+          if (bindings.general || bindings.direct || bindings.toolLoop || bindings.coding) {
+            acc[normalizedType] = bindings;
+          }
+          return acc;
+        }, {}),
+        roleBindings: {},
       },
     };
 
@@ -2132,6 +2298,10 @@ function createProviderSelectionPolicyPanel(config, panel) {
       const result = await api.updateConfig({
         assistant: {
           tools: {
+            preferredProviders: {
+              ...(sharedConfig?.assistant?.tools?.preferredProviders || {}),
+              managedCloud: nextManagedCloudProviderType,
+            },
             modelSelection: nextPolicy,
           },
         },
@@ -2143,6 +2313,10 @@ function createProviderSelectionPolicyPanel(config, panel) {
       if (result.success) {
         sharedConfig.assistant = sharedConfig.assistant || {};
         sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+        sharedConfig.assistant.tools.preferredProviders = {
+          ...(sharedConfig.assistant.tools.preferredProviders || {}),
+          managedCloud: nextManagedCloudProviderType,
+        };
         sharedConfig.assistant.tools.modelSelection = nextPolicy;
         if (panel) renderProvidersTab(panel);
       }
@@ -6055,13 +6229,13 @@ function createGenericHelpFactory(area) {
       whatCanDo: 'Configure a local model runtime, test whether Guardian can reach it, and save or delete that provider from the available profile list.',
       howLinks: 'Local providers become selectable model paths for chat, workflows, and tool-routing decisions elsewhere in the product.',
     },
-    'Ollama Cloud Settings': {
-      whatItIs: 'This section is the editor for a managed-cloud Ollama Cloud provider profile that sits between the local and frontier lanes.',
-      whatSeeing: 'You are seeing the managed-cloud provider name, model, credential mode, base URL, advanced Ollama-native options, and test, save, and delete actions.',
-      whatCanDo: 'Configure one or more named Ollama Cloud profiles, let Guardian suggest a starting model from the profile name, validate connectivity, and prepare those profiles for managed-cloud routed defaults or role-based routing.',
+    'Managed Cloud Provider Settings': {
+      whatItIs: 'This section is the editor for a managed-cloud provider profile that sits between the local and frontier lanes, such as Ollama Cloud or OpenRouter.',
+      whatSeeing: 'You are seeing the managed-cloud provider name, provider family, model, credential mode, base URL, any Ollama-only advanced runtime options, and test, save, and delete actions.',
+      whatCanDo: 'Configure one or more named managed-cloud profiles, let Guardian suggest a starting model from the profile name, validate connectivity, and prepare those profiles for managed-cloud routed defaults or role-based routing.',
       howLinks: 'These profiles back Guardian’s managed-cloud tier and can be bound to general, direct, tool-loop, or coding work in the Model Auto Selection Policy.',
-      whenToUse: 'Current recommended starting mapping: general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, coding `qwen3-coder:480b`.',
-      whereNext: 'Use the direct API model names Ollama returns in model discovery or `/api/tags`, not the `-cloud` local-launch suffix names.',
+      whenToUse: 'Current recommended starting mappings depend on provider family: Ollama Cloud general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, coding `qwen3-coder:480b`; OpenRouter general/coding `qwen/qwen3.6-plus`, direct/tool loop `moonshotai/kimi-k2.6`.',
+      whereNext: 'Use the direct API model IDs returned by live model discovery for the managed-cloud provider family you selected.',
     },
     'Frontier Provider Settings': {
       whatItIs: 'This section is the editor for a hosted AI provider such as OpenAI, Anthropic, Groq, Google, or another external API family.',
@@ -6071,10 +6245,10 @@ function createGenericHelpFactory(area) {
     },
     'Model Auto Selection Policy': {
       whatItIs: 'This section controls how Guardian chooses between managed-cloud and frontier provider tiers after routing has already decided the work should leave the local lane.',
-      whatSeeing: 'You are seeing the top-level auto-policy posture, bias toggles for managed-cloud versus frontier use, and the managed-cloud role-routing bindings for named Ollama Cloud profiles.',
+      whatSeeing: 'You are seeing the top-level auto-policy posture, bias toggles for managed-cloud versus frontier use, and the managed-cloud role-routing bindings for named managed-cloud profiles.',
       whatCanDo: 'Keep Auto balanced, bias more aggressively toward frontier quality, and bind different managed-cloud profiles to general, direct-answer, tool-loop, or coding work.',
       howLinks: 'These controls shape which configured providers Guardian prefers at runtime. Guardian derives its internal primary provider from these routed defaults, with managed cloud preferred when it is configured. When a specific managed-cloud role is unset, Guardian uses the explicit `general` profile first when one is set, otherwise it can infer a profile from the provider name before falling back to the managed-cloud routed default.',
-      whenToUse: 'A good current starting point is general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, and coding `qwen3-coder:480b`.',
+      whenToUse: 'A good current starting point is one general managed-cloud profile, then optional direct, tool-loop, and coding profiles. For OpenRouter, `qwen/qwen3.6-plus` and `moonshotai/kimi-k2.6` are good starting points.',
     },
     'Cloud Configuration': {
       whatItIs: 'This section is the advanced raw-config editor for `assistant.tools.cloud` rather than the guided Cloud page workflow.',

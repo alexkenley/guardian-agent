@@ -1,5 +1,11 @@
 import type { GuardianAgentConfig } from './types.js';
 import { getProviderLocality, getProviderTier } from '../llm/provider-metadata.js';
+import {
+  getManagedCloudRoleBindingsForProviderType,
+  isManagedCloudProfileForProviderType,
+  listConfiguredManagedCloudProfilesForType,
+  resolvePreferredManagedCloudSelection,
+} from './managed-cloud-routing.js';
 
 function isEnabledProvider(config: GuardianAgentConfig, providerName: string | undefined): providerName is string {
   const trimmed = providerName?.trim();
@@ -44,14 +50,27 @@ export function resolveDerivedDefaultProvider(config: GuardianAgentConfig): stri
 
   const preferredProviders = config.assistant.tools?.preferredProviders;
   const managedCloudRouting = config.assistant.tools?.modelSelection?.managedCloudRouting;
+  const managedCloudPreference = resolvePreferredManagedCloudSelection(config);
+  const preferredManagedCloudType = managedCloudPreference.providerType;
+  const managedCloudBindings = preferredManagedCloudType
+    ? getManagedCloudRoleBindingsForProviderType(config, preferredManagedCloudType)
+    : {};
   const generalManagedCloud = managedCloudRouting?.enabled !== false
-    ? managedCloudRouting?.roleBindings?.general
+    ? managedCloudBindings.general
+    : undefined;
+  const preferredManagedCloudProvider = preferredManagedCloudType
+    ? listConfiguredManagedCloudProfilesForType(config, preferredManagedCloudType)[0]
     : undefined;
   const legacyExternal = preferredProviders?.external;
 
   const candidates = [
-    isManagedCloudProvider(config, generalManagedCloud) ? generalManagedCloud : undefined,
-    isManagedCloudProvider(config, preferredProviders?.managedCloud) ? preferredProviders?.managedCloud : undefined,
+    isManagedCloudProfileForProviderType(config, generalManagedCloud, preferredManagedCloudType || undefined)
+      ? generalManagedCloud
+      : undefined,
+    isManagedCloudProvider(config, managedCloudPreference.legacyProviderName || undefined)
+      ? managedCloudPreference.legacyProviderName || undefined
+      : undefined,
+    isManagedCloudProvider(config, preferredManagedCloudProvider) ? preferredManagedCloudProvider : undefined,
     isManagedCloudProvider(config, legacyExternal) ? legacyExternal : undefined,
     listProvidersByTier(config, 'managed_cloud')[0],
     isLocalProvider(config, preferredProviders?.local) ? preferredProviders?.local : undefined,

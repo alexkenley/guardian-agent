@@ -110,6 +110,7 @@ describe('createProviderConfigHelpers', () => {
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', undefined)).toBe('resolved-secret');
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', '  direct-key  ')).toBe('direct-key');
     expect(helpers.getDefaultModelForProviderType('OpenAI')).toBe('gpt-4o');
+    expect(helpers.getDefaultModelForProviderType('openrouter')).toBe('qwen/qwen3.6-plus');
     expect(helpers.getDefaultModelForProviderType('xai')).toBe('grok-4-1-fast-reasoning');
     expect(helpers.existingProfilesById({
       awsProfiles: [
@@ -151,6 +152,7 @@ describe('createProviderDashboardCallbacks', () => {
           locality: 'local' as const,
           tier: 'local' as const,
           requiresCredential: false,
+          defaultBaseUrl: 'http://127.0.0.1:11434',
         },
         {
           name: 'openai',
@@ -187,6 +189,7 @@ describe('createProviderDashboardCallbacks', () => {
         locality: 'local',
         tier: 'local',
         requiresCredential: false,
+        defaultBaseUrl: 'http://127.0.0.1:11434',
       },
       {
         name: 'openai',
