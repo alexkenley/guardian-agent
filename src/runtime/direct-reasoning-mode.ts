@@ -129,6 +129,7 @@ interface DirectReasoningFileSummary {
   searchCount: number;
   listCount: number;
   symbols: Set<string>;
+  declaredSymbols: Set<string>;
 }
 
 type DirectReasoningCoverageScope = 'default' | 'web_pages';
@@ -1999,15 +2000,20 @@ function buildDirectReasoningEvidenceFallbackAnswer(evidence: DirectReasoningEvi
   const selected = implementationSummaries.length > 0 ? implementationSummaries : summaries;
   const lines = [
     implementationSummaries.length > 0
-      ? 'Relevant implementation evidence found:'
-      : 'Relevant repository evidence found:',
+      ? 'Relevant implementation evidence found from brokered read-only tools:'
+      : 'Relevant repository evidence found from brokered read-only tools:',
     '',
   ];
-  for (const summary of selected.slice(0, 16)) {
-    const symbolList = [...summary.symbols].slice(0, 12);
+  for (const summary of selected.slice(0, 8)) {
+    const symbolList = selectDirectReasoningDisplaySymbols(summary, 8);
+    const evidenceKinds = [
+      summary.readCount > 0 ? 'read' : '',
+      summary.searchCount > 0 ? 'search' : '',
+      summary.listCount > 0 ? 'list' : '',
+    ].filter(Boolean).join('+') || 'reference';
     lines.push(symbolList.length > 0
-      ? `- \`${summary.file}\`: ${symbolList.map((symbol) => `\`${symbol}\``).join(', ')}`
-      : `- \`${summary.file}\``);
+      ? `- \`${summary.file}\` (${evidenceKinds}): ${symbolList.map((symbol) => `\`${symbol}\``).join(', ')}`
+      : `- \`${summary.file}\` (${evidenceKinds})`);
   }
   return lines.join('\n');
 }
@@ -2027,6 +2033,7 @@ function collectDirectReasoningFileSummaries(evidence: DirectReasoningEvidenceEn
         searchCount: 0,
         listCount: 0,
         symbols: new Set<string>(),
+        declaredSymbols: new Set<string>(),
       };
       fileSummaries.set(file, summary);
       seenIndex += 1;
@@ -2056,6 +2063,9 @@ function collectDirectReasoningFileSummaries(evidence: DirectReasoningEvidenceEn
         continue;
       }
       summary.snippetCount += 1;
+      for (const symbol of extractDeclaredSymbolNames(snippet)) {
+        summary.declaredSymbols.add(symbol);
+      }
       for (const symbol of extractSymbolNames(snippet)) {
         summary.symbols.add(symbol);
       }
@@ -2097,7 +2107,7 @@ function buildDirectReasoningEvidenceCoveragePrompt(evidence: DirectReasoningEvi
     '',
   ];
   for (const summary of summaries) {
-    const symbols = [...summary.symbols].slice(0, 8);
+    const symbols = selectDirectReasoningDisplaySymbols(summary, 8);
     const evidenceParts = [
       `read=${summary.readCount}`,
       `search=${summary.searchCount}`,
@@ -2166,7 +2176,7 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
     '',
   ];
   for (const summary of missing) {
-    const symbols = [...summary.symbols].slice(0, 8);
+    const symbols = selectDirectReasoningDisplaySymbols(summary, 8);
     lines.push(symbols.length > 0
       ? `- \`${summary.file}\`: ${symbols.map((symbol) => `\`${symbol}\``).join(', ')}`
       : `- \`${summary.file}\``);
@@ -2281,6 +2291,32 @@ function directReasoningAnswerMentionsFile(content: string, file: string): boole
   const normalizedContent = content.replace(/\\/g, '/').toLowerCase();
   const normalizedFile = file.replace(/\\/g, '/').toLowerCase();
   return normalizedContent.includes(normalizedFile);
+}
+
+function selectDirectReasoningDisplaySymbols(
+  summary: DirectReasoningFileSummary,
+  limit: number,
+): string[] {
+  const declaredSymbols = [...summary.declaredSymbols];
+  const candidates = declaredSymbols.length > 0
+    ? declaredSymbols
+    : [...summary.symbols].filter(isLikelyUsefulDirectReasoningDisplaySymbol);
+  return uniqueStrings(candidates).slice(0, Math.max(0, limit));
+}
+
+function isLikelyUsefulDirectReasoningDisplaySymbol(symbol: string): boolean {
+  if (!symbol || symbol.length < 3) return false;
+  if (/^(push|pop|shift|unshift|map|filter|reduce|forEach|some|every|find|includes|join|split|slice|trim|replace|match|test|sort)$/i.test(symbol)) {
+    return false;
+  }
+  if (/^(getElementById|querySelector|querySelectorAll|addEventListener|removeEventListener|appendChild|setAttribute|classList)$/i.test(symbol)) {
+    return false;
+  }
+  if (/^(content|layout|input|button|status|error|result|value|detail|title|event|data)$/i.test(symbol)) {
+    return false;
+  }
+  return /^[A-Z_$]/.test(symbol)
+    || /^(render|normalize|build|bind|update|summarize|select|get|map|project|emit|consume|handle|create|record|resolve|attach|dispatch|ingest)[A-Z_]/.test(symbol);
 }
 
 function hasDirectReasoningStrongFileEvidence(summary: DirectReasoningFileSummary): boolean {
@@ -2729,15 +2765,23 @@ function clampEvidenceBudgetInteger(value: unknown, fallback: number, min: numbe
 
 function extractSymbolNames(snippet: string): string[] {
   const symbols = new Set<string>();
-  const symbolPattern = /\b(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s+([A-Za-z_$][\w$]*)/g;
-  for (const match of snippet.matchAll(symbolPattern)) {
-    if (match[1]) symbols.add(match[1]);
+  for (const symbol of extractDeclaredSymbolNames(snippet)) {
+    symbols.add(symbol);
   }
   const methodPattern = /\b([A-Za-z_$][\w$]*)\s*\(/g;
   for (const match of snippet.matchAll(methodPattern)) {
     const name = match[1];
     if (!name || ['if', 'for', 'while', 'switch', 'catch', 'function'].includes(name)) continue;
     symbols.add(name);
+  }
+  return [...symbols];
+}
+
+function extractDeclaredSymbolNames(snippet: string): string[] {
+  const symbols = new Set<string>();
+  const symbolPattern = /\b(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s+([A-Za-z_$][\w$]*)/g;
+  for (const match of snippet.matchAll(symbolPattern)) {
+    if (match[1]) symbols.add(match[1]);
   }
   return [...symbols];
 }

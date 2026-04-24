@@ -778,7 +778,11 @@ describe('direct reasoning mode', () => {
       status: 'succeeded',
       output: {
         path: 'src/runtime/direct-reasoning-mode.ts',
-        content: 'export async function handleDirectReasoningMode() {}',
+        content: [
+          'export async function handleDirectReasoningMode() {',
+          '  items.map((item) => item.content).forEach((content) => output.push(content));',
+          '}',
+        ].join('\n'),
       },
     }));
     const nowValues = [0, 0, 4_500, 4_500, 4_500];
@@ -845,7 +849,10 @@ describe('direct reasoning mode', () => {
       now,
     });
 
-    expect(result.content).toContain('Relevant implementation evidence found:');
+    expect(result.content).toContain('Relevant implementation evidence found from brokered read-only tools:');
+    expect(result.content).toContain('`handleDirectReasoningMode`');
+    expect(result.content).not.toContain('`push`');
+    expect(result.content).not.toContain('`content`');
     expect(result.metadata?.directReasoningStats).toMatchObject({
       toolCallCount: 1,
       timedOut: true,
@@ -1044,7 +1051,7 @@ describe('direct reasoning mode', () => {
     });
 
     expect(result.metadata?.directReasoningFailed).toBeUndefined();
-    expect(result.content).toContain('Relevant implementation evidence found:');
+    expect(result.content).toContain('Relevant implementation evidence found from brokered read-only tools:');
     expect(result.content).toContain('src/runtime/run-timeline.ts');
     expect(result.content).toContain('web/public/js/chat-panel.js');
     expect(result.content).toContain('web/public/js/pages/code.js');
