@@ -3,7 +3,7 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ChatMessage, ChatOptions } from '../llm/types.js';
 import { sandboxedSpawn, detectSandboxHealth, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import { createLogger } from '../util/logging.js';
@@ -4714,9 +4714,9 @@ function resolveWorkerLaunch(configuredEntryPoint?: string): {
   const extension = extname(resolvedEntry);
   if (extension === '.ts') {
     const tsxLoaderPath = resolve(workerManagerDir, '..', '..', 'node_modules', 'tsx', 'dist', 'loader.mjs');
-    const tsxImportTarget = existsSync(tsxLoaderPath) ? tsxLoaderPath : 'tsx';
+    const tsxImportTarget = existsSync(tsxLoaderPath) ? pathToFileURL(tsxLoaderPath).href : 'tsx';
     if (tsxImportTarget !== 'tsx') {
-      additionalReadPaths.add(resolveWorkerRuntimeRoot(tsxImportTarget));
+      additionalReadPaths.add(resolveWorkerRuntimeRoot(tsxLoaderPath));
     }
     return {
       command: process.execPath,

@@ -638,6 +638,7 @@ describe('WorkerManager', () => {
     const firstSpawnArgs = vi.mocked(sandbox.sandboxedSpawn).mock.calls[0]?.[1] ?? [];
     const firstSpawnSandboxConfig = vi.mocked(sandbox.sandboxedSpawn).mock.calls[0]?.[2];
     expect(firstSpawnArgs[0]).toBe('--import');
+    expect(String(firstSpawnArgs[1])).toMatch(/^file:\/\//);
     expect(String(firstSpawnArgs[1]).replaceAll('\\', '/')).toContain('node_modules/tsx/dist/loader.mjs');
     expect(firstSpawnSandboxConfig?.resourceLimits?.maxMemoryMb).toBe(0);
     const normalizedReadPaths = (firstSpawnSandboxConfig?.additionalReadPaths ?? [])
