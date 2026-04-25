@@ -62,7 +62,9 @@ function buildProviderOptionLabel(
   model: string | undefined,
 ): string {
   const providerDisplayName = getProviderTypeMetadata(providerType)?.displayName ?? providerType.replaceAll('_', ' ');
-  const sameIdentity = normalizeProviderIdentity(providerName) === normalizeProviderIdentity(providerDisplayName);
+  const normalizedProviderName = normalizeProviderIdentity(providerName);
+  const sameIdentity = normalizedProviderName === normalizeProviderIdentity(providerDisplayName)
+    || normalizedProviderName === normalizeProviderIdentity(providerType);
   const primaryLabel = sameIdentity ? providerDisplayName : providerName;
   const detailParts = [
     formatProviderTierLabel(providerTier),

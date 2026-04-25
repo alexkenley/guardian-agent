@@ -378,12 +378,14 @@ describe('validateConfig', () => {
       llm: {
         ...DEFAULT_CONFIG.llm,
         openrouterCoding: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
+        nvidiaCoding: { provider: 'nvidia', model: 'qwen/qwen3-coder-480b-a35b-instruct', credentialRef: 'llm.nvidia.primary' },
       },
       assistant: {
         ...DEFAULT_CONFIG.assistant,
         credentials: {
           refs: {
             'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+            'llm.nvidia.primary': { source: 'env', env: 'NVIDIA_API_KEY' },
           },
         },
       },
@@ -422,6 +424,36 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should accept NVIDIA Cloud as a managed-cloud preferred provider family', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        nvidiaGeneral: { provider: 'nvidia', model: 'qwen/qwen3-5-122b-a10b', credentialRef: 'llm.nvidia.primary' },
+        claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.nvidia.primary': { source: 'env', env: 'NVIDIA_API_KEY' },
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          preferredProviders: {
+            local: 'ollama',
+            managedCloud: 'nvidia',
+            frontier: 'claude',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should accept managed-cloud role bindings scoped by provider family', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
@@ -430,6 +462,7 @@ describe('validateConfig', () => {
         ollamaCloud: { provider: 'ollama_cloud', model: 'gpt-oss:120b', credentialRef: 'llm.ollama_cloud.primary' },
         openrouterGeneral: { provider: 'openrouter', model: 'qwen/qwen3.6-plus', credentialRef: 'llm.openrouter.primary' },
         openrouterCoding: { provider: 'openrouter', model: 'qwen/qwen3.6-coder', credentialRef: 'llm.openrouter.primary' },
+        nvidiaCoding: { provider: 'nvidia', model: 'qwen/qwen3-coder-480b-a35b-instruct', credentialRef: 'llm.nvidia.primary' },
         claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
       },
       assistant: {
@@ -438,6 +471,7 @@ describe('validateConfig', () => {
           refs: {
             'llm.ollama_cloud.primary': { source: 'env', env: 'OLLAMA_API_KEY' },
             'llm.openrouter.primary': { source: 'env', env: 'OPENROUTER_API_KEY' },
+            'llm.nvidia.primary': { source: 'env', env: 'NVIDIA_API_KEY' },
             'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
           },
         },
@@ -459,6 +493,9 @@ describe('validateConfig', () => {
                 openrouter: {
                   general: 'openrouterGeneral',
                   coding: 'openrouterCoding',
+                },
+                nvidia: {
+                  coding: 'nvidiaCoding',
                 },
               },
             },

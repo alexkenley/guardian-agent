@@ -3767,6 +3767,7 @@ async function main(): Promise<void> {
           category: 'browser',
           networkAccess: true,
           inheritEnv: false,
+          allowedEnvKeys: ['PLAYWRIGHT_BROWSERS_PATH'],
           timeoutMs: 60_000,
           maxCallsPerMinute: 60,
         });
@@ -4802,6 +4803,94 @@ async function main(): Promise<void> {
   });
 
   let deliverMessageClosure: ToolExecutorOptions['deliverMessage'] = undefined;
+  const recordApprovedToolExecutionForRouting = (
+    toolName: string,
+    args: Record<string, unknown>,
+    result: {
+      success: boolean;
+      status: string;
+      message?: string;
+      durationMs: number;
+      error?: string;
+      approvalId?: string;
+    },
+    request: ToolExecutionRequest,
+  ): void => {
+    const approvalId = result.approvalId?.trim();
+    if (!approvalId || request.origin !== 'assistant') return;
+
+    const pendingAction = pendingActionStore.findActiveByApprovalId(approvalId);
+    const approvalSummary = pendingAction?.blocker.approvalSummaries?.find((summary) => summary.id === approvalId);
+    const requestId = approvalSummary?.requestId?.trim()
+      || request.requestId?.trim()
+      || pendingAction?.executionId
+      || result.approvalId
+      || `${toolName}:${Date.now()}`;
+    const timestamp = Date.now();
+    const resultStatus = result.success
+      ? 'succeeded'
+      : result.status === 'denied'
+        ? 'denied'
+        : 'failed';
+    const resultMessage = result.message?.trim()
+      || result.error?.trim()
+      || (result.success ? `Tool '${toolName}' completed.` : `Tool '${toolName}' failed.`);
+    const eventId = `approval:${approvalId}:${toolName}:completed`;
+    const nodeId = `${toolName}:approval:${approvalId}`;
+    const toolCallId = `approval:${approvalId}`;
+    const channel = pendingAction?.scope.channel || request.channel || 'web';
+    const userId = pendingAction?.scope.userId || request.userId;
+    const agentId = request.agentId || pendingAction?.scope.agentId || 'default';
+    const originSurfaceId = pendingAction?.scope.surfaceId || request.surfaceId;
+    const payload = {
+      toolName,
+      approvalId,
+      args,
+      resultStatus,
+      resultMessage,
+      ...(result.error ? { errorMessage: result.error } : {}),
+    };
+
+    intentRoutingTrace.record({
+      stage: 'delegated_tool_call_completed',
+      requestId,
+      messageId: requestId,
+      userId,
+      channel,
+      agentId,
+      contentPreview: toolName,
+      details: {
+        ...(originSurfaceId ? { originSurfaceId } : {}),
+        ...(pendingAction?.executionId ? { executionId: pendingAction.executionId } : {}),
+        ...(pendingAction?.rootExecutionId ? { rootExecutionId: pendingAction.rootExecutionId } : {}),
+        ...(pendingAction?.codeSessionId ? { codeSessionId: pendingAction.codeSessionId } : {}),
+        ...(pendingAction?.id ? { pendingActionId: pendingAction.id } : {}),
+        eventId,
+        eventType: 'tool_call_completed',
+        nodeId,
+        toolCallId,
+        ...payload,
+      },
+    });
+
+    runTimeline.ingestDelegatedExecutionEvents({
+      parentRunId: pendingAction?.executionId ?? requestId,
+      taskRunId: request.requestId?.trim() || requestId,
+      parentExecutionId: pendingAction?.executionId ?? requestId,
+      taskExecutionId: request.requestId?.trim(),
+      rootExecutionId: pendingAction?.rootExecutionId ?? pendingAction?.executionId ?? requestId,
+      codeSessionId: pendingAction?.codeSessionId ?? request.codeContext?.sessionId,
+      agentId,
+      channel,
+      events: [{
+        eventId,
+        nodeId,
+        type: 'tool_call_completed' as const,
+        timestamp,
+        payload,
+      }],
+    });
+  };
 
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
@@ -4839,6 +4928,7 @@ async function main(): Promise<void> {
       await connectors?.continueAfterApprovalDecision(approvalId, decision, result);
     },
     onToolExecuted: (toolName, args, result, request) => {
+      recordApprovedToolExecutionForRouting(toolName, args, result, request);
       runtime.eventBus.emit({
         type: 'tool.executed',
         sourceAgentId: request.agentId ?? 'system',

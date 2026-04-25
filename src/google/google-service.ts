@@ -242,7 +242,7 @@ export class GoogleService {
       if (!endpoint) return { success: false, error: `Unknown service: ${svc}` };
 
       // Use the Google Discovery API to get the REST description.
-      const discoveryUrl = `https://discovery.googleapis.com/discovery/v1/apis/${svc}/${endpoint.version}/rest`;
+      const discoveryUrl = `https://www.googleapis.com/discovery/v1/apis/${svc}/${endpoint.version}/rest`;
       const resp = await fetch(discoveryUrl, { signal: AbortSignal.timeout(10_000) });
       if (!resp.ok) return { success: false, error: `Discovery API returned ${resp.status}` };
 

@@ -120,4 +120,27 @@ describe('chat provider selection', () => {
       model: 'qwen/qwen3.6-plus',
     });
   });
+
+  it('labels NVIDIA Cloud profiles as managed cloud in selector options', () => {
+    const config = createConfig();
+    config.llm.nvidia = {
+      provider: 'nvidia',
+      model: 'qwen/qwen3-coder-480b-a35b-instruct',
+      credentialRef: 'llm.nvidia.primary',
+    };
+    config.assistant.tools.preferredProviders = {
+      ...config.assistant.tools.preferredProviders,
+      managedCloud: 'nvidia',
+    };
+
+    expect(buildChatProviderSelectorOptions(config)).toContainEqual({
+      value: 'nvidia',
+      label: 'NVIDIA Cloud (managed cloud · qwen/qwen3-coder-480b-a35b-instruct)',
+      providerName: 'nvidia',
+      providerType: 'nvidia',
+      providerTier: 'managed_cloud',
+      providerLocality: 'external',
+      model: 'qwen/qwen3-coder-480b-a35b-instruct',
+    });
+  });
 });

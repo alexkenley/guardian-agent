@@ -61,9 +61,13 @@ describe('GoogleService', () => {
 
   it('schema returns discovery API data on success', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    let requestedUrl = '';
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      requestedUrl = url;
+      return Promise.resolve({
       ok: true,
       json: async () => ({ kind: 'discovery#restDescription', name: 'gmail' }),
+      });
     }) as unknown as typeof fetch;
 
     try {
@@ -71,6 +75,7 @@ describe('GoogleService', () => {
       const result = await svc.schema('gmail');
       expect(result.success).toBe(true);
       expect((result.data as Record<string, unknown>).name).toBe('gmail');
+      expect(requestedUrl).toBe('https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest');
     } finally {
       globalThis.fetch = originalFetch;
     }

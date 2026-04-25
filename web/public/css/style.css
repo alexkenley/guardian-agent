@@ -2080,6 +2080,108 @@ tr:hover td {
   margin-right: 0;
 }
 
+.config-provider-name-cell,
+.config-provider-type-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.config-provider-name-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.config-provider-type-label {
+  display: block;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.config-provider-type-id {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.provider-logo {
+  --provider-logo-bg: rgba(255, 255, 255, 0.08);
+  --provider-logo-fg: #fff;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: var(--provider-logo-bg);
+  color: var(--provider-logo-fg);
+  overflow: hidden;
+}
+
+.provider-logo--xs {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 5px;
+}
+
+.provider-logo--sm {
+  width: 1.65rem;
+  height: 1.65rem;
+}
+
+.provider-logo__img {
+  width: 68%;
+  height: 68%;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+}
+
+.provider-logo__fallback {
+  display: none;
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.provider-logo--text .provider-logo__fallback {
+  display: inline;
+}
+
+.provider-logo--ollama,
+.provider-logo--ollama_cloud,
+.provider-logo--anthropic,
+.provider-logo--google {
+  --provider-logo-bg: #f8fafc;
+  --provider-logo-fg: #111827;
+  border-color: rgba(17, 24, 39, 0.14);
+}
+
+.provider-logo--ollama .provider-logo__img,
+.provider-logo--ollama_cloud .provider-logo__img,
+.provider-logo--anthropic .provider-logo__img,
+.provider-logo--google .provider-logo__img {
+  filter: none;
+}
+
+.provider-logo--openrouter,
+.provider-logo--openai,
+.provider-logo--xai {
+  --provider-logo-bg: #111827;
+}
+
+.provider-logo--nvidia { --provider-logo-bg: #76b900; }
+.provider-logo--mistral { --provider-logo-bg: #ff7000; }
+.provider-logo--groq { --provider-logo-bg: #f55036; }
+.provider-logo--deepseek { --provider-logo-bg: #2f80ed; }
+.provider-logo--together { --provider-logo-bg: #6d5dfc; }
+
 .config-provider-current {
   display: inline-flex;
   align-items: center;

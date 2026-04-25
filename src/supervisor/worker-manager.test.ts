@@ -5898,6 +5898,46 @@ describe('WorkerManager', () => {
 
   it('stores new pending actions created while a worker approval continuation is running', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
+    const continuationTaskContract = buildDelegatedTaskContract(undefined);
+    const continuationToolMetadata = (toolName: string, status: 'succeeded' | 'pending_approval') => buildDelegatedExecutionMetadata(
+      buildDelegatedSyntheticEnvelope({
+        taskContract: continuationTaskContract,
+        runStatus: status === 'pending_approval' ? 'suspended' : 'completed',
+        stopReason: status === 'pending_approval' ? 'approval_required' : 'end_turn',
+        operatorSummary: `${toolName} ${status}.`,
+        evidenceReceipts: [{
+          receiptId: `receipt-${toolName}-${status}`,
+          sourceType: 'tool_call',
+          toolName,
+          status,
+          refs: [],
+          summary: `${toolName} ${status}.`,
+          startedAt: 10,
+          endedAt: 11,
+        }],
+        events: [
+          {
+            eventId: `${toolName}:${status}:started`,
+            type: 'tool_call_started',
+            timestamp: 10,
+            payload: {
+              toolName,
+              summary: `${toolName} started.`,
+            },
+          },
+          {
+            eventId: `${toolName}:${status}:completed`,
+            type: 'tool_call_completed',
+            timestamp: 11,
+            payload: {
+              toolName,
+              resultStatus: status,
+              summary: `${toolName} ${status}.`,
+            },
+          },
+        ],
+      }),
+    );
 
     workerMessageHandler = (params) => {
       const message = (params.message ?? {}) as {
@@ -5918,11 +5958,19 @@ describe('WorkerManager', () => {
                 argsPreview: '{"name":"Weekly Security Posture Check"}',
               },
             ]),
+            ...continuationToolMetadata('second_brain_task_upsert', 'succeeded'),
+            executionEvents: [
+              ...(continuationToolMetadata('second_brain_task_upsert', 'succeeded').executionEvents as unknown[]),
+              ...(continuationToolMetadata('automation_save', 'pending_approval').executionEvents as unknown[]),
+            ],
           },
         };
       }
       if (continuation?.approvalId === 'approval-automation-2') {
-        return { content: 'Created the task and weekly automation.' };
+        return {
+          content: 'Created the task and weekly automation.',
+          metadata: continuationToolMetadata('automation_save', 'succeeded'),
+        };
       }
       return {
         content: 'Waiting for approval to create the Second Brain task.',
@@ -5948,6 +5996,14 @@ describe('WorkerManager', () => {
         ...record,
       } satisfies PendingActionRecord)),
     };
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
+      ingestDelegatedExecutionEvents: vi.fn(),
+    };
 
     const manager = new WorkerManager(
       {
@@ -5969,6 +6025,8 @@ describe('WorkerManager', () => {
       undefined,
       {
         pendingActionStore,
+        intentRoutingTrace,
+        runTimeline,
         now: () => 1,
       },
     );
@@ -6042,6 +6100,48 @@ describe('WorkerManager', () => {
     );
 
     expect(completed?.content).toBe('Created the task and weekly automation.');
+    const continuationToolTraces = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry.stage === 'delegated_tool_call_completed');
+    expect(continuationToolTraces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'm-security-follow-up',
+        details: expect.objectContaining({
+          toolName: 'second_brain_task_upsert',
+          resultStatus: 'succeeded',
+        }),
+      }),
+      expect.objectContaining({
+        requestId: 'm-security-follow-up',
+        details: expect.objectContaining({
+          toolName: 'automation_save',
+          resultStatus: 'pending_approval',
+        }),
+      }),
+      expect.objectContaining({
+        requestId: 'm-security-follow-up',
+        details: expect.objectContaining({
+          toolName: 'automation_save',
+          resultStatus: 'succeeded',
+        }),
+      }),
+    ]));
+    const delegatedTimelineEvents = runTimeline.ingestDelegatedExecutionEvents.mock.calls.map(([call]) => call);
+    expect(delegatedTimelineEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        parentRunId: 'm-security-follow-up',
+        taskRunId: expect.stringMatching(/^delegated-task:job-[^:]+$/),
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool_call_completed',
+            payload: expect.objectContaining({
+              toolName: 'automation_save',
+              resultStatus: 'succeeded',
+            }),
+          }),
+        ]),
+      }),
+    ]));
     manager.shutdown();
   });
 

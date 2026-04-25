@@ -4,8 +4,8 @@
  * All providers are curated and ship with the codebase. No external
  * plugin loading or dynamic imports — this eliminates supply chain risk.
  *
- * OpenAI-compatible providers (OpenRouter, Groq, Mistral, DeepSeek,
- * Together, xAI, Google Gemini) reuse the OpenAIProvider with
+ * OpenAI-compatible providers (OpenRouter, NVIDIA Cloud, Groq, Mistral,
+ * DeepSeek, Together, xAI, Google Gemini) reuse the OpenAIProvider with
  * appropriate defaults.
  */
 

@@ -47,6 +47,11 @@ describe('ProviderRegistry', () => {
     expect(provider.name).toBe('openrouter');
   });
 
+  it('creates nvidia provider (OpenAI-compatible managed cloud)', () => {
+    const provider = registry.createProvider(makeLLMConfig('nvidia', { apiKey: 'nvapi-test' }));
+    expect(provider.name).toBe('nvidia');
+  });
+
   it('creates groq provider (OpenAI-compatible)', () => {
     const provider = registry.createProvider(makeLLMConfig('groq', { apiKey: 'gsk_test' }));
     expect(provider.name).toBe('groq');
@@ -109,6 +114,7 @@ describe('ProviderRegistry', () => {
     expect(names).toContain('ollama');
     expect(names).toContain('ollama_cloud');
     expect(names).toContain('openrouter');
+    expect(names).toContain('nvidia');
     expect(names).toContain('anthropic');
     expect(names).toContain('openai');
     expect(names).toContain('groq');
@@ -117,7 +123,7 @@ describe('ProviderRegistry', () => {
     expect(names).toContain('together');
     expect(names).toContain('xai');
     expect(names).toContain('google');
-    expect(names.length).toBe(11);
+    expect(names.length).toBe(12);
   });
 
   it('listProviderTypes returns metadata for all providers', () => {
@@ -140,6 +146,13 @@ describe('ProviderRegistry', () => {
     expect(openrouter?.tier).toBe('managed_cloud');
     expect(openrouter?.requiresCredential).toBe(true);
     expect(openrouter?.defaultBaseUrl).toBe('https://openrouter.ai/api/v1');
+
+    const nvidia = types.find(t => t.name === 'nvidia');
+    expect(nvidia?.displayName).toBe('NVIDIA Cloud');
+    expect(nvidia?.compatible).toBe(true);
+    expect(nvidia?.tier).toBe('managed_cloud');
+    expect(nvidia?.requiresCredential).toBe(true);
+    expect(nvidia?.defaultBaseUrl).toBe('https://integrate.api.nvidia.com/v1');
 
     const groq = types.find(t => t.name === 'groq');
     expect(groq?.displayName).toBe('Groq');

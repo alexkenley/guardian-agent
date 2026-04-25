@@ -155,7 +155,7 @@ export interface AssistantCredentialsConfig {
 export interface ManagedCloudRoutingConfig {
   /** Whether managed-cloud role routing is enabled. Default: true. */
   enabled: boolean;
-  /** Optional per-provider-family managed-cloud profile overrides. Keys are managed-cloud provider families such as ollama_cloud or openrouter. */
+  /** Optional per-provider-family managed-cloud profile overrides. Keys are managed-cloud provider families such as ollama_cloud, openrouter, or nvidia. */
   providerRoleBindings?: Record<string, ManagedCloudRoleBindingMap>;
   /** Legacy cross-family managed-cloud profile overrides kept for backward compatibility with older single-family configs. */
   roleBindings?: ManagedCloudRoleBindingMap;
@@ -195,7 +195,7 @@ export interface AssistantModelSelectionConfig {
 
 /** Configuration for a single LLM provider. */
 export interface LLMConfig {
-  /** Provider type. Built-in families come from the runtime registry, including ollama, ollama_cloud, openrouter, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
+  /** Provider type. Built-in families come from the runtime registry, including ollama, ollama_cloud, openrouter, nvidia, openai, anthropic, groq, mistral, deepseek, together, xai, and google. */
   provider: string;
   /** Whether this configured provider profile is active for runtime routing. Default: true. */
   enabled?: boolean;
@@ -1572,7 +1572,7 @@ export interface AssistantToolsConfig {
   /** When true, tools are automatically routed between local and external providers based on task type.
    * When false, all tools use the derived primary provider only. Default: true. */
   providerRoutingEnabled?: boolean;
-  /** Preferred provider for each routed tier. `managedCloud` now points at the managed-cloud provider family (for example ollama_cloud or openrouter). `external` remains a legacy alias for older configs. */
+  /** Preferred provider for each routed tier. `managedCloud` now points at the managed-cloud provider family (for example ollama_cloud, openrouter, or nvidia). `external` remains a legacy alias for older configs. */
   preferredProviders?: {
     local?: string;
     managedCloud?: string;
@@ -1757,7 +1757,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       workerEntryPoint: '',
       capabilityTokenTtlMs: 600_000,
       capabilityTokenMaxToolCalls: 0,
-      llmEgressHosts: ['api.anthropic.com', 'api.openai.com'],
+      llmEgressHosts: ['api.anthropic.com', 'api.openai.com', 'integrate.api.nvidia.com'],
       llmCredentialRotationMs: 300_000,
       taintPolicy: {
         enabled: false,
@@ -2098,10 +2098,11 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'graph.microsoft.com',
         'blob.core.windows.net',
         'html.duckduckgo.com',
-        'api.search.brave.com',
-        'api.perplexity.ai',
-        'openrouter.ai',
-      ],
+      'api.search.brave.com',
+      'api.perplexity.ai',
+      'openrouter.ai',
+      'integrate.api.nvidia.com',
+    ],
       browser: { enabled: true },
       cloud: {
         enabled: false,

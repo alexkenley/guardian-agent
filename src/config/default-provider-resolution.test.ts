@@ -129,6 +129,30 @@ describe('resolveDerivedDefaultProvider', () => {
     expect(resolveDerivedDefaultProvider(config)).toBe('openrouterGeneral');
   });
 
+  it('treats NVIDIA Cloud profiles as managed-cloud candidates', () => {
+    const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+    config.llm = {
+      ollama: config.llm.ollama,
+      nvidiaGeneral: {
+        provider: 'nvidia',
+        model: 'qwen/qwen3-5-122b-a10b',
+        credentialRef: 'llm.nvidia.primary',
+      },
+      anthropic: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        credentialRef: 'llm.anthropic.primary',
+      },
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'nvidia',
+      frontier: 'anthropic',
+    };
+
+    expect(resolveDerivedDefaultProvider(config)).toBe('nvidiaGeneral');
+  });
+
   it('uses the selected managed-cloud provider family general binding', () => {
     const config = createConfig();
     config.llm.openrouterGeneral = {

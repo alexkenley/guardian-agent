@@ -5350,6 +5350,16 @@ export class ToolExecutor {
   ): Promise<ToolRunResponse> {
     job.status = 'running';
     job.startedAt = this.now();
+    const emitToolExecuted = (result: {
+      success: boolean;
+      status: string;
+      message?: string;
+      durationMs: number;
+      error?: string;
+      approvalId?: string;
+    }) => {
+      this.options.onToolExecuted?.(request.toolName, args, result, request);
+    };
 
     // Dry-run mode: validate but don't execute mutating operations
     if (request.dryRun && job.risk !== 'read_only') {
@@ -5358,11 +5368,19 @@ export class ToolExecutor {
       job.durationMs = 0;
       job.resultPreview = '[dry-run preview]';
       const preview = this.buildDryRunPreview(job.toolName, args);
+      const message = `[DRY RUN] Tool '${job.toolName}' validated. ${preview}`;
+      emitToolExecuted({
+        success: true,
+        status: job.status,
+        message,
+        durationMs: job.durationMs,
+        approvalId: job.approvalId,
+      });
       return {
         success: true,
         status: job.status,
         jobId: job.id,
-        message: `[DRY RUN] Tool '${job.toolName}' validated. ${preview}`,
+        message,
         output: { dryRun: true, preview, args },
       };
     }
@@ -5390,6 +5408,14 @@ export class ToolExecutor {
         if (definition) {
           this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
         }
+        emitToolExecuted({
+          success: false,
+          status: job.status,
+          message: job.error,
+          error: job.error,
+          durationMs: job.durationMs,
+          approvalId: job.approvalId,
+        });
         return {
           success: false,
           status: job.status,
@@ -5407,6 +5433,14 @@ export class ToolExecutor {
         if (definition) {
           this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
         }
+        emitToolExecuted({
+          success: false,
+          status: job.status,
+          message: job.error,
+          error: job.error,
+          durationMs: job.durationMs,
+          approvalId: job.approvalId,
+        });
         return {
           success: false,
           status: job.status,
@@ -5437,6 +5471,14 @@ export class ToolExecutor {
         if (definition) {
           this.recordToolChainOutcome(definition, request, job.argsHash, job.status);
         }
+        emitToolExecuted({
+          success: false,
+          status: job.status,
+          message: fullError,
+          error: job.error,
+          durationMs: job.durationMs,
+          approvalId: job.approvalId,
+        });
         return {
           success: false,
           status: job.status,
@@ -5466,18 +5508,13 @@ export class ToolExecutor {
         verificationStatus: verification.status,
       };
       
-      this.options.onToolExecuted?.(
-        request.toolName,
-        args,
-        {
-          success: successResponse.success,
-          status: successResponse.status,
-          message: successResponse.message,
-          durationMs: job.durationMs,
-          approvalId: job.approvalId,
-        },
-        request
-      );
+      emitToolExecuted({
+        success: successResponse.success,
+        status: successResponse.status,
+        message: successResponse.message,
+        durationMs: job.durationMs,
+        approvalId: job.approvalId,
+      });
       
       return successResponse;
     } catch (err) {
@@ -5498,19 +5535,14 @@ export class ToolExecutor {
         message,
       };
       
-      this.options.onToolExecuted?.(
-        request.toolName,
-        args,
-        {
-          success: failedResponse.success,
-          status: failedResponse.status,
-          message: failedResponse.message,
-          error: job.error,
-          durationMs: job.durationMs,
-          approvalId: job.approvalId,
-        },
-        request
-      );
+      emitToolExecuted({
+        success: failedResponse.success,
+        status: failedResponse.status,
+        message: failedResponse.message,
+        error: job.error,
+        durationMs: job.durationMs,
+        approvalId: job.approvalId,
+      });
       
       return failedResponse;
     }

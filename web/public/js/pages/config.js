@@ -46,6 +46,7 @@ const FALLBACK_PROVIDER_TYPES = [
   { name: 'ollama', displayName: 'Ollama', compatible: false, locality: 'local', tier: 'local', requiresCredential: false, defaultBaseUrl: 'http://127.0.0.1:11434' },
   { name: 'ollama_cloud', displayName: 'Ollama Cloud', compatible: false, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://ollama.com' },
   { name: 'openrouter', displayName: 'OpenRouter', compatible: true, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://openrouter.ai/api/v1' },
+  { name: 'nvidia', displayName: 'NVIDIA Cloud', compatible: true, locality: 'external', tier: 'managed_cloud', requiresCredential: true, defaultBaseUrl: 'https://integrate.api.nvidia.com/v1' },
   { name: 'openai', displayName: 'OpenAI', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
   { name: 'anthropic', displayName: 'Anthropic', compatible: false, locality: 'external', tier: 'frontier', requiresCredential: true },
   { name: 'groq', displayName: 'Groq', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.groq.com/openai/v1' },
@@ -55,10 +56,25 @@ const FALLBACK_PROVIDER_TYPES = [
   { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.x.ai/v1' },
   { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
 ];
+const SIMPLE_ICON_BASE_URL = 'https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/';
+const PROVIDER_LOGO_META = {
+  ollama: { slug: 'ollama', fallback: 'Ol' },
+  ollama_cloud: { slug: 'ollama', fallback: 'Ol' },
+  openrouter: { slug: 'openrouter', fallback: 'OR' },
+  nvidia: { slug: 'nvidia', fallback: 'NV' },
+  openai: { slug: 'openai', fallback: 'AI' },
+  anthropic: { slug: 'anthropic', fallback: 'An' },
+  mistral: { slug: 'mistralai', fallback: 'Mi' },
+  xai: { slug: 'x', fallback: 'x' },
+  google: { slug: 'googlegemini', fallback: 'G' },
+  groq: { fallback: 'GQ' },
+  deepseek: { fallback: 'DS' },
+  together: { fallback: 'TA' },
+};
 const CONFIG_HELP = {
   aiSearch: {
     'AI Provider Configuration': {
-      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud providers such as Ollama Cloud and OpenRouter, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
+      whatItIs: 'This section is where you define the actual LLM profiles Guardian can use, including local Ollama, managed-cloud providers such as Ollama Cloud, OpenRouter, and NVIDIA Cloud, and frontier hosted APIs such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, and Google.',
       whatSeeing: 'You are seeing separate local, managed-cloud, and frontier provider groups, saved provider-profile buttons, provider-type selectors, alphabetized model controls, credential fields, endpoint overrides, advanced Ollama runtime fields, and test, save, and delete actions.',
       whatCanDo: 'Add a new provider, edit or delete an existing one, switch models, load live model lists where supported, replace stored credentials, and decide which named provider profiles exist for routing and fallback.',
       howLinks: 'Every assistant response, automation, tool-routing decision, and fallback chain ultimately depends on the provider profiles configured here, while the Model Auto Selection Policy below decides how Guardian prefers between those profiles at runtime.',
@@ -310,7 +326,7 @@ function renderAiProvidersTab(panel) {
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
     kicker: 'AI Providers',
     compact: true,
-    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing, including local Ollama, managed-cloud providers such as Ollama Cloud or OpenRouter, and hosted model APIs.',
+    whatItIs: 'This tab configures the language-model providers Guardian can use for chat, automation, fallback, and routing, including local Ollama, managed-cloud providers such as Ollama Cloud, OpenRouter, or NVIDIA Cloud, and hosted model APIs.',
     whatSeeing: 'You are seeing provider editors, configured provider status, model auto-selection controls, and shared credential-reference management.',
     whatCanDo: 'Add local or hosted providers, test connectivity, choose models, manage provider defaults and managed-cloud role routing, and manage the credential refs those providers can use.',
     howLinks: 'These provider profiles drive the model paths used across the rest of the product.',
@@ -863,6 +879,13 @@ function createProviderPanel(config, providers, panel) {
       if (inferredRole === 'direct' || inferredRole === 'toolLoop') return 'moonshotai/kimi-k2.6';
       return 'qwen/qwen3.6-plus';
     }
+    if (normalizedType === 'nvidia') {
+      const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
+      if (inferredRole === 'coding') return 'qwen/qwen3-coder-480b-a35b-instruct';
+      if (inferredRole === 'toolLoop') return 'moonshotai/kimi-k2-thinking';
+      if (inferredRole === 'direct') return 'moonshotai/kimi-k2-instruct';
+      return 'qwen/qwen3-5-122b-a10b';
+    }
     if (normalizedType === 'anthropic') return 'claude-sonnet-4-6';
     if (normalizedType === 'openai') return 'gpt-4o';
     if (normalizedType === 'groq') return 'llama-3.3-70b-versatile';
@@ -1222,6 +1245,7 @@ function createProviderPanel(config, providers, panel) {
               <label style="display:flex; align-items:center; margin-top:0.1rem; cursor:pointer;" title="Enable this provider for live routing and runtime use.">
                 <input type="checkbox" data-provider-enabled-toggle="${escAttr(name)}"${isEnabled ? ' checked' : ''}>
               </label>
+              ${renderProviderLogo(info.provider, 'sm')}
               <div style="display:flex; flex-direction:column; overflow:hidden; min-width:0;">
                 <span style="font-size: 0.85rem; font-weight: ${isActive ? '600' : '500'}; color: ${isEnabled ? (isActive ? 'var(--text-primary)' : 'var(--text-secondary)') : 'var(--text-muted)'}; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${esc(name)}</span>
                 <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)} • ${esc(tierLabel)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
@@ -1674,6 +1698,29 @@ function normalizeProviderTypeName(providerType) {
   return String(providerType || '').trim().toLowerCase();
 }
 
+function buildProviderLogoFallback(providerType) {
+  const words = String(providerType || 'AI')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return 'AI';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return words.slice(0, 2).map((word) => word[0]?.toUpperCase() || '').join('') || 'AI';
+}
+
+function renderProviderLogo(providerType, size = 'md') {
+  const normalizedType = normalizeProviderTypeName(providerType);
+  const logoMeta = PROVIDER_LOGO_META[normalizedType] || { fallback: buildProviderLogoFallback(normalizedType) };
+  const safeTypeClass = normalizedType.replace(/[^a-z0-9_-]+/g, '-') || 'generic';
+  const label = getProviderDisplayName(normalizedType);
+  const fallback = logoMeta.fallback || buildProviderLogoFallback(normalizedType || label);
+  const image = logoMeta.slug
+    ? `<img class="provider-logo__img" src="${escAttr(`${SIMPLE_ICON_BASE_URL}${logoMeta.slug}.svg`)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.classList.add('provider-logo--text');this.remove();">`
+    : '';
+  return `<span class="provider-logo provider-logo--${escAttr(size)} provider-logo--${escAttr(safeTypeClass)}${image ? '' : ' provider-logo--text'}" title="${escAttr(label)}" aria-hidden="true">${image}<span class="provider-logo__fallback">${esc(fallback)}</span></span>`;
+}
+
 function getManagedCloudProviderTypes(providerMap) {
   return [...new Set(
     Object.values(providerMap || {})
@@ -2054,7 +2101,7 @@ function createProviderStatusTable(config, providers, panel) {
       provider: cfg.provider,
       locality,
       tier,
-      markup: '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>',
+      markup: '<tr><td><div class="config-provider-name-cell">' + renderProviderLogo(cfg.provider, 'sm') + '<div class="config-provider-name-text"><strong>' + esc(name) + '</strong>' + defaultBadges + '</div></div></td><td><span class="config-provider-type-label">' + esc(getProviderDisplayName(cfg.provider)) + '</span><span class="config-provider-type-id">' + esc(cfg.provider) + '</span></td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>',
     };
   })).map((entry) => entry.markup).join('');
 
@@ -6230,11 +6277,11 @@ function createGenericHelpFactory(area) {
       howLinks: 'Local providers become selectable model paths for chat, workflows, and tool-routing decisions elsewhere in the product.',
     },
     'Managed Cloud Provider Settings': {
-      whatItIs: 'This section is the editor for a managed-cloud provider profile that sits between the local and frontier lanes, such as Ollama Cloud or OpenRouter.',
+      whatItIs: 'This section is the editor for a managed-cloud provider profile that sits between the local and frontier lanes, such as Ollama Cloud, OpenRouter, or NVIDIA Cloud.',
       whatSeeing: 'You are seeing the managed-cloud provider name, provider family, model, credential mode, base URL, any Ollama-only advanced runtime options, and test, save, and delete actions.',
       whatCanDo: 'Configure one or more named managed-cloud profiles, let Guardian suggest a starting model from the profile name, validate connectivity, and prepare those profiles for managed-cloud routed defaults or role-based routing.',
       howLinks: 'These profiles back Guardian’s managed-cloud tier and can be bound to general, direct, tool-loop, or coding work in the Model Auto Selection Policy.',
-      whenToUse: 'Current recommended starting mappings depend on provider family: Ollama Cloud general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, coding `qwen3-coder:480b`; OpenRouter general/coding `qwen/qwen3.6-plus`, direct/tool loop `moonshotai/kimi-k2.6`.',
+      whenToUse: 'Current recommended starting mappings depend on provider family: Ollama Cloud general `gpt-oss:120b`, direct `minimax-m2.1`, tool loop `glm-4.7`, coding `qwen3-coder:480b`; OpenRouter general/coding `qwen/qwen3.6-plus`, direct/tool loop `moonshotai/kimi-k2.6`; NVIDIA Cloud general `qwen/qwen3-5-122b-a10b`, direct `moonshotai/kimi-k2-instruct`, tool loop `moonshotai/kimi-k2-thinking`, coding `qwen/qwen3-coder-480b-a35b-instruct`.',
       whereNext: 'Use the direct API model IDs returned by live model discovery for the managed-cloud provider family you selected.',
     },
     'Frontier Provider Settings': {
@@ -6248,7 +6295,7 @@ function createGenericHelpFactory(area) {
       whatSeeing: 'You are seeing the top-level auto-policy posture, bias toggles for managed-cloud versus frontier use, and the managed-cloud role-routing bindings for named managed-cloud profiles.',
       whatCanDo: 'Keep Auto balanced, bias more aggressively toward frontier quality, and bind different managed-cloud profiles to general, direct-answer, tool-loop, or coding work.',
       howLinks: 'These controls shape which configured providers Guardian prefers at runtime. Guardian derives its internal primary provider from these routed defaults, with managed cloud preferred when it is configured. When a specific managed-cloud role is unset, Guardian uses the explicit `general` profile first when one is set, otherwise it can infer a profile from the provider name before falling back to the managed-cloud routed default.',
-      whenToUse: 'A good current starting point is one general managed-cloud profile, then optional direct, tool-loop, and coding profiles. For OpenRouter, `qwen/qwen3.6-plus` and `moonshotai/kimi-k2.6` are good starting points.',
+      whenToUse: 'A good current starting point is one general managed-cloud profile, then optional direct, tool-loop, and coding profiles. For OpenRouter, `qwen/qwen3.6-plus` and `moonshotai/kimi-k2.6` are good starting points. For NVIDIA Cloud, start with `qwen/qwen3-coder-480b-a35b-instruct` for coding and Kimi K2 profiles for direct or tool-loop work.',
     },
     'Cloud Configuration': {
       whatItIs: 'This section is the advanced raw-config editor for `assistant.tools.cloud` rather than the guided Cloud page workflow.',

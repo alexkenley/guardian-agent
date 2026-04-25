@@ -40,6 +40,15 @@ const PROVIDER_TYPE_METADATA: Record<string, ProviderTypeMetadata> = {
     requiresCredential: true,
     defaultBaseUrl: 'https://openrouter.ai/api/v1',
   },
+  nvidia: {
+    name: 'nvidia',
+    displayName: 'NVIDIA Cloud',
+    compatible: true,
+    locality: 'external',
+    tier: 'managed_cloud',
+    requiresCredential: true,
+    defaultBaseUrl: 'https://integrate.api.nvidia.com/v1',
+  },
   openai: {
     name: 'openai',
     displayName: 'OpenAI',
@@ -116,6 +125,7 @@ const PROVIDER_TYPE_ORDER = [
   'ollama',
   'ollama_cloud',
   'openrouter',
+  'nvidia',
   'openai',
   'anthropic',
   'groq',

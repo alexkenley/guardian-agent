@@ -300,6 +300,51 @@ describe('execution profiles', () => {
     expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'openrouter-coding'");
   });
 
+  it('uses NVIDIA Cloud role bindings when the NVIDIA managed-cloud family is selected', () => {
+    const config = createConfig();
+    config.llm['nvidia-general'] = {
+      provider: 'nvidia',
+      model: 'qwen/qwen3-5-122b-a10b',
+      credentialRef: 'llm.nvidia.primary',
+    };
+    config.llm['nvidia-coding'] = {
+      provider: 'nvidia',
+      model: 'qwen/qwen3-coder-480b-a35b-instruct',
+      credentialRef: 'llm.nvidia.primary',
+    };
+    config.assistant.tools.preferredProviders = {
+      ...config.assistant.tools.preferredProviders,
+      managedCloud: 'nvidia',
+    };
+    config.assistant.tools.modelSelection = {
+      ...(config.assistant.tools.modelSelection || {}),
+      managedCloudRouting: {
+        enabled: true,
+        providerRoleBindings: {
+          nvidia: {
+            general: 'nvidia-general',
+            coding: 'nvidia-coding',
+          },
+        },
+      },
+    };
+
+    const profile = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision(),
+      mode: 'managed-cloud-only',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'nvidia-coding',
+      providerModel: 'qwen/qwen3-coder-480b-a35b-instruct',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
+    });
+    expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'nvidia-coding'");
+  });
+
   it('uses the managed-cloud coding profile for explicit remote sandbox runs in balanced auto mode', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),

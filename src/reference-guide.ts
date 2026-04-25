@@ -135,7 +135,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Open `#/config` first. That is the main setup surface for AI providers, auth, integrations, search, and appearance.',
                   'In Configuration > AI Providers add at least one usable AI profile before expecting normal chat to work well.',
                   'Each saved AI profile now has an enable checkbox in the AI Providers list. Unchecking it removes that profile from live routing without deleting its settings.',
-                  'If you want the simplest private setup, start with local Ollama. If you want a hosted fallback, add Ollama Cloud or OpenRouter as a managed-cloud provider, or add a frontier provider after that.',
+                  'If you want the simplest private setup, start with local Ollama. If you want a hosted fallback, add Ollama Cloud, OpenRouter, or NVIDIA Cloud as a managed-cloud provider, or add a frontier provider after that.',
                   'For managed cloud, choose the active provider family in Model Auto Selection Policy, then bind that family\'s profiles for general, direct, tool-loop, and coding work.',
                   'Use the web configuration forms or CLI `/config` instead of editing config files by hand.',
                 ],
@@ -144,7 +144,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'AI Provider Basics',
                 items: [
                   'Local path: install Ollama, pull a model, then add that profile in Configuration > AI Providers.',
-                  'Managed-cloud path: add Ollama Cloud for remote Ollama-native access, or OpenRouter when you want OpenRouter-hosted models in the managed-cloud tier.',
+                  'Managed-cloud path: add Ollama Cloud for remote Ollama-native access, OpenRouter for OpenRouter-hosted models, or NVIDIA Cloud for NVIDIA NIM models in the managed-cloud tier.',
                   'Frontier path: add OpenAI, Anthropic, Google Gemini, Groq, Mistral, DeepSeek, Together, or xAI when you want a stronger hosted fallback or an explicit high-quality tier.',
                   'Use Configuration > AI Providers or CLI `/providers` to confirm connectivity and model discovery after each provider change.',
                   'Use Auto mode for normal operation once the provider tiers you care about are configured correctly.',
@@ -638,16 +638,16 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'ollama-cloud',
             title: 'Connect Managed Cloud Providers',
-            summary: 'Configure Ollama Cloud or OpenRouter as the managed-cloud middle tier when you want hosted models without routing every external request to the frontier tier.',
+            summary: 'Configure Ollama Cloud, OpenRouter, or NVIDIA Cloud as the managed-cloud middle tier when you want hosted models without routing every external request to the frontier tier.',
             sections: [
               {
                 title: 'Managed-Cloud Setup',
                 items: [
-                  'In Configuration > AI Providers use the managed-cloud editor to add Ollama Cloud or OpenRouter profiles.',
+                  'In Configuration > AI Providers use the managed-cloud editor to add Ollama Cloud, OpenRouter, or NVIDIA Cloud profiles.',
                   'Set a profile name, the remote model, and the matching API key or credential ref.',
                   'While creating a new managed-cloud profile, Guardian suggests a starting model from the profile name, but you can still change it before saving.',
                   'Managed-cloud providers sit between local Ollama and frontier hosted providers in the provider list and Auto mode.',
-                  'In Model Auto Selection Policy choose the managed-cloud provider family Auto mode should use, such as Ollama Cloud or OpenRouter.',
+                  'In Model Auto Selection Policy choose the managed-cloud provider family Auto mode should use, such as Ollama Cloud, OpenRouter, or NVIDIA Cloud.',
                   'You can save multiple named profiles per managed-cloud family, for example a general profile plus separate direct, tools, and coding profiles.',
                   'A saved managed-cloud profile can be disabled from the left-side profile list without deleting it.',
                   'If you use multiple managed-cloud profiles, Configuration > AI Providers > Model Auto Selection Policy lets you bind profiles separately for each provider family.',
@@ -658,7 +658,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Advanced Settings',
                 items: [
                   'Ollama Cloud profiles support the same Ollama-native controls as local Ollama, including keep-alive, think mode, and native options JSON.',
-                  'OpenRouter profiles use the OpenAI-compatible base URL path; leave the default base URL unless you have a deliberate reason to override it.',
+                  'OpenRouter and NVIDIA Cloud profiles use OpenAI-compatible base URL paths; leave the defaults unless you have a deliberate reason to override them.',
                 ],
               },
               {
@@ -670,10 +670,17 @@ export function getReferenceGuide(): ReferenceGuide {
                 ],
               },
               {
+                title: 'Current NVIDIA Cloud Role Models',
+                items: [
+                  'Treat these as starting recommendations for NVIDIA NIM: `general` -> `qwen/qwen3-5-122b-a10b`, `direct` -> `moonshotai/kimi-k2-instruct`, `tools` -> `moonshotai/kimi-k2-thinking`, `coding` -> `qwen/qwen3-coder-480b-a35b-instruct`.',
+                  'Use the exact model IDs returned by NVIDIA Cloud model discovery because NIM model availability can vary by account and catalog rollout.',
+                ],
+              },
+              {
                 title: 'Validation',
                 items: [
                   'Use Configuration > AI Providers or CLI `/providers` to confirm model discovery and connectivity.',
-                  'If model loading fails, verify the API key first and then confirm the model exists for your Ollama Cloud or OpenRouter account.',
+                  'If model loading fails, verify the API key first and then confirm the model exists for your Ollama Cloud, OpenRouter, or NVIDIA Cloud account.',
                   'Guardian does not hardcode managed-cloud plan concurrency in its config. Save the profiles you want, then let the upstream provider enforce its own plan-level concurrency and queueing.',
                 ],
               },
@@ -682,7 +689,7 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'cloud-providers',
             title: 'Connect Hosted AI Providers',
-            summary: 'Add hosted models from managed-cloud providers such as OpenRouter, or frontier providers such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini.',
+            summary: 'Add hosted models from managed-cloud providers such as OpenRouter or NVIDIA Cloud, or frontier providers such as OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini.',
             sections: [
               {
                 title: 'External Provider Setup',
@@ -699,6 +706,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian supports local, managed-cloud, and frontier hosted AI provider tiers.',
                   'Use Ollama Cloud when you want Ollama-native managed access without moving all the way to a different frontier provider family.',
                   'Use OpenRouter when you want OpenRouter-hosted models, such as Qwen or Kimi coding models, inside the managed-cloud tier.',
+                  'Use NVIDIA Cloud when you want NVIDIA NIM hosted models, such as Qwen3 Coder, Kimi K2, or Nemotron, inside the managed-cloud tier.',
                   'Use a frontier hosted provider when you want higher-quality responses or a fallback path beyond local and managed cloud.',
                   'Use the web picker to choose from the built-in supported services.',
                 ],

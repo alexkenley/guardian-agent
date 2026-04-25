@@ -111,6 +111,7 @@ describe('createProviderConfigHelpers', () => {
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', '  direct-key  ')).toBe('direct-key');
     expect(helpers.getDefaultModelForProviderType('OpenAI')).toBe('gpt-4o');
     expect(helpers.getDefaultModelForProviderType('openrouter')).toBe('qwen/qwen3.6-plus');
+    expect(helpers.getDefaultModelForProviderType('nvidia')).toBe('qwen/qwen3-coder-480b-a35b-instruct');
     expect(helpers.getDefaultModelForProviderType('xai')).toBe('grok-4-1-fast-reasoning');
     expect(helpers.existingProfilesById({
       awsProfiles: [

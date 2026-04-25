@@ -524,6 +524,21 @@ interface WorkerSuspendedApprovalState {
   userId: string;
   surfaceId?: string;
   originalUserContent?: string;
+  requestId?: string;
+  messageId?: string;
+  executionId?: string;
+  rootExecutionId?: string;
+  originChannel?: string;
+  originSurfaceId?: string;
+  continuityKey?: string;
+  activeExecutionRefs?: string[];
+  pendingActionId?: string;
+  codeSessionId?: string;
+  runClass?: DelegatedWorkerRunClass;
+  taskRunId?: string;
+  agentName?: string;
+  orchestration?: OrchestrationRoleDescriptor;
+  executionProfile?: SelectedExecutionProfile;
   principalId: string;
   principalRole: NonNullable<UserMessage['principalRole']>;
   channel: string;
@@ -2344,6 +2359,15 @@ export class WorkerManager {
         result: normalizedResult,
         intentDecision: effectiveIntentDecision ?? undefined,
       });
+      if (lifecycle === 'blocked' && handoff.unresolvedBlockerKind === 'approval') {
+        this.enrichWorkerSuspendedApprovalContext({
+          workerSessionKey: worker.workerSessionKey,
+          request: effectiveInput,
+          target: delegatedTarget,
+          taskRunId: delegatedTaskRunId,
+          ...(pendingApprovalRecord?.id ? { pendingActionId: pendingApprovalRecord.id } : {}),
+        });
+      }
       if (pendingApprovalRecord) {
         normalizedResult.metadata = {
           ...(normalizedResult.metadata ?? {}),
@@ -3612,6 +3636,10 @@ export class WorkerManager {
       userId: message.userId,
       ...(message.surfaceId ? { surfaceId: message.surfaceId } : {}),
       ...(message.content ? { originalUserContent: message.content } : {}),
+      requestId: message.id,
+      messageId: message.id,
+      originChannel: message.channel,
+      ...(message.surfaceId ? { originSurfaceId: message.surfaceId } : {}),
       principalId: message.principalId ?? message.userId,
       principalRole: message.principalRole ?? 'owner',
       channel: message.channel,
@@ -3702,7 +3730,155 @@ export class WorkerManager {
     );
   }
 
+  private buildWorkerContinuationTraceRequest(
+    state: WorkerSuspendedApprovalState,
+    approvalId: string,
+  ): WorkerMessageRequest {
+    const requestId = state.requestId?.trim() || state.messageId?.trim() || approvalId;
+    const originChannel = state.originChannel?.trim() || state.channel;
+    const originSurfaceId = state.originSurfaceId?.trim() || state.surfaceId?.trim();
+    const delegation: WorkerDelegationMetadata = {
+      requestId,
+      originChannel,
+      ...(state.executionId ? { executionId: state.executionId } : {}),
+      ...(state.rootExecutionId ? { rootExecutionId: state.rootExecutionId } : {}),
+      ...(originSurfaceId ? { originSurfaceId } : {}),
+      ...(state.continuityKey ? { continuityKey: state.continuityKey } : {}),
+      ...(state.activeExecutionRefs?.length ? { activeExecutionRefs: [...state.activeExecutionRefs] } : {}),
+      ...(state.pendingActionId ? { pendingActionId: state.pendingActionId } : {}),
+      ...(state.codeSessionId ? { codeSessionId: state.codeSessionId } : {}),
+      ...(state.runClass ? { runClass: state.runClass } : {}),
+      ...(state.agentName ? { agentName: state.agentName } : {}),
+      ...(state.orchestration ? { orchestration: cloneOrchestrationRoleDescriptor(state.orchestration) } : {}),
+    };
+    return {
+      sessionId: state.sessionId,
+      agentId: state.agentId,
+      userId: state.userId,
+      grantedCapabilities: [],
+      message: {
+        id: state.messageId?.trim() || requestId,
+        userId: state.userId,
+        principalId: state.principalId,
+        principalRole: state.principalRole,
+        channel: state.channel,
+        ...(state.surfaceId ? { surfaceId: state.surfaceId } : {}),
+        content: state.originalUserContent ?? '',
+        timestamp: Date.now(),
+      },
+      systemPrompt: '',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      ...(state.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(state.executionProfile) } : {}),
+      delegation,
+    };
+  }
+
+  private buildWorkerContinuationTraceTarget(
+    state: WorkerSuspendedApprovalState,
+  ): ResolvedDelegatedTargetMetadata {
+    return {
+      agentId: state.agentId,
+      ...(state.agentName ? { agentName: state.agentName } : {}),
+      ...(state.orchestration ? { orchestration: cloneOrchestrationRoleDescriptor(state.orchestration) } : {}),
+    };
+  }
+
+  private recordWorkerApprovalContinuationExecutionArtifacts(
+    state: WorkerSuspendedApprovalState,
+    approvalId: string,
+    metadata: Record<string, unknown> | undefined,
+  ): void {
+    const request = this.buildWorkerContinuationTraceRequest(state, approvalId);
+    const target = this.buildWorkerContinuationTraceTarget(state);
+    const requestId = state.requestId?.trim() || request.delegation?.requestId || approvalId;
+    const taskRunId = state.taskRunId?.trim() || `delegated-approval-continuation:${approvalId}`;
+    this.recordDelegatedExecutionArtifacts(
+      request,
+      target,
+      requestId,
+      taskRunId,
+      metadata,
+    );
+  }
+
+  private inheritWorkerContinuationSuspendedApprovalContext(input: {
+    workerSessionKey: string;
+    previousState: WorkerSuspendedApprovalState;
+    pendingActionId?: string;
+  }): void {
+    const nextState = this.workerSuspendedApprovalsBySession.get(input.workerSessionKey);
+    if (!nextState) return;
+    const pendingActionId = input.pendingActionId?.trim() || input.previousState.pendingActionId;
+    this.setWorkerSuspendedApprovals({
+      ...nextState,
+      ...(input.previousState.originalUserContent ? { originalUserContent: input.previousState.originalUserContent } : {}),
+      ...(input.previousState.requestId ? { requestId: input.previousState.requestId } : {}),
+      ...(input.previousState.messageId ? { messageId: input.previousState.messageId } : {}),
+      ...(input.previousState.executionId ? { executionId: input.previousState.executionId } : {}),
+      ...(input.previousState.rootExecutionId ? { rootExecutionId: input.previousState.rootExecutionId } : {}),
+      ...(input.previousState.originChannel ? { originChannel: input.previousState.originChannel } : {}),
+      ...(input.previousState.originSurfaceId ? { originSurfaceId: input.previousState.originSurfaceId } : {}),
+      ...(input.previousState.continuityKey ? { continuityKey: input.previousState.continuityKey } : {}),
+      ...(input.previousState.activeExecutionRefs?.length ? { activeExecutionRefs: [...input.previousState.activeExecutionRefs] } : {}),
+      ...(pendingActionId ? { pendingActionId } : {}),
+      ...(input.previousState.codeSessionId ? { codeSessionId: input.previousState.codeSessionId } : {}),
+      ...(input.previousState.runClass ? { runClass: input.previousState.runClass } : {}),
+      ...(input.previousState.taskRunId ? { taskRunId: input.previousState.taskRunId } : {}),
+      ...(input.previousState.agentName ? { agentName: input.previousState.agentName } : {}),
+      ...(input.previousState.orchestration ? { orchestration: cloneOrchestrationRoleDescriptor(input.previousState.orchestration) } : {}),
+      ...(input.previousState.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(input.previousState.executionProfile) } : {}),
+    });
+  }
+
+  private enrichWorkerSuspendedApprovalContext(input: {
+    workerSessionKey: string;
+    request: WorkerMessageRequest;
+    target: ResolvedDelegatedTargetMetadata;
+    taskRunId: string;
+    pendingActionId?: string;
+  }): void {
+    const state = this.workerSuspendedApprovalsBySession.get(input.workerSessionKey);
+    if (!state) return;
+    const delegation = input.request.delegation;
+    const requestId = delegation?.requestId?.trim() || input.request.message.id;
+    const executionId = delegation?.executionId?.trim();
+    const rootExecutionId = delegation?.rootExecutionId?.trim();
+    const originChannel = delegation?.originChannel?.trim() || input.request.message.channel;
+    const originSurfaceId = delegation?.originSurfaceId?.trim() || input.request.message.surfaceId?.trim();
+    const continuityKey = delegation?.continuityKey?.trim();
+    const pendingActionId = input.pendingActionId?.trim() || delegation?.pendingActionId?.trim();
+    const codeSessionId = delegation?.codeSessionId?.trim();
+    const activeExecutionRefs = delegation?.activeExecutionRefs?.length
+      ? [...delegation.activeExecutionRefs]
+      : undefined;
+    const agentName = input.target.agentName?.trim();
+    const orchestration = cloneOrchestrationRoleDescriptor(input.target.orchestration);
+    this.setWorkerSuspendedApprovals({
+      ...state,
+      requestId,
+      messageId: input.request.message.id,
+      ...(executionId ? { executionId } : {}),
+      ...(rootExecutionId ? { rootExecutionId } : {}),
+      originChannel,
+      ...(originSurfaceId ? { originSurfaceId } : {}),
+      ...(continuityKey ? { continuityKey } : {}),
+      ...(activeExecutionRefs ? { activeExecutionRefs } : {}),
+      ...(pendingActionId ? { pendingActionId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
+      ...(delegation?.runClass ? { runClass: delegation.runClass } : {}),
+      taskRunId: input.taskRunId,
+      ...(agentName ? { agentName } : {}),
+      ...(orchestration ? { orchestration } : {}),
+      ...(input.request.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(input.request.executionProfile) } : {}),
+    });
+  }
+
   private setWorkerSuspendedApprovals(state: WorkerSuspendedApprovalState): void {
+    this.clearWorkerSuspendedApprovals(state.workerSessionKey);
     this.workerSuspendedApprovalsBySession.set(state.workerSessionKey, state);
     for (const approvalId of state.approvalIds) {
       this.workerSuspendedApprovalToSession.set(approvalId, state.workerSessionKey);
@@ -3790,11 +3966,21 @@ export class WorkerManager {
       runtimeNotices: [],
       hasFallbackProvider: !!this.runtime.getFallbackProviderConfig?.(worker.agentId),
     });
+    this.recordWorkerApprovalContinuationExecutionArtifacts(
+      state,
+      approvalId,
+      continuationResult.metadata,
+    );
     const pendingRecord = this.recordWorkerContinuationPendingApprovalAction(
       state,
       continuationResult.metadata,
     );
     if (!pendingRecord) return continuationResult;
+    this.inheritWorkerContinuationSuspendedApprovalContext({
+      workerSessionKey: state.workerSessionKey,
+      previousState: state,
+      pendingActionId: pendingRecord.id,
+    });
     return {
       content: continuationResult.content,
       metadata: {
@@ -3804,6 +3990,24 @@ export class WorkerManager {
       },
     };
   }
+}
+
+function cloneOrchestrationRoleDescriptor(
+  descriptor: OrchestrationRoleDescriptor | undefined,
+): OrchestrationRoleDescriptor | undefined {
+  if (!descriptor) return undefined;
+  return {
+    role: descriptor.role,
+    ...(descriptor.label ? { label: descriptor.label } : {}),
+    ...(descriptor.lenses?.length ? { lenses: [...descriptor.lenses] } : {}),
+  };
+}
+
+function cloneSelectedExecutionProfile(profile: SelectedExecutionProfile): SelectedExecutionProfile {
+  return {
+    ...profile,
+    fallbackProviderOrder: [...profile.fallbackProviderOrder],
+  };
 }
 
 function truncateInlineText(value: string, maxChars: number): string {
