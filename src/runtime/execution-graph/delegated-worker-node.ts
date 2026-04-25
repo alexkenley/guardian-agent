@@ -1,4 +1,12 @@
 import type { IntentGatewayDecision } from '../intent/types.js';
+import type { VerificationDecision } from '../execution/types.js';
+import {
+  artifactRefFromArtifact,
+  buildVerificationResultArtifact,
+  type ExecutionArtifact,
+  type VerificationCheckRecord,
+  type VerificationResultContent,
+} from './graph-artifacts.js';
 import {
   createExecutionGraphEvent,
   type ExecutionGraphEvent,
@@ -52,6 +60,27 @@ export interface DelegatedWorkerGraphEventInput {
   eventId: string;
   payload?: Record<string, unknown>;
   nodeScoped?: boolean;
+}
+
+export type DelegatedWorkerGraphLifecycle = 'completed' | 'blocked' | 'failed';
+export type DelegatedWorkerGraphBlockerKind = 'approval' | 'clarification' | 'workspace_switch' | 'auth' | 'policy' | 'missing_context';
+
+export interface DelegatedWorkerTerminalProjectionInput {
+  context: DelegatedWorkerGraphContext;
+  sequenceStart: number;
+  timestamp: number;
+  lifecycle: DelegatedWorkerGraphLifecycle;
+  verification: VerificationDecision;
+  payload: Record<string, unknown>;
+  blockerKind?: string;
+  blockerPrompt?: string;
+  subjectArtifactId?: string;
+}
+
+export interface DelegatedWorkerTerminalProjection {
+  verificationArtifact: ExecutionArtifact<VerificationResultContent>;
+  events: ExecutionGraphEvent[];
+  sequence: number;
 }
 
 export function buildDelegatedWorkerGraphContext(
@@ -128,6 +157,143 @@ export function buildDelegatedWorkerGraphEvent(
       ...(input.payload ?? {}),
     },
   });
+}
+
+export function buildDelegatedWorkerTerminalProjection(
+  input: DelegatedWorkerTerminalProjectionInput,
+): DelegatedWorkerTerminalProjection {
+  let sequence = input.sequenceStart;
+  const events: ExecutionGraphEvent[] = [];
+  const verificationArtifact = buildVerificationResultArtifact({
+    graphId: input.context.graphId,
+    nodeId: input.context.nodeId,
+    artifactId: `${input.context.graphId}:${input.context.nodeId}:verification`,
+    subjectArtifactId: input.subjectArtifactId ?? `delegated-result:${input.context.executionId}`,
+    checks: buildDelegatedWorkerVerificationChecks(input.verification),
+    createdAt: input.timestamp,
+  });
+  const emit = (
+    kind: ExecutionGraphEventKind,
+    payload: Record<string, unknown>,
+    eventKey: string,
+    nodeScoped = true,
+  ) => {
+    sequence += 1;
+    const event = buildDelegatedWorkerGraphEvent(input.context, {
+      kind,
+      sequence,
+      timestamp: input.timestamp,
+      eventId: `${input.context.graphId}:${eventKey}:${sequence}`,
+      payload,
+      nodeScoped,
+    });
+    events.push(event);
+  };
+  const verificationRef = artifactRefFromArtifact(verificationArtifact);
+  emit('artifact_created', {
+    artifactId: verificationRef.artifactId,
+    artifactType: verificationRef.artifactType,
+    label: verificationRef.label,
+    ...(verificationRef.preview ? { preview: verificationRef.preview } : {}),
+    ...(verificationRef.trustLevel ? { trustLevel: verificationRef.trustLevel } : {}),
+    ...(verificationRef.taintReasons ? { taintReasons: verificationRef.taintReasons } : {}),
+    ...(verificationRef.redactionPolicy ? { redactionPolicy: verificationRef.redactionPolicy } : {}),
+  }, `artifact:${verificationArtifact.artifactId}`);
+  emit('verification_completed', {
+    verificationArtifactId: verificationArtifact.artifactId,
+    decision: input.verification.decision,
+    valid: verificationArtifact.content.valid,
+    retryable: input.verification.retryable,
+    checkCount: verificationArtifact.content.checks.length,
+    failedChecks: verificationArtifact.content.checks
+      .filter((check) => check.status === 'failed')
+      .map((check) => check.name),
+    ...(input.verification.requiredNextAction ? { requiredNextAction: input.verification.requiredNextAction } : {}),
+    ...(input.verification.missingEvidenceKinds?.length ? { missingEvidenceKinds: input.verification.missingEvidenceKinds } : {}),
+    ...(input.verification.unsatisfiedStepIds?.length ? { unsatisfiedStepIds: input.verification.unsatisfiedStepIds } : {}),
+    ...(input.verification.qualityNotes?.length ? { qualityNotes: input.verification.qualityNotes } : {}),
+  }, 'verification:completed');
+  if (input.lifecycle === 'failed') {
+    emit('node_failed', {
+      ...input.payload,
+      verificationArtifactId: verificationArtifact.artifactId,
+      reason: normalizeText(String(input.payload.reason ?? '')) ?? normalizeText(String(input.payload.summary ?? '')) ?? 'Delegated worker failed.',
+    }, 'node:failed');
+    emit('graph_failed', {
+      ...input.payload,
+      verificationArtifactId: verificationArtifact.artifactId,
+      reason: normalizeText(String(input.payload.reason ?? '')) ?? normalizeText(String(input.payload.summary ?? '')) ?? 'Delegated worker failed.',
+    }, 'graph:failed', false);
+    return { verificationArtifact, events, sequence };
+  }
+  if (input.lifecycle === 'blocked') {
+    emit('interruption_requested', {
+      ...input.payload,
+      verificationArtifactId: verificationArtifact.artifactId,
+      kind: normalizeDelegatedGraphBlockerKind(input.blockerKind),
+      prompt: normalizeText(input.blockerPrompt) ?? normalizeText(String(input.payload.summary ?? '')) ?? 'Delegated worker is blocked.',
+    }, 'node:interruption');
+    return { verificationArtifact, events, sequence };
+  }
+  emit('node_completed', {
+    ...input.payload,
+    verificationArtifactId: verificationArtifact.artifactId,
+  }, 'node:completed');
+  emit('graph_completed', {
+    ...input.payload,
+    verificationArtifactId: verificationArtifact.artifactId,
+  }, 'graph:completed', false);
+  return { verificationArtifact, events, sequence };
+}
+
+export function normalizeDelegatedGraphBlockerKind(
+  value: string | undefined,
+): DelegatedWorkerGraphBlockerKind {
+  switch (value) {
+    case 'approval':
+    case 'clarification':
+    case 'workspace_switch':
+    case 'auth':
+    case 'policy':
+    case 'missing_context':
+      return value;
+    case 'policy_blocked':
+      return 'policy';
+    default:
+      return 'missing_context';
+  }
+}
+
+export function buildDelegatedWorkerVerificationChecks(
+  decision: VerificationDecision,
+): VerificationCheckRecord[] {
+  const checks: VerificationCheckRecord[] = [{
+    name: 'delegated_worker_sufficiency',
+    status: decision.decision === 'satisfied' ? 'passed' : 'failed',
+    ...(decision.reasons[0] ? { reason: decision.reasons[0] } : {}),
+  }];
+  if (decision.unsatisfiedStepIds && decision.unsatisfiedStepIds.length > 0) {
+    checks.push({
+      name: 'unsatisfied_required_steps',
+      status: 'failed',
+      reason: decision.unsatisfiedStepIds.join(', '),
+    });
+  }
+  if (decision.missingEvidenceKinds && decision.missingEvidenceKinds.length > 0) {
+    checks.push({
+      name: 'missing_required_evidence',
+      status: 'failed',
+      reason: decision.missingEvidenceKinds.join(', '),
+    });
+  }
+  for (const [index, note] of (decision.qualityNotes ?? []).entries()) {
+    checks.push({
+      name: `quality_note_${index + 1}`,
+      status: 'skipped',
+      reason: note,
+    });
+  }
+  return checks;
 }
 
 function normalizeText(value: string | undefined): string | undefined {

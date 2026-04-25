@@ -57,11 +57,9 @@ import {
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
-  buildVerificationResultArtifact,
   buildWriteSpecArtifact,
   type EvidenceLedgerContent,
   type ExecutionArtifact,
-  type VerificationCheckRecord,
   type WriteSpecContent,
 } from '../runtime/execution-graph/graph-artifacts.js';
 import {
@@ -72,6 +70,7 @@ import {
   buildDelegatedWorkerGraphContext,
   buildDelegatedWorkerGraphEvent,
   buildDelegatedWorkerNode,
+  buildDelegatedWorkerTerminalProjection,
   type DelegatedWorkerGraphContext,
 } from '../runtime/execution-graph/delegated-worker-node.js';
 import {
@@ -1730,6 +1729,7 @@ export class WorkerManager {
     const sharedPayload = {
       lifecycle: options.lifecycle,
       summary: options.handoff.summary,
+      reason: options.handoff.summary,
       ...(options.handoff.nextAction ? { nextAction: options.handoff.nextAction } : {}),
       ...(options.handoff.unresolvedBlockerKind ? { unresolvedBlockerKind: options.handoff.unresolvedBlockerKind } : {}),
       ...(typeof options.handoff.approvalCount === 'number' ? { approvalCount: options.handoff.approvalCount } : {}),
@@ -1738,68 +1738,22 @@ export class WorkerManager {
       ...(options.workerId ? { workerId: options.workerId } : {}),
       ...buildDelegatedTaskContractTraceMetadata(options.taskContract),
     };
-    const verificationArtifact = buildVerificationResultArtifact({
-      graphId: run.context.graphId,
-      nodeId: run.context.nodeId,
-      artifactId: `${run.context.graphId}:${run.context.nodeId}:verification`,
-      subjectArtifactId: `delegated-result:${run.context.executionId}`,
-      checks: buildDelegatedWorkerVerificationChecks(options.verification),
-      createdAt: this.observability.now?.() ?? Date.now(),
+    const projection = buildDelegatedWorkerTerminalProjection({
+      context: run.context,
+      sequenceStart: run.sequence,
+      timestamp: this.observability.now?.() ?? Date.now(),
+      lifecycle: options.lifecycle,
+      verification: options.verification,
+      payload: sharedPayload,
+      blockerKind: options.handoff.unresolvedBlockerKind,
+      blockerPrompt: options.handoff.nextAction ?? options.handoff.summary,
     });
-    this.observability.executionGraphStore?.writeArtifact(verificationArtifact);
-    const verificationRef = artifactRefFromArtifact(verificationArtifact);
-    this.emitDelegatedWorkerGraphEvent(run, 'artifact_created', {
-      artifactId: verificationRef.artifactId,
-      artifactType: verificationRef.artifactType,
-      label: verificationRef.label,
-      ...(verificationRef.preview ? { preview: verificationRef.preview } : {}),
-      ...(verificationRef.trustLevel ? { trustLevel: verificationRef.trustLevel } : {}),
-      ...(verificationRef.taintReasons ? { taintReasons: verificationRef.taintReasons } : {}),
-      ...(verificationRef.redactionPolicy ? { redactionPolicy: verificationRef.redactionPolicy } : {}),
-    }, `artifact:${verificationArtifact.artifactId}`);
-    this.emitDelegatedWorkerGraphEvent(run, 'verification_completed', {
-      verificationArtifactId: verificationArtifact.artifactId,
-      decision: options.verification.decision,
-      valid: verificationArtifact.content.valid,
-      retryable: options.verification.retryable,
-      checkCount: verificationArtifact.content.checks.length,
-      failedChecks: verificationArtifact.content.checks
-        .filter((check) => check.status === 'failed')
-        .map((check) => check.name),
-      ...(options.verification.requiredNextAction ? { requiredNextAction: options.verification.requiredNextAction } : {}),
-      ...(options.verification.missingEvidenceKinds?.length ? { missingEvidenceKinds: options.verification.missingEvidenceKinds } : {}),
-      ...(options.verification.unsatisfiedStepIds?.length ? { unsatisfiedStepIds: options.verification.unsatisfiedStepIds } : {}),
-      ...(options.verification.qualityNotes?.length ? { qualityNotes: options.verification.qualityNotes } : {}),
-    }, 'verification:completed');
-    if (options.lifecycle === 'failed') {
-      this.emitDelegatedWorkerGraphEvent(run, 'node_failed', {
-        ...sharedPayload,
-        verificationArtifactId: verificationArtifact.artifactId,
-        reason: options.handoff.summary,
-      }, 'node:failed');
-      this.emitDelegatedWorkerGraphEvent(run, 'graph_failed', {
-        ...sharedPayload,
-        verificationArtifactId: verificationArtifact.artifactId,
-        reason: options.handoff.summary,
-      }, 'graph:failed', { nodeScoped: false });
-      return;
+    run.sequence = projection.sequence;
+    this.observability.executionGraphStore?.writeArtifact(projection.verificationArtifact);
+    for (const event of projection.events) {
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
     }
-    if (options.lifecycle === 'blocked') {
-      this.emitDelegatedWorkerGraphEvent(run, 'interruption_requested', {
-        ...sharedPayload,
-        kind: normalizeDelegatedGraphBlockerKind(options.handoff.unresolvedBlockerKind),
-        prompt: options.handoff.nextAction ?? options.handoff.summary,
-      }, 'node:interruption');
-      return;
-    }
-    this.emitDelegatedWorkerGraphEvent(run, 'node_completed', {
-      ...sharedPayload,
-      verificationArtifactId: verificationArtifact.artifactId,
-    }, 'node:completed');
-    this.emitDelegatedWorkerGraphEvent(run, 'graph_completed', {
-      ...sharedPayload,
-      verificationArtifactId: verificationArtifact.artifactId,
-    }, 'graph:completed', { nodeScoped: false });
   }
 
   private failDelegatedWorkerGraph(
@@ -5129,56 +5083,6 @@ function resolveDelegatedBlockedKind(
     return 'policy_blocked';
   }
   return readPendingActionKind(metadata);
-}
-
-function normalizeDelegatedGraphBlockerKind(
-  value: string | undefined,
-): 'approval' | 'clarification' | 'workspace_switch' | 'auth' | 'policy' | 'missing_context' {
-  switch (value) {
-    case 'approval':
-    case 'clarification':
-    case 'workspace_switch':
-    case 'auth':
-    case 'policy':
-    case 'missing_context':
-      return value;
-    case 'policy_blocked':
-      return 'policy';
-    default:
-      return 'missing_context';
-  }
-}
-
-function buildDelegatedWorkerVerificationChecks(
-  decision: VerificationDecision,
-): VerificationCheckRecord[] {
-  const checks: VerificationCheckRecord[] = [{
-    name: 'delegated_worker_sufficiency',
-    status: decision.decision === 'satisfied' ? 'passed' : 'failed',
-    ...(decision.reasons[0] ? { reason: decision.reasons[0] } : {}),
-  }];
-  if (decision.unsatisfiedStepIds && decision.unsatisfiedStepIds.length > 0) {
-    checks.push({
-      name: 'unsatisfied_required_steps',
-      status: 'failed',
-      reason: decision.unsatisfiedStepIds.join(', '),
-    });
-  }
-  if (decision.missingEvidenceKinds && decision.missingEvidenceKinds.length > 0) {
-    checks.push({
-      name: 'missing_required_evidence',
-      status: 'failed',
-      reason: decision.missingEvidenceKinds.join(', '),
-    });
-  }
-  for (const [index, note] of (decision.qualityNotes ?? []).entries()) {
-    checks.push({
-      name: `quality_note_${index + 1}`,
-      status: 'skipped',
-      reason: note,
-    });
-  }
-  return checks;
 }
 
 function readDelegatedApprovalInterruption(
