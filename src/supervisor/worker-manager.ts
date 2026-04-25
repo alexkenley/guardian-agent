@@ -70,6 +70,7 @@ import {
   buildDelegatedWorkerGraphContext,
   buildDelegatedWorkerGraphEvent,
   buildDelegatedWorkerNode,
+  buildDelegatedWorkerStartProjection,
   buildDelegatedWorkerTerminalProjection,
   type DelegatedWorkerGraphContext,
 } from '../runtime/execution-graph/delegated-worker-node.js';
@@ -1700,18 +1701,19 @@ export class WorkerManager {
       edges: [],
     });
     const run: DelegatedWorkerGraphRun = { context, sequence: 0 };
-    this.emitDelegatedWorkerGraphEvent(run, 'graph_started', {
-      route: input.intentDecision.route,
-      operation: input.intentDecision.operation,
-      executionClass: input.intentDecision.executionClass,
-      controller: 'delegated_worker',
-      ...buildDelegatedTaskContractTraceMetadata(input.taskContract),
-    }, 'graph:started', { nodeScoped: false });
-    this.emitDelegatedWorkerGraphEvent(run, 'node_started', {
+    const projection = buildDelegatedWorkerStartProjection({
+      context,
+      sequenceStart: run.sequence,
+      timestamp: this.observability.now?.() ?? Date.now(),
+      decision: input.intentDecision,
       summary: input.detail,
-      lifecycle: 'running',
-      ...buildDelegatedTaskContractTraceMetadata(input.taskContract),
-    }, 'node:started');
+      payload: buildDelegatedTaskContractTraceMetadata(input.taskContract),
+    });
+    run.sequence = projection.sequence;
+    for (const event of projection.events) {
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
+    }
     return run;
   }
 

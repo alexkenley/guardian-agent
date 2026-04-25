@@ -62,6 +62,20 @@ export interface DelegatedWorkerGraphEventInput {
   nodeScoped?: boolean;
 }
 
+export interface DelegatedWorkerStartProjectionInput {
+  context: DelegatedWorkerGraphContext;
+  sequenceStart: number;
+  timestamp: number;
+  decision: IntentGatewayDecision;
+  summary: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface DelegatedWorkerStartProjection {
+  events: ExecutionGraphEvent[];
+  sequence: number;
+}
+
 export type DelegatedWorkerGraphLifecycle = 'completed' | 'blocked' | 'failed';
 export type DelegatedWorkerGraphBlockerKind = 'approval' | 'clarification' | 'workspace_switch' | 'auth' | 'policy' | 'missing_context';
 
@@ -157,6 +171,43 @@ export function buildDelegatedWorkerGraphEvent(
       ...(input.payload ?? {}),
     },
   });
+}
+
+export function buildDelegatedWorkerStartProjection(
+  input: DelegatedWorkerStartProjectionInput,
+): DelegatedWorkerStartProjection {
+  let sequence = input.sequenceStart;
+  const events: ExecutionGraphEvent[] = [];
+  const emit = (
+    kind: ExecutionGraphEventKind,
+    payload: Record<string, unknown>,
+    eventKey: string,
+    nodeScoped = true,
+  ) => {
+    sequence += 1;
+    const event = buildDelegatedWorkerGraphEvent(input.context, {
+      kind,
+      sequence,
+      timestamp: input.timestamp,
+      eventId: `${input.context.graphId}:${eventKey}:${sequence}`,
+      payload,
+      nodeScoped,
+    });
+    events.push(event);
+  };
+  emit('graph_started', {
+    route: input.decision.route,
+    operation: input.decision.operation,
+    executionClass: input.decision.executionClass,
+    controller: 'delegated_worker',
+    ...(input.payload ?? {}),
+  }, 'graph:started', false);
+  emit('node_started', {
+    summary: input.summary,
+    lifecycle: 'running',
+    ...(input.payload ?? {}),
+  }, 'node:started');
+  return { events, sequence };
 }
 
 export function buildDelegatedWorkerTerminalProjection(

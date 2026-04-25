@@ -1,12 +1,64 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDelegatedWorkerGraphContext,
+  buildDelegatedWorkerStartProjection,
   buildDelegatedWorkerTerminalProjection,
   normalizeDelegatedGraphBlockerKind,
 } from './delegated-worker-node.js';
 import type { VerificationDecision } from '../execution/types.js';
 
 describe('delegated worker graph node helpers', () => {
+  it('builds delegated worker start projection events', () => {
+    const context = buildDelegatedWorkerGraphContext({
+      graphId: 'execution-graph:delegated-task:start:delegated-worker',
+      executionId: 'delegated-task:start',
+      rootExecutionId: 'root-start',
+      requestId: 'request-start',
+      runId: 'request-start',
+      channel: 'web',
+      title: 'Workspace Implementer',
+    });
+
+    const projection = buildDelegatedWorkerStartProjection({
+      context,
+      sequenceStart: 0,
+      timestamp: 1_000,
+      summary: 'Delegated to Workspace Implementer.',
+      decision: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect repository.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      payload: {
+        taskContractKind: 'repo_inspection',
+      },
+    });
+
+    expect(projection.events.map((event) => [event.sequence, event.kind, event.nodeKind])).toEqual([
+      [1, 'graph_started', undefined],
+      [2, 'node_started', 'delegated_worker'],
+    ]);
+    expect(projection.events[0]?.payload).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      executionClass: 'repo_grounded',
+      controller: 'delegated_worker',
+      taskContractKind: 'repo_inspection',
+    });
+    expect(projection.events[1]?.payload).toMatchObject({
+      lifecycle: 'running',
+      summary: 'Delegated to Workspace Implementer.',
+      taskContractKind: 'repo_inspection',
+    });
+    expect(projection.sequence).toBe(2);
+  });
+
   it('builds completed terminal verification projection events', () => {
     const context = buildDelegatedWorkerGraphContext({
       graphId: 'execution-graph:delegated-task:1:delegated-worker',
