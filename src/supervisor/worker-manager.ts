@@ -393,6 +393,14 @@ interface DelegatedWorkerGraphRun {
   sequence: number;
 }
 
+interface DelegatedWorkerGraphCompletionMetadata {
+  graphId: string;
+  nodeId: string;
+  status: 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
+  lifecycle: 'completed' | 'blocked' | 'failed';
+  verificationArtifactId: string;
+}
+
 interface GraphWriteSpecCandidate {
   path: string;
   content: string;
@@ -1726,8 +1734,8 @@ export class WorkerManager {
       verification: VerificationDecision;
       workerId?: string;
     },
-  ): void {
-    if (!run) return;
+  ): DelegatedWorkerGraphCompletionMetadata | undefined {
+    if (!run) return undefined;
     const sharedPayload = {
       lifecycle: options.lifecycle,
       summary: options.handoff.summary,
@@ -1756,6 +1764,13 @@ export class WorkerManager {
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
       this.observability.executionGraphStore?.appendEvent(event);
     }
+    return {
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      status: mapDelegatedWorkerGraphMetadataStatus(options.lifecycle, options.handoff.unresolvedBlockerKind),
+      lifecycle: options.lifecycle,
+      verificationArtifactId: projection.verificationArtifact.artifactId,
+    };
   }
 
   private failDelegatedWorkerGraph(
@@ -2251,13 +2266,19 @@ export class WorkerManager {
           handoff,
           workerMetadata: normalizedResult.metadata,
         });
-        this.completeDelegatedWorkerGraph(delegatedGraphRun, {
+        const executionGraphMetadata = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
           lifecycle,
           handoff,
           taskContract: effectiveTaskContract,
           verification: verifiedResult.decision,
           workerId: worker.id,
         });
+        if (executionGraphMetadata) {
+          normalizedResult.metadata = {
+            ...(normalizedResult.metadata ?? {}),
+            executionGraph: executionGraphMetadata,
+          };
+        }
         this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
           id: `delegated-worker:${delegatedJob.id}:failed`,
           kind: 'failed',
@@ -2314,13 +2335,19 @@ export class WorkerManager {
         handoff,
         workerMetadata: normalizedResult.metadata,
       });
-      this.completeDelegatedWorkerGraph(delegatedGraphRun, {
+      const executionGraphMetadata = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
         lifecycle,
         handoff,
         taskContract: effectiveTaskContract,
         verification: verifiedResult.decision,
         workerId: worker.id,
       });
+      if (executionGraphMetadata) {
+        normalizedResult.metadata = {
+          ...(normalizedResult.metadata ?? {}),
+          executionGraph: executionGraphMetadata,
+        };
+      }
       this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:completed`,
         kind: lifecycle === 'blocked' ? 'blocked' : 'completed',
@@ -5085,6 +5112,15 @@ function resolveDelegatedBlockedKind(
     return 'policy_blocked';
   }
   return readPendingActionKind(metadata);
+}
+
+function mapDelegatedWorkerGraphMetadataStatus(
+  lifecycle: 'completed' | 'blocked' | 'failed',
+  blockerKind: string | undefined,
+): DelegatedWorkerGraphCompletionMetadata['status'] {
+  if (lifecycle === 'failed') return 'failed';
+  if (lifecycle === 'completed') return 'completed';
+  return blockerKind === 'approval' ? 'awaiting_approval' : 'blocked';
 }
 
 function readDelegatedApprovalInterruption(

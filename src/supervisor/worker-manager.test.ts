@@ -1196,7 +1196,7 @@ describe('WorkerManager', () => {
       },
     );
 
-    await manager.handleMessage({
+    const result = await manager.handleMessage({
       sessionId: 'tester:web',
       agentId: 'local',
       userId: 'tester',
@@ -1388,6 +1388,12 @@ describe('WorkerManager', () => {
     expect(executionGraphStore.listArtifacts(delegatedGraphId).map((artifact) => artifact.artifactType)).toEqual([
       'VerificationResult',
     ]);
+    expect(result.metadata?.executionGraph).toMatchObject({
+      graphId: delegatedGraphId,
+      status: 'awaiting_approval',
+      lifecycle: 'blocked',
+      verificationArtifactId: expect.stringContaining(':verification'),
+    });
 
     manager.shutdown();
   });
@@ -1481,6 +1487,12 @@ describe('WorkerManager', () => {
     expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual([
       'VerificationResult',
     ]);
+    expect(result.metadata?.executionGraph).toMatchObject({
+      graphId,
+      status: 'completed',
+      lifecycle: 'completed',
+      verificationArtifactId: expect.stringContaining(':verification'),
+    });
 
     manager.shutdown();
   });
@@ -4059,6 +4071,12 @@ describe('WorkerManager', () => {
     expect(executionGraphStore.listArtifacts(delegatedEvents[0]?.graphId ?? '').map((artifact) => artifact.artifactType)).toEqual([
       'VerificationResult',
     ]);
+    expect(result.metadata?.executionGraph).toMatchObject({
+      graphId: delegatedEvents[0]?.graphId,
+      status: 'failed',
+      lifecycle: 'failed',
+      verificationArtifactId: expect.stringContaining(':verification'),
+    });
     const recoveryEvents = graphEvents.filter((event) => event.graphId === graphId);
     expect(recoveryEvents.map((event) => event.kind)).toEqual([
       'graph_started',

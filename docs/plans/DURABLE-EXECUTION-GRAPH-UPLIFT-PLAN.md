@@ -555,6 +555,7 @@ Status:
 - Approval resume reconstruction carries the stored verify node forward so post-approval read-back verification completes the graph-native verifier node.
 - Brokered delegated worker runs with Intent Gateway decisions now create a durable `delegated_worker` graph node, write `VerificationResult` artifacts, and emit completed, blocked, or failed graph lifecycle events while preserving the existing retry and handoff path.
 - Delegated worker start and terminal verification/event construction now live in `delegated-worker-node.ts`, reducing WorkerManager to graph setup, dispatch orchestration, and persistence of returned node projections.
+- Delegated worker responses now include `executionGraph` metadata with the graph id, node id, lifecycle status, and verification artifact id when a durable delegated graph is available.
 - Remaining work: remove the interim delegated retry/handoff compatibility paths only after delegated workers are fully represented as graph node runners.
 
 ### Phase 8: Web UI And Operator Observability
