@@ -18,6 +18,7 @@ import {
   parseStructuredContent,
   parseStructuredToolArguments,
 } from './intent/structured-recovery.js';
+import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import {
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
 } from './intent/types.js';
@@ -661,6 +662,53 @@ export function shouldReusePreRoutedIntentGatewayForContent(
     return false;
   }
   return (originalContent?.trim() ?? '') === (effectiveRoutingContent?.trim() ?? '');
+}
+
+export function enrichIntentGatewayRecordWithContentPlan(
+  record: IntentGatewayRecord | null | undefined,
+  sourceContent: string | undefined,
+): IntentGatewayRecord | null {
+  if (!record) return null;
+  const trimmedSource = sourceContent?.trim();
+  if (!trimmedSource) return record;
+  if (hasRequiredWritePlannedStep(record.decision)) return record;
+  if (record.decision.plannedSteps?.length) return record;
+
+  const normalized = normalizeIntentGatewayDecision(
+    {
+      ...record.decision,
+      ...record.decision.entities,
+      ...(record.decision.plannedSteps?.length
+        ? { plannedSteps: cloneIntentGatewayPlannedSteps(record.decision.plannedSteps) }
+        : {}),
+    } as Record<string, unknown>,
+    { sourceContent: trimmedSource },
+    { classifierSource: classifierProvenanceSourceForMode(record.mode) },
+  );
+  if (!hasRequiredWritePlannedStep(normalized) || !normalized.plannedSteps?.length) {
+    return record;
+  }
+
+  return {
+    ...record,
+    decision: {
+      ...record.decision,
+      plannedSteps: cloneIntentGatewayPlannedSteps(normalized.plannedSteps),
+      ...(typeof record.decision.requireExactFileReferences === 'boolean'
+        ? {}
+        : typeof normalized.requireExactFileReferences === 'boolean'
+          ? { requireExactFileReferences: normalized.requireExactFileReferences }
+          : {}),
+      provenance: {
+        ...(record.decision.provenance ?? {}),
+        ...(typeof record.decision.requireExactFileReferences === 'boolean'
+          ? {}
+          : normalized.provenance?.requireExactFileReferences
+            ? { requireExactFileReferences: normalized.provenance.requireExactFileReferences }
+            : {}),
+      },
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

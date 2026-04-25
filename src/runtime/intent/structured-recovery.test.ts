@@ -136,4 +136,38 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['answer', 'write']);
     expect(decision.plannedSteps?.[1]?.dependsOn).toEqual(['step_1']);
   });
+
+  it('synthesizes read/write hybrid steps when the classifier omits planned_steps', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Search src/runtime for planned_steps and write a concise summary to tmp/orchestration-openrouter/planned-steps-summary.txt.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    }, {
+      sourceContent: 'Search src/runtime for planned_steps. Write a concise summary of what you find to tmp/orchestration-openrouter/planned-steps-summary.txt.',
+    });
+
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'search',
+        expectedToolCategories: ['search', 'read'],
+        required: true,
+      }),
+      expect.objectContaining({
+        kind: 'write',
+        expectedToolCategories: ['write'],
+        required: true,
+        dependsOn: ['step_1'],
+      }),
+    ]);
+  });
 });

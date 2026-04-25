@@ -4,6 +4,7 @@ import {
   IntentGateway,
   attachPreRoutedIntentGatewayMetadata,
   detachPreRoutedIntentGatewayMetadata,
+  enrichIntentGatewayRecordWithContentPlan,
   readPreRoutedIntentGatewayMetadata,
   shouldReusePreRoutedIntentGateway,
   shouldReusePreRoutedIntentGatewayForContent,
@@ -70,6 +71,76 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('automation_control');
     expect(result.decision.operation).toBe('delete');
     expect(result.decision.entities.uiSurface).toBe('automations');
+  });
+
+  it('enriches pre-routed records with synthesized read/write planned steps', () => {
+    const record = enrichIntentGatewayRecordWithContentPlan({
+      mode: 'primary',
+      available: true,
+      model: 'test-model',
+      latencyMs: 10,
+      decision: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'search',
+        summary: 'Search src/runtime for planned_steps and write a summary file.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        entities: {},
+      },
+    }, 'Search src/runtime for planned_steps. Write a concise summary of what you find to tmp/orchestration-openrouter/planned-steps-summary.txt.');
+
+    expect(record?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'write']);
+    expect(record?.decision.plannedSteps?.[1]).toMatchObject({
+      expectedToolCategories: ['write'],
+      dependsOn: ['step_1'],
+    });
+  });
+
+  it('does not replace an explicit read-only graph plan during enrichment', () => {
+    const record = enrichIntentGatewayRecordWithContentPlan({
+      mode: 'primary',
+      available: true,
+      model: 'execution-graph.readonly',
+      latencyMs: 0,
+      decision: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'search',
+        summary: 'Read-only graph exploration.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search src/runtime for planned_steps.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+        ],
+        entities: {},
+      },
+    }, [
+      'Read-only execution graph exploration node.',
+      'Original request: Search src/runtime for planned_steps. Write a concise summary to tmp/out.txt.',
+      'The graph controller will decide and perform the write step after grounded synthesis.',
+    ].join('\n'));
+
+    expect(record?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['search']);
   });
 
   it('repairs malformed tool-call JSON arguments before normalizing the decision', async () => {

@@ -8,6 +8,7 @@ import type { ContinuityThreadStore } from './continuity-threads.js';
 import type { IdentityService } from './identity.js';
 import {
   attachPreRoutedIntentGatewayMetadata,
+  enrichIntentGatewayRecordWithContentPlan,
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
   type IntentGateway,
   type IntentGatewayInput,
@@ -206,7 +207,7 @@ export function createIncomingDispatchPreparer(args: {
       if (!providerName) return null;
       const provider = args.runtime.getProvider(providerName);
       if (!provider) return null;
-      return args.routingIntentGateway.classify(
+      const classified = await args.routingIntentGateway.classify(
         {
           content: normalizedContent,
           channel,
@@ -218,6 +219,7 @@ export function createIncomingDispatchPreparer(args: {
         },
         (messages, options) => provider.chat(messages, options),
       );
+      return enrichIntentGatewayRecordWithContentPlan(classified, normalizedContent);
     };
 
     let lastResult: IntentGatewayRecord | null = null;
@@ -338,6 +340,7 @@ export function createIncomingDispatchPreparer(args: {
             turnRelation: gateway.decision.turnRelation,
             resolution: gateway.decision.resolution,
             missingFields: gateway.decision.missingFields,
+            plannedStepKinds: gateway.decision.plannedSteps?.map((step) => step.kind),
             executionClass: gateway.decision.executionClass,
             preferredTier: gateway.decision.preferredTier,
             requiresRepoGrounding: gateway.decision.requiresRepoGrounding,
@@ -632,6 +635,7 @@ export function createIncomingDispatchPreparer(args: {
         agentId: routed.decision.agentId,
         details: {
           route: routed.gateway.decision.route,
+          plannedStepKinds: routed.gateway.decision.plannedSteps?.map((step) => step.kind),
           selectedAgentId: routed.decision.agentId,
           ...(selectedProfile
             ? {

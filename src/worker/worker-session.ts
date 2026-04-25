@@ -22,6 +22,7 @@ import {
   resolveDirectIntentRoutingCandidates,
 } from '../runtime/direct-intent-routing.js';
 import {
+  enrichIntentGatewayRecordWithContentPlan,
   IntentGateway,
   readPreRoutedIntentGatewayMetadata,
   shouldReusePreRoutedIntentGateway,
@@ -2593,14 +2594,21 @@ export class BrokeredWorkerSession {
   ): Promise<IntentGatewayRecord | null> {
     const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
     if (shouldReuseWorkerPreRoutedIntentGateway(preRouted)) {
-      return preRouted;
+      return enrichIntentGatewayRecordWithContentPlan(
+        preRouted,
+        stripLeadingContextPrefix(message.content),
+      ) ?? preRouted;
     }
-    return this.intentGateway.classify(
+    const classified = await this.intentGateway.classify(
       {
         content: stripLeadingContextPrefix(message.content),
         channel: message.channel,
       },
       chatFn,
+    );
+    return enrichIntentGatewayRecordWithContentPlan(
+      classified,
+      stripLeadingContextPrefix(message.content),
     );
   }
 

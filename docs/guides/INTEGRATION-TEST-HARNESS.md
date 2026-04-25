@@ -106,6 +106,7 @@ Core harness scripts include:
 | **`scripts/test-approvals.ps1`** | Approval UX: contextual prompts, multi-approval, policy modes (PowerShell) | ~45+ |
 | **`scripts/test-gws.ps1`** | Google Workspace tool + approval tests (PowerShell) | ~25 |
 | **`scripts/test-m365.mjs`** | Microsoft 365 tool registration, approval gating, schema, API routes (Node.js) | ~34 |
+| **`scripts/test-web-gmail-approvals.mjs`** | Web Gmail approval flow: pending-action metadata, approval decision, immediate send confirmation, and pending-action cleanup (Node.js) | focused Gmail approval assertions |
 | **`scripts/test-network.ps1`** | Network tools (ARP, traceroute, WiFi, OUI) (PowerShell) | ~10 |
 | **`scripts/test-search.ps1`** | Document search + approval tests (PowerShell) | ~12 |
 | **`scripts/test-automation.ps1`** | Workflow + task CRUD + approval tests (PowerShell) | ~20 |
@@ -115,10 +116,12 @@ Core harness scripts include:
 | **`scripts/test-browser.ps1`** | Browser automation + network risk verification (PowerShell) | ~15 |
 | **`scripts/test-security-api.ps1`** | Focused security API suite: auth, privileged tickets, approvals, audit, direct tool enforcement (PowerShell) | ~20 |
 | **`scripts/test-security-content.ps1`** | Focused content-security suite: injection, denied paths, shell validation, PII/secret redaction (PowerShell) | ~18 |
+| **`scripts/test-security-verification.mjs`** | Security verification harness: auth rejection, prompt-injection blocking, secret redaction, SSRF/path policy, approval-gated writes, sandbox visibility, and audit/config redaction (Node.js) | focused security verification assertions |
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
 | **`scripts/test-brokered-isolation.mjs`** | Brokered worker smoke harness: isolated worker startup, broker-mediated chat path, and health under agent isolation (Node.js) | focused brokered-worker assertions |
 | **`scripts/test-brokered-approvals.mjs`** | Brokered approval harness: multi-step approvals, broker-mediated continuation, memory-save suppression, and tool-reporting (Node.js) | focused brokered approval assertions |
+| **`scripts/test-skills-routing-harness.mjs`** | Skills routing harness: resolver selection, active-skill context, and skill-backed tool routing through the web channel (Node.js with `tsx`) | focused skills-routing assertions |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |

@@ -8,6 +8,7 @@ import {
   handleDirectReasoningMode,
   shouldHandleDirectReasoningMode,
 } from './direct-reasoning-mode.js';
+import { normalizeIntentGatewayDecision } from './intent/structured-recovery.js';
 
 function decision(overrides: Partial<IntentGatewayDecision> = {}): IntentGatewayDecision {
   return {
@@ -128,6 +129,31 @@ describe('direct reasoning mode', () => {
           },
         ],
       }),
+      selectedExecutionProfile: profile(),
+    })).toBe(false);
+  });
+
+  it('does not select brokered direct reasoning when synthesized repo plans require writes', () => {
+    const sourceContent = 'Search src/runtime for planned_steps. Write a concise summary of what you find to tmp/orchestration-openrouter/planned-steps-summary.txt.';
+    const normalized = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Search src/runtime for planned_steps and write a concise summary to tmp/orchestration-openrouter/planned-steps-summary.txt.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    }, { sourceContent });
+
+    expect(normalized.plannedSteps?.some((step) => step.kind === 'write')).toBe(true);
+    expect(shouldHandleDirectReasoningMode({
+      gateway: { ...gateway(), decision: normalized },
       selectedExecutionProfile: profile(),
     })).toBe(false);
   });

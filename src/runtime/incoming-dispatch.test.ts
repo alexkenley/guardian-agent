@@ -178,6 +178,43 @@ describe('createIncomingDispatchPreparer', () => {
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
   });
 
+  it('attaches synthesized read/write planned steps before profile selection and worker dispatch', async () => {
+    const readCodeRequestMetadata = vi.fn(() => ({
+      sessionId: 'session-1',
+      workspaceRoot: 'S:/Development/GuardianAgent',
+    }));
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord({
+        operation: 'search',
+        summary: 'Search src/runtime for planned_steps and write a summary file.',
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: undefined,
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      readCodeRequestMetadata,
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => ({
+          session: { id: 'session-1', agentId: 'pinned-worker', workspaceRoot: 'S:/Development/GuardianAgent' },
+        })),
+      },
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Search src/runtime for planned_steps. Write a concise summary of what you find to tmp/orchestration-openrouter/planned-steps-summary.txt.',
+      userId: 'alex',
+      channel: 'web',
+      metadata: { codeContext: { sessionId: 'session-1', workspaceRoot: 'S:/Development/GuardianAgent' } },
+    });
+
+    const preRouted = readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata);
+    expect(result.gateway?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'write']);
+    expect(preRouted?.decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'write']);
+  });
+
   it('still attaches a forced provider profile when a coding session is active', async () => {
     const config = createConfig();
     config.llm.anthropic = {

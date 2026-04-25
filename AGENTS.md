@@ -8,11 +8,15 @@ Do not create or switch to a new branch unless the user explicitly asks for it. 
 
 ## Build, Test, and Development Commands
 - `npm run dev`: start the app with `tsx src/index.ts`.
+- `.\scripts\start-dev-windows.ps1 -StartOnly`: start the Windows dev server without rebuilding for browser/API regression loops.
+- `bash scripts/start-dev-unix.sh --start-only`: start the Unix/WSL dev server without rebuilding.
 - `npm run build`: compile TypeScript to `dist/`.
 - `npm run check`: type check with `tsc --noEmit`.
 - `npm test`: run the Vitest suite.
 - `npm run test:coverage`: run Vitest with coverage thresholds.
 - `npx vitest run src/path/file.test.ts`: run one test file.
+- `npm run validate:dependency-contract`: validate pinned dependency and lockfile contract after dependency or override changes.
+- `npm run validate:windows-package`: validate staged Windows package manifests after Windows packaging work.
 - `npm run helper:windows`: rebuild the Windows native helper when touching `native/windows-helper/`.
 - **Integration Testing (CRITICAL):** Review `docs/guides/INTEGRATION-TEST-HARNESS.md` for full-stack API regression testing, including guidance for cross-platform (Windows/WSL) and Ollama configurations.
 
@@ -45,6 +49,8 @@ This repo uses strict TypeScript with ESM output. Follow the existing style: 2-s
 
 ## Testing Guidelines
 Vitest is configured for `src/**/*.test.ts`. Coverage thresholds are 70% for lines, functions, and statements, with 55% for branches. Add or update colocated tests for every behavior change. Agents should automatically run relevant Vitest coverage first, using a focused file run during iteration and `npm test` or `npm run test:coverage` before handoff. Do not wait for a user reminder to run the integration harnesses as well: after changes to web UI, coding assistant, approvals, prompts, routing, or security behavior, run the relevant `scripts/` harnesses automatically. The default path in WSL is the Node `.mjs` harnesses, especially `node scripts/test-coding-assistant.mjs`, `node scripts/test-code-ui-smoke.mjs`, and `node scripts/test-contextual-security-uplifts.mjs`. For AI-path smoke validation, use the real-Ollama lane with `HARNESS_USE_REAL_OLLAMA=1 ... --use-ollama`. In WSL, if the local Ollama server is not already responding, start it first with `ollama serve` before running the real-model harnesses. Real-Ollama harnesses also default `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1`; set `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` if you need to reproduce the friendly local-model guard path. For adversarial prompt testing, use `npm run test:llmmap`. See `docs/guides/INTEGRATION-TEST-HARNESS.md` for WSL and Windows-hosted Ollama details, including `HARNESS_OLLAMA_BASE_URL`.
+For UI-facing chat regressions in Codex Desktop, use the documented web preview loop: start with `.\scripts\start-dev-windows.ps1 -StartOnly`, exercise `http://localhost:3000/`, replay with `POST /api/message/stream` if needed, then inspect `~/.guardianagent/routing/intent-routing.jsonl` by `requestId`.
+Use focused harnesses for their owned surfaces: `node --import tsx scripts/test-skills-routing-harness.mjs` for skill/tool routing, `node scripts/test-web-gmail-approvals.mjs` for Gmail approval UX, `node scripts/test-security-verification.mjs` for security verification paths, and `node scripts/inspect-latest-coding-harness.mjs --list 3` when inspecting recent coding-harness artifacts.
 When a change materially affects startup behavior, orchestration, delegation, approvals, resume flow, provider/profile selection, routing, progress/timeline rendering, tool contracts, or scripted UX copy, inspect and update the startup scripts, smoke harnesses, test scripts, and brittle test expectations in the same change. Do not leave harness or startup-script drift behind after architectural work.
 
 ## Commit & Pull Request Guidelines

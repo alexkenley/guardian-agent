@@ -119,6 +119,7 @@ import {
 import {
   attachPreRoutedIntentGatewayMetadata,
   detachPreRoutedIntentGatewayMetadata,
+  enrichIntentGatewayRecordWithContentPlan,
   IntentGateway,
   readPreRoutedIntentGatewayMetadata,
   shouldReusePreRoutedIntentGateway,
@@ -2870,7 +2871,10 @@ type DirectIntentShadowCandidate =
     // redundant LLM call in the non-worker direct-intent routing path.
     const preRoutedGateway = readPreRoutedIntentGatewayMetadata(groundedScopedMessage.metadata);
     let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = shouldReusePreRoutedIntentGateway(preRoutedGateway)
-      ? preRoutedGateway
+      ? enrichIntentGatewayRecordWithContentPlan(
+          preRoutedGateway,
+          stripLeadingContextPrefix(groundedScopedMessage.content),
+        ) ?? preRoutedGateway
       : null;
     const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
     let activeExecution = this.getActiveExecution({
@@ -7753,31 +7757,36 @@ type DirectIntentShadowCandidate =
   ): Promise<IntentGatewayRecord | null> {
     const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
     if (shouldReusePreRoutedIntentGateway(preRouted)) {
+      const enrichedPreRouted = enrichIntentGatewayRecordWithContentPlan(
+        preRouted,
+        stripLeadingContextPrefix(message.content),
+      ) ?? preRouted;
       this.recordIntentRoutingTrace('gateway_classified', {
         message,
         details: {
           source: 'pre_routed',
-          mode: preRouted.mode,
-          available: preRouted.available,
-          promptProfile: preRouted.promptProfile,
-          route: preRouted.decision.route,
-          confidence: preRouted.decision.confidence,
-          operation: preRouted.decision.operation,
-          routeSource: preRouted.decision.provenance?.route,
-          operationSource: preRouted.decision.provenance?.operation,
-          turnRelation: preRouted.decision.turnRelation,
-          resolution: preRouted.decision.resolution,
-          missingFields: preRouted.decision.missingFields,
-          simpleVsComplex: preRouted.decision.simpleVsComplex,
-          entitySources: preRouted.decision.provenance?.entities,
-          emailProvider: preRouted.decision.entities.emailProvider,
-          codingBackend: preRouted.decision.entities.codingBackend,
-          latencyMs: preRouted.latencyMs,
-          model: preRouted.model,
-          rawResponsePreview: preRouted.rawResponsePreview,
+          mode: enrichedPreRouted.mode,
+          available: enrichedPreRouted.available,
+          promptProfile: enrichedPreRouted.promptProfile,
+          route: enrichedPreRouted.decision.route,
+          confidence: enrichedPreRouted.decision.confidence,
+          operation: enrichedPreRouted.decision.operation,
+          routeSource: enrichedPreRouted.decision.provenance?.route,
+          operationSource: enrichedPreRouted.decision.provenance?.operation,
+          turnRelation: enrichedPreRouted.decision.turnRelation,
+          resolution: enrichedPreRouted.decision.resolution,
+          missingFields: enrichedPreRouted.decision.missingFields,
+          simpleVsComplex: enrichedPreRouted.decision.simpleVsComplex,
+          plannedStepKinds: enrichedPreRouted.decision.plannedSteps?.map((step) => step.kind),
+          entitySources: enrichedPreRouted.decision.provenance?.entities,
+          emailProvider: enrichedPreRouted.decision.entities.emailProvider,
+          codingBackend: enrichedPreRouted.decision.entities.codingBackend,
+          latencyMs: enrichedPreRouted.latencyMs,
+          model: enrichedPreRouted.model,
+          rawResponsePreview: enrichedPreRouted.rawResponsePreview,
         },
       });
-      return preRouted;
+      return enrichedPreRouted;
     }
     if (!ctx.llm) return preRouted ?? null;
     const gatewayContext = filterIntentGatewayClassificationContextHelper({
@@ -7805,32 +7814,37 @@ type DirectIntentShadowCandidate =
         readSelectedExecutionProfileMetadata(message.metadata)?.fallbackProviderOrder,
       ),
     );
+    const enrichedClassified = enrichIntentGatewayRecordWithContentPlan(
+      classified,
+      stripLeadingContextPrefix(message.content),
+    );
     this.recordIntentRoutingTrace('gateway_classified', {
       message,
-      details: classified
+      details: enrichedClassified
         ? {
             source: 'agent',
-            mode: classified.mode,
-            available: classified.available,
-            promptProfile: classified.promptProfile,
-            route: classified.decision.route,
-            confidence: classified.decision.confidence,
-            operation: classified.decision.operation,
-            routeSource: classified.decision.provenance?.route,
-            operationSource: classified.decision.provenance?.operation,
-            turnRelation: classified.decision.turnRelation,
-            resolution: classified.decision.resolution,
-            missingFields: classified.decision.missingFields,
-            simpleVsComplex: classified.decision.simpleVsComplex,
-            entitySources: classified.decision.provenance?.entities,
-            emailProvider: classified.decision.entities.emailProvider,
-            codingBackend: classified.decision.entities.codingBackend,
+            mode: enrichedClassified.mode,
+            available: enrichedClassified.available,
+            promptProfile: enrichedClassified.promptProfile,
+            route: enrichedClassified.decision.route,
+            confidence: enrichedClassified.decision.confidence,
+            operation: enrichedClassified.decision.operation,
+            routeSource: enrichedClassified.decision.provenance?.route,
+            operationSource: enrichedClassified.decision.provenance?.operation,
+            turnRelation: enrichedClassified.decision.turnRelation,
+            resolution: enrichedClassified.decision.resolution,
+            missingFields: enrichedClassified.decision.missingFields,
+            simpleVsComplex: enrichedClassified.decision.simpleVsComplex,
+            plannedStepKinds: enrichedClassified.decision.plannedSteps?.map((step) => step.kind),
+            entitySources: enrichedClassified.decision.provenance?.entities,
+            emailProvider: enrichedClassified.decision.entities.emailProvider,
+            codingBackend: enrichedClassified.decision.entities.codingBackend,
             continuityKey: gatewayContext.continuityThread?.continuityKey,
             pendingActionContextSuppressed: gatewayContext.contextSuppressed,
             pendingActionContextSuppressionReason: gatewayContext.suppressionReason,
-            latencyMs: classified.latencyMs,
-            model: classified.model,
-            rawResponsePreview: classified.rawResponsePreview,
+            latencyMs: enrichedClassified.latencyMs,
+            model: enrichedClassified.model,
+            rawResponsePreview: enrichedClassified.rawResponsePreview,
           }
         : {
             source: 'agent',
@@ -7839,7 +7853,7 @@ type DirectIntentShadowCandidate =
             pendingActionContextSuppressionReason: gatewayContext.suppressionReason,
           },
     });
-    return classified;
+    return enrichedClassified;
   }
 
   private logIntentGateway(
