@@ -343,16 +343,19 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
 export function buildStepReceipts(input: BuildStepReceiptsInput): StepReceipt[] {
   const interruptionId = input.interruptions?.[0]?.interruptionId;
   const receiptsByStepId = new Map<string, EvidenceReceipt[]>();
+  const answerStepIds = input.finalAnswerReceiptId
+    ? findAnswerStepIds(input.plannedTask)
+    : [];
 
   for (const receipt of input.evidenceReceipts) {
-    const stepId = input.toolReceiptStepIds?.get(receipt.receiptId)
-      ?? (input.finalAnswerReceiptId && receipt.receiptId === input.finalAnswerReceiptId
-        ? findAnswerStepId(input.plannedTask)
-        : undefined);
-    if (!stepId) continue;
-    const existing = receiptsByStepId.get(stepId) ?? [];
-    existing.push(receipt);
-    receiptsByStepId.set(stepId, existing);
+    const stepIds = input.finalAnswerReceiptId && receipt.receiptId === input.finalAnswerReceiptId
+      ? answerStepIds
+      : [input.toolReceiptStepIds?.get(receipt.receiptId)].filter((stepId): stepId is string => !!stepId);
+    for (const stepId of stepIds) {
+      const existing = receiptsByStepId.get(stepId) ?? [];
+      existing.push(receipt);
+      receiptsByStepId.set(stepId, existing);
+    }
   }
 
   return input.plannedTask.steps.map((step) => {
@@ -530,7 +533,13 @@ export function filterDependencySatisfiedStepReceipts(
 }
 
 export function findAnswerStepId(plannedTask: PlannedTask): string | undefined {
-  return plannedTask.steps.find((step) => step.kind === 'answer')?.stepId;
+  return findAnswerStepIds(plannedTask).at(-1);
+}
+
+export function findAnswerStepIds(plannedTask: PlannedTask): string[] {
+  return plannedTask.steps
+    .filter((step) => step.kind === 'answer')
+    .map((step) => step.stepId);
 }
 
 function normalizeGatewayPlannedStep(
