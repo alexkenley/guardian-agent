@@ -146,6 +146,7 @@ import {
 } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
+import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
 import { AutomationOutputStore } from './runtime/automation-output-store.js';
 import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
@@ -3428,6 +3429,7 @@ async function main(): Promise<void> {
   let secondBrainSyncService: SyncService | undefined;
   secondBrainBriefingService.start();
   const runTimeline = new RunTimelineStore();
+  const executionGraphStore = new ExecutionGraphStore();
   const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
   let refreshRunTimelineSnapshots: () => void = () => {};
   codeSessionStore.subscribe((event) => {
@@ -5242,6 +5244,7 @@ async function main(): Promise<void> {
         intentRoutingTrace,
         runTimeline,
         pendingActionStore,
+        executionGraphStore,
       },
     );
   } else {

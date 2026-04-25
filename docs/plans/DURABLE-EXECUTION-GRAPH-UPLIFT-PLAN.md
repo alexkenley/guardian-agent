@@ -480,6 +480,8 @@ Expected:
 
 Goal: approvals, clarification, auth, workspace switch, and policy blockers become durable graph interrupts.
 
+Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Broader blocker kinds and restart-durable graph resume are still pending.
+
 Files:
 
 - `src/runtime/execution-graph/pending-action-adapter.ts`

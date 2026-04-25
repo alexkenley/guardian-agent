@@ -54,6 +54,7 @@ import {
   createExecutionGraphEvent,
   type ExecutionGraphEvent,
 } from '../runtime/execution-graph/graph-events.js';
+import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
   buildWriteSpecArtifact,
@@ -320,6 +321,7 @@ export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
   pendingActionStore?: Pick<PendingActionStore, 'replaceActive'>;
+  executionGraphStore?: Pick<ExecutionGraphStore, 'createGraph' | 'appendEvent' | 'writeArtifact'>;
   now?: () => number;
 }
 
@@ -619,6 +621,82 @@ export class WorkerManager {
     const parentExecutionId = input.request.delegation?.executionId;
     const codeContext = input.request.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
     const codeSessionId = input.request.delegation?.codeSessionId ?? codeContext?.sessionId;
+    const readNodeId = `node:${input.taskRunId}:explore`;
+    const synthesisNodeId = `node:${input.taskRunId}:synthesize`;
+    const mutationNodeId = `node:${input.taskRunId}:mutate`;
+    this.observability.executionGraphStore?.createGraph({
+      graphId,
+      executionId: input.taskRunId,
+      rootExecutionId,
+      ...(parentExecutionId ? { parentExecutionId } : {}),
+      requestId: input.requestId,
+      runId: input.requestId,
+      intent: gatewayRecord.decision,
+      securityContext: {
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
+        ...(codeSessionId ? { codeSessionId } : {}),
+      },
+      trigger: {
+        type: 'user_request',
+        source: input.request.message.channel,
+        sourceId: input.request.message.id,
+      },
+      nodes: [
+        {
+          nodeId: readNodeId,
+          graphId,
+          kind: 'explore_readonly',
+          status: 'pending',
+          title: 'Read-only evidence gathering',
+          requiredInputIds: [],
+          outputArtifactTypes: ['SearchResultSet', 'FileReadSet', 'EvidenceLedger'],
+          allowedToolCategories: ['filesystem.read', 'search.read'],
+          approvalPolicy: 'none',
+          checkpointPolicy: 'phase_boundary',
+        },
+        {
+          nodeId: synthesisNodeId,
+          graphId,
+          kind: 'synthesize',
+          status: 'pending',
+          title: 'Grounded write specification synthesis',
+          requiredInputIds: [],
+          outputArtifactTypes: ['EvidenceLedger', 'SynthesisDraft', 'WriteSpec'],
+          allowedToolCategories: [],
+          approvalPolicy: 'none',
+          checkpointPolicy: 'phase_boundary',
+        },
+        {
+          nodeId: mutationNodeId,
+          graphId,
+          kind: 'mutate',
+          status: 'pending',
+          title: 'Supervisor-owned file mutation',
+          requiredInputIds: [],
+          outputArtifactTypes: ['MutationReceipt', 'VerificationResult'],
+          allowedToolCategories: ['filesystem.write', 'filesystem.read'],
+          approvalPolicy: 'if_required',
+          checkpointPolicy: 'phase_boundary',
+        },
+      ],
+      edges: [
+        {
+          edgeId: `${readNodeId}->${synthesisNodeId}`,
+          graphId,
+          fromNodeId: readNodeId,
+          toNodeId: synthesisNodeId,
+        },
+        {
+          edgeId: `${synthesisNodeId}->${mutationNodeId}`,
+          graphId,
+          fromNodeId: synthesisNodeId,
+          toNodeId: mutationNodeId,
+        },
+      ],
+    });
     let sequence = 0;
     const emitGraphEvent = (
       kind: ExecutionGraphEvent['kind'],
@@ -652,6 +730,7 @@ export class WorkerManager {
         payload,
       });
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
       return event;
     };
     const emitArtifact = (
@@ -660,6 +739,7 @@ export class WorkerManager {
       nodeKind: ExecutionGraphEvent['nodeKind'],
     ): ExecutionGraphEvent => {
       const ref = artifactRefFromArtifact(artifact);
+      this.observability.executionGraphStore?.writeArtifact(artifact);
       return emitGraphEvent('artifact_created', {
         artifactId: ref.artifactId,
         artifactType: ref.artifactType,
@@ -704,7 +784,6 @@ export class WorkerManager {
         input.request.additionalSections ?? [],
         this.buildCodeSessionRegistrySection(input.request),
       );
-      const readNodeId = `node:${input.taskRunId}:explore`;
       const readGraphContext: DirectReasoningGraphContext = buildDirectReasoningGraphContext({
         graphId,
         nodeId: readNodeId,
@@ -756,11 +835,13 @@ export class WorkerManager {
         returnExecutionGraphArtifacts: true,
       });
       const sourceArtifacts = readExecutionGraphArtifactsFromMetadata(directResult.metadata);
+      for (const artifact of sourceArtifacts) {
+        this.observability.executionGraphStore?.writeArtifact(artifact);
+      }
       if (directResult.metadata?.directReasoningFailed === true || sourceArtifacts.length === 0) {
         return failGraph('Read-only graph node did not produce typed evidence artifacts.', readNodeId, 'explore_readonly');
       }
 
-      const synthesisNodeId = `node:${input.taskRunId}:synthesize`;
       emitGraphEvent('node_started', {
         evidenceArtifactCount: sourceArtifacts.length,
         purpose: 'write_spec_candidate',
@@ -862,7 +943,6 @@ export class WorkerManager {
         writeSpecArtifactId: writeSpec.artifactId,
       }, `${synthesisNodeId}:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
 
-      const mutationNodeId = `node:${input.taskRunId}:mutate`;
       const toolRequest = buildGraphMutationToolRequest(input.request, input.requestId, codeContext, graphExecutionProfile);
       const mutationContext: MutationNodeExecutionContext = {
         graphId,
@@ -881,6 +961,7 @@ export class WorkerManager {
         emit: (event) => {
           sequence = Math.max(sequence, event.sequence);
           this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+          this.observability.executionGraphStore?.appendEvent(event);
         },
       };
       const mutationResult = await executeWriteSpecMutationNode({
@@ -898,6 +979,12 @@ export class WorkerManager {
         ...(mutationResult.receiptArtifact ? [mutationResult.receiptArtifact.artifactId] : []),
         ...(mutationResult.verificationArtifact ? [mutationResult.verificationArtifact.artifactId] : []),
       ];
+      if (mutationResult.receiptArtifact) {
+        this.observability.executionGraphStore?.writeArtifact(mutationResult.receiptArtifact);
+      }
+      if (mutationResult.verificationArtifact) {
+        this.observability.executionGraphStore?.writeArtifact(mutationResult.verificationArtifact);
+      }
 
       if (mutationResult.status === 'awaiting_approval' && mutationResult.receiptArtifact) {
         const approvalEvent = mutationResult.events.find((event) => event.kind === 'approval_requested');
@@ -1076,6 +1163,7 @@ export class WorkerManager {
         payload: payloadDetails,
       });
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
       return event;
     };
 
@@ -1119,6 +1207,7 @@ export class WorkerManager {
         emit: (event) => {
           sequence = Math.max(sequence, event.sequence);
           this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+          this.observability.executionGraphStore?.appendEvent(event);
         },
       },
       approvalId: options.approvalId,
@@ -1131,6 +1220,12 @@ export class WorkerManager {
       ...(mutationResult.receiptArtifact ? [mutationResult.receiptArtifact.artifactId] : []),
       ...(mutationResult.verificationArtifact ? [mutationResult.verificationArtifact.artifactId] : []),
     ];
+    if (mutationResult.receiptArtifact) {
+      this.observability.executionGraphStore?.writeArtifact(mutationResult.receiptArtifact);
+    }
+    if (mutationResult.verificationArtifact) {
+      this.observability.executionGraphStore?.writeArtifact(mutationResult.verificationArtifact);
+    }
     if (mutationResult.status !== 'succeeded' || !mutationResult.verificationArtifact) {
       emitGraphEvent('graph_failed', {
         reason: 'Mutation verification failed after approval.',
@@ -2698,6 +2793,7 @@ export class WorkerManager {
 
         if (notification.method === 'execution_graph.event' && isExecutionGraphEvent(notification.params)) {
           this.observability.runTimeline?.ingestExecutionGraphEvent(notification.params);
+          this.observability.executionGraphStore?.appendEvent(notification.params);
           return;
         }
       },

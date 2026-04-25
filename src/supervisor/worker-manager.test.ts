@@ -10,6 +10,7 @@ import {
   buildFileReadSetArtifact,
   buildSearchResultSetArtifact,
 } from '../runtime/execution-graph/graph-artifacts.js';
+import { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   buildStepReceipts,
   computeWorkerRunStatus,
@@ -4182,6 +4183,9 @@ describe('WorkerManager', () => {
         ...draft,
       })),
     };
+    const executionGraphStore = new ExecutionGraphStore({
+      now: () => 1_112_000,
+    });
     const executeModelTool = vi.fn(async (toolName: string) => {
       if (toolName === 'fs_write') {
         return {
@@ -4232,6 +4236,7 @@ describe('WorkerManager', () => {
         intentRoutingTrace,
         runTimeline,
         pendingActionStore,
+        executionGraphStore,
         now: () => 1_112_000,
       },
     );
@@ -4303,6 +4308,19 @@ describe('WorkerManager', () => {
     expect(pendingActionStore.replaceActive).toHaveBeenCalledOnce();
     expect(runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event.kind)).toEqual(expect.arrayContaining([
       'approval_requested',
+    ]));
+    const executionGraphMetadata = result.metadata?.executionGraph as { graphId?: string } | undefined;
+    const graphId = executionGraphMetadata?.graphId ?? '';
+    const snapshot = executionGraphStore.getSnapshot(graphId);
+    expect(snapshot?.graph.status).toBe('awaiting_approval');
+    expect(snapshot?.graph.nodes.find((node) => node.kind === 'mutate')?.status).toBe('awaiting_approval');
+    expect(snapshot?.graph.checkpoints.map((checkpoint) => checkpoint.reason)).toContain('approval_interrupt');
+    expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual(expect.arrayContaining([
+      'SearchResultSet',
+      'EvidenceLedger',
+      'SynthesisDraft',
+      'WriteSpec',
+      'MutationReceipt',
     ]));
 
     manager.shutdown();
