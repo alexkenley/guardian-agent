@@ -21,6 +21,8 @@ export type DirectSecondBrainMutationToolName =
   | 'second_brain_library_upsert'
   | 'second_brain_library_delete'
   | 'second_brain_brief_upsert'
+  | 'second_brain_generate_brief'
+  | 'second_brain_brief_update'
   | 'second_brain_brief_delete'
   | 'second_brain_routine_create'
   | 'second_brain_routine_update'

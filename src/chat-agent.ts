@@ -75,6 +75,7 @@ import {
   pruneDeferredRemoteSandboxToolCalls,
 } from './runtime/chat-agent/tool-execution.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
+import { normalizeTags } from './runtime/second-brain/utils.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
 import type {
@@ -1154,6 +1155,32 @@ function extractSecondBrainTextBody(text: string): string {
   return '';
 }
 
+function extractSecondBrainTags(text: string): string[] {
+  const labeledQuoted = extractQuotedLabeledValue(text, ['tag', 'tags']);
+  if (labeledQuoted) {
+    return parseSecondBrainTagList(labeledQuoted);
+  }
+
+  const labeledInline = matchWithCollapsedWhitespaceFallback(
+    text,
+    /\b(?:tags?|tagged)\b(?:\s+(?:are|as|with|include|including))?\s*:?\s*([\s\S]+?)(?=(?:\b(?:with|and)\s+(?:title|content|url|notes?|summary|description|details|due|priority|status|email|phone|company|location)\b)|[.!?]?$)/i,
+  );
+  return parseSecondBrainTagList(labeledInline?.[1] ?? '');
+}
+
+function parseSecondBrainTagList(value: string): string[] {
+  return normalizeTags(
+    normalizeSecondBrainInlineFieldValue(value)
+      .split(/[,;\n]|\s+\band\b\s+/i)
+      .map((tag) => tag
+        .trim()
+        .replace(/^#+/, '')
+        .replace(/^[("'`\s]+|[)"'`.,!?;:\s]+$/g, '')
+        .trim())
+      .filter(Boolean),
+  );
+}
+
 function extractExplicitNamedSecondBrainTitle(text: string): string {
   const namedMatch = matchWithCollapsedWhitespaceFallback(text, /\b(?:called|named|titled)\s*(["'])([\s\S]+?)\1/i);
   return normalizeSecondBrainInlineFieldValue(namedMatch?.[2]?.trim() ?? '');
@@ -1214,7 +1241,7 @@ function extractQuotedLabeledValue(text: string, labels: string[]): string {
   const escaped = labels
     .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|');
-  const pattern = new RegExp(`\\b(?:${escaped})\\b(?:\\s+(?:is|to|as|for|with|include|including))?\\s*:?\\s*([\"'])([\\s\\S]+?)\\1`, 'i');
+  const pattern = new RegExp(`\\b(?:${escaped})\\b(?:\\s+(?:is|to|as|for|with|include|including|becomes?|changes?\\s+to))?\\s*:?\\s*([\"'])([\\s\\S]+?)\\1`, 'i');
   const match = matchWithCollapsedWhitespaceFallback(text, pattern);
   return match?.[2]?.trim() ?? '';
 }
@@ -1246,6 +1273,14 @@ function extractUrlFromText(text: string): string {
   const labeled = extractQuotedLabeledValue(text, ['url', 'link']);
   if (labeled) {
     return labeled;
+  }
+  const pointedTo = matchWithCollapsedWhitespaceFallback(text, /\b(?:pointing|points)\s+to\s*(["'])([\s\S]+?)\1/i);
+  if (pointedTo?.[2]) {
+    return pointedTo[2].trim();
+  }
+  const filePath = matchWithCollapsedWhitespaceFallback(text, /\b(?:file|path|reference)\b(?:\s+(?:is|to|as|for|with))?\s*:?\s*(["'])([\s\S]+?)\1/i);
+  if (filePath?.[2]) {
+    return filePath[2].trim();
   }
   const match = matchWithCollapsedWhitespaceFallback(text, /\bhttps?:\/\/[^\s"'`<>]+/i);
   return match?.[0]?.replace(/[),.;]+$/, '').trim() ?? '';
@@ -5223,6 +5258,7 @@ type DirectIntentShadowCandidate =
       extractNamedTitle: extractNamedSecondBrainTitle,
       extractRetitledTitle: extractRetitledSecondBrainTitle,
       extractTextBody: extractSecondBrainTextBody,
+      extractTags: extractSecondBrainTags,
       collapseWhitespace: collapseWhitespaceForSecondBrainParsing,
       extractTaskPriority: extractSecondBrainTaskPriority,
       extractTaskStatus: extractSecondBrainTaskStatus,

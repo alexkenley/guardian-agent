@@ -4697,6 +4697,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         expect(args).toMatchObject({
           title: 'Second Brain write smoke test note',
           content: 'Second Brain write smoke test note.',
+          tags: ['harness', 'chat-crud'],
         });
         return {
           success: true,
@@ -4722,7 +4723,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-note-create',
         userId: 'owner',
         channel: 'web',
-        content: 'Use Second Brain to create a note titled "Second Brain write smoke test note" with content "Second Brain write smoke test note."',
+        content: 'Use Second Brain to create a note titled "Second Brain write smoke test note" with content "Second Brain write smoke test note." and tags harness, chat-crud.',
         timestamp: Date.now(),
       },
       ctx,
@@ -4758,14 +4759,14 @@ describe('LLMChatAgent direct intent metadata', () => {
         expect(toolName).toBe('second_brain_note_upsert');
         expect(args).toMatchObject({
           id: 'note-2',
-          title: 'Smoke Test Note',
+          title: 'Smoke Test Note Updated',
           content: 'Second Brain write smoke test note updated.',
         });
         return {
           success: true,
           output: {
             id: 'note-2',
-            title: 'Smoke Test Note',
+            title: 'Smoke Test Note Updated',
           },
         };
       }),
@@ -4784,7 +4785,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-note-update',
         userId: 'owner',
         channel: 'web',
-        content: 'Update that note to say: "Second Brain write smoke test note updated."',
+        content: 'Update the note titled "Smoke Test Note" so title becomes "Smoke Test Note Updated" and content becomes "Second Brain write smoke test note updated."',
         timestamp: Date.now(),
       },
       ctx,
@@ -4821,14 +4822,14 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(typeof result).toBe('object');
-    expect((result as { content: string }).content).toBe('Note updated: Smoke Test Note');
+    expect((result as { content: string }).content).toBe('Note updated: Smoke Test Note Updated');
     expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
       kind: 'second_brain_focus',
       payload: {
         activeItemType: 'note',
         itemType: 'note',
         focusId: 'note-2',
-        items: [{ id: 'note-2', label: 'Smoke Test Note' }],
+        items: [{ id: 'note-2', label: 'Smoke Test Note Updated' }],
       },
     });
   });
@@ -4901,6 +4902,152 @@ describe('LLMChatAgent direct intent metadata', () => {
         focusId: 'brief-1',
       },
     });
+  });
+
+  it('generates a morning Second Brain brief directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_generate_brief');
+        expect(args).toMatchObject({ kind: 'morning' });
+        return {
+          success: true,
+          output: {
+            id: 'brief-morning-1',
+            title: 'Morning Brief',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-brief-generate',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Generate a morning brief in Second Brain.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Generates a morning brief.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'brief' },
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Brief created: Morning Brief');
+  });
+
+  it('updates a focused generated Second Brain brief directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_brief_update');
+        expect(args).toMatchObject({
+          id: 'brief-morning-1',
+          title: 'Morning Brief Updated',
+          content: 'Existing morning brief content.\n\nAppended line from chat.',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'brief-morning-1',
+            title: 'Morning Brief Updated',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getBriefById: vi.fn(() => ({
+        id: 'brief-morning-1',
+        kind: 'morning',
+        title: 'Morning Brief',
+        content: 'Existing morning brief content.',
+        generatedAt: Date.UTC(2026, 3, 7, 8, 0, 0),
+        createdAt: Date.UTC(2026, 3, 7, 8, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 8, 0, 0),
+      })),
+      listBriefs: vi.fn(() => []),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-brief-update',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update the latest morning brief in Second Brain so the title becomes "Morning Brief Updated" and append "Appended line from chat." to the content.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a morning brief.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'brief' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            itemType: 'brief',
+            focusId: 'brief-morning-1',
+            items: [{ id: 'brief-morning-1', label: 'Morning Brief' }],
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Brief updated: Morning Brief Updated');
   });
 
   it('creates a local Second Brain person directly', async () => {
@@ -5260,8 +5407,10 @@ describe('LLMChatAgent direct intent metadata', () => {
         expect(toolName).toBe('second_brain_library_upsert');
         expect(args).toMatchObject({
           title: 'Harbor launch checklist',
-          url: 'https://example.com',
+          url: 'C:\\Temp\\harbor-launch-checklist.md',
           summary: 'Reference for the Harbor launch review.',
+          tags: ['harness', 'chat-crud'],
+          kind: 'file',
         });
         return {
           success: true,
@@ -5290,7 +5439,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-library-create',
         userId: 'owner',
         channel: 'web',
-        content: 'Save this link in my library with title "Harbor launch checklist", url "https://example.com", and notes "Reference for the Harbor launch review."',
+        content: 'Save a Second Brain library item titled "Harbor launch checklist" pointing to "C:\\Temp\\harbor-launch-checklist.md" as a file reference with summary "Reference for the Harbor launch review." and tags harness, chat-crud.',
         timestamp: Date.now(),
       },
       ctx,
@@ -5572,6 +5721,8 @@ describe('LLMChatAgent direct intent metadata', () => {
         expect(toolName).toBe('second_brain_task_upsert');
         expect(args).toMatchObject({
           title: 'Send Harbor launch review deck',
+          details: 'Initial launch review task details.',
+          priority: 'high',
           dueAt: expect.any(Number),
         });
         return {
@@ -5600,7 +5751,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         id: 'msg-task-create-multiline',
         userId: 'owner',
         channel: 'web',
-        content: 'Create a task called "Send Harbor launch review deck" due   \n  April 9, 2026 at 4 PM.',
+        content: 'Create a task called "Send Harbor launch review deck" with details "Initial launch review task details.", high priority, due   \n  April 9, 2026 at 4 PM.',
         timestamp: Date.now(),
       },
       ctx,
@@ -5954,6 +6105,77 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(pendingActionStore.get(created.id)?.status).toBe('completed');
   });
 
+  it('creates a local Second Brain calendar event with place and description directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 3, 7, 8, 0, 0));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_calendar_upsert');
+        expect(args).toMatchObject({
+          title: 'Second Brain calendar smoke test',
+          location: 'Desk',
+          description: 'Local calendar write smoke test event.',
+          startsAt: expect.any(Number),
+          endsAt: expect.any(Number),
+        });
+        return {
+          success: true,
+          output: {
+            id: 'event-created',
+            title: 'Second Brain calendar smoke test',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getEventById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    try {
+      const result = await (agent as any).tryDirectSecondBrainWrite(
+        {
+          id: 'msg-event-create',
+          userId: 'owner',
+          channel: 'web',
+          content: 'Using the local Guardian calendar in Second Brain, create an event titled "Second Brain calendar smoke test" on April 9, 2026 at 10 AM through April 9, 2026 at 11 AM at "Desk" with description "Local calendar write smoke test event.".',
+          timestamp: Date.now(),
+        },
+        ctx,
+        'owner:web',
+        {
+          route: 'personal_assistant_task',
+          operation: 'create',
+          confidence: 'high',
+          summary: 'Creates a local calendar event.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: { personalItemType: 'calendar', calendarTarget: 'local' },
+        },
+      );
+
+      expect((result as { content: string }).content).toBe('Calendar event created: Second Brain calendar smoke test');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('moves the focused local calendar event directly', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -5968,14 +6190,16 @@ describe('LLMChatAgent direct intent metadata', () => {
       isEnabled: vi.fn(() => true),
       executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
         expect(args.id).toBe('event-1');
-        expect(args.title).toBe('Second Brain calendar smoke test');
+        expect(args.title).toBe('Second Brain calendar smoke test updated');
+        expect(args.location).toBe('War Room');
+        expect(args.description).toBe('Updated calendar smoke test event.');
         expect(args.startsAt).toBe(1775631600000); // Or the correct expected value based on the test
 
         return {
           success: true,
           output: {
             id: 'event-1',
-            title: 'Second Brain calendar smoke test',
+            title: 'Second Brain calendar smoke test updated',
           },
         };
       }),
@@ -6006,7 +6230,7 @@ describe('LLMChatAgent direct intent metadata', () => {
           id: 'msg-event-move',
           userId: 'owner',
           channel: 'web',
-          content: 'Move that event to tomorrow at 5:00 PM.',
+          content: 'Move that event to tomorrow at 5:00 PM, the title becomes "Second Brain calendar smoke test updated", the location becomes "War Room", and the description becomes "Updated calendar smoke test event.".',
           timestamp: Date.now(),
         },
         ctx,
@@ -6039,7 +6263,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
       );
 
-      expect((result as { content: string }).content).toBe('Calendar event updated: Second Brain calendar smoke test');
+      expect((result as { content: string }).content).toBe('Calendar event updated: Second Brain calendar smoke test updated');
     } finally {
       nowSpy.mockRestore();
     }

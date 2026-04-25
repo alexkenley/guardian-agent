@@ -38,8 +38,9 @@ async function main() {
   try {
     const service = new SecondBrainService(store, { now });
     const briefing = new BriefingService(service, { now });
-    service.createRoutine({ templateId: 'pre-meeting-brief' });
-    service.createRoutine({ templateId: 'follow-up-watch' });
+    const seededRoutineIds = new Set(service.listRoutines().map((routine) => routine.id));
+    assert(seededRoutineIds.has('pre-meeting-brief'), 'expected Pre-Meeting Brief to be seeded');
+    assert(seededRoutineIds.has('follow-up-watch'), 'expected Follow-Up Draft to be seeded');
     service.upsertTask({ title: 'Finalize board deck', priority: 'high' });
     service.upsertSyncedEvent({
       id: 'board-sync',

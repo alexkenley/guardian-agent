@@ -57,7 +57,7 @@ interface DirectSecondBrainMutationExecutor<TFocusState> {
 export async function tryDirectSecondBrainWrite<TFocusState>(input: {
   secondBrainService?: Pick<
     SecondBrainService,
-    'getEventById' | 'getLinkById' | 'getPersonById' | 'getTaskById'
+    'getBriefById' | 'getEventById' | 'getLinkById' | 'getPersonById' | 'getTaskById' | 'listBriefs'
   > | null;
   message: UserMessage;
   ctx: AgentContext;
@@ -75,6 +75,7 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
   extractNamedTitle: (text: string) => string;
   extractRetitledTitle: (text: string) => string;
   extractTextBody: (text: string) => string;
+  extractTags: (text: string) => string[];
   collapseWhitespace: (text: string) => string;
   extractTaskPriority: (text: string) => 'low' | 'medium' | 'high' | undefined;
   extractTaskStatus: (text: string) => 'todo' | 'in_progress' | 'done' | undefined;
@@ -97,6 +98,7 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
       );
       const explicitContent = input.extractQuotedLabeledValue(requestText, ['content']);
       const content = explicitContent || input.extractTextBody(requestText);
+      const explicitTags = input.extractTags(requestText);
       const noteFocus = input.getFocusEntry(input.focusState, 'note');
       const focusItem = noteFocus
         ? noteFocus.items.find((item) => item.id === noteFocus.focusId) ?? null
@@ -117,6 +119,7 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
             args: {
               ...(explicitTitle ? { title: explicitTitle } : {}),
               content,
+              ...(explicitTags.length > 0 ? { tags: explicitTags } : {}),
             },
             summary: 'Creates a local Second Brain note.',
             pendingIntro: 'I prepared a local note save, but it needs approval first.',
@@ -143,6 +146,7 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
               id: focusItem.id,
               ...(explicitTitle || focusItem.label ? { title: explicitTitle || focusItem.label } : {}),
               content,
+              ...(explicitTags.length > 0 ? { tags: explicitTags } : {}),
             },
             summary: 'Updates a local Second Brain note.',
             pendingIntro: 'I prepared a local note update, but it needs approval first.',
@@ -192,9 +196,17 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
           if (!title) {
             return 'To create a local task, I need the task title.';
           }
+          const details = input.collapseWhitespace(
+            input.extractQuotedLabeledValue(requestText, ['details', 'detail', 'notes', 'note', 'description']),
+          );
+          const priority = input.extractTaskPriority(requestText);
           const args = normalizeSecondBrainMutationArgs({
             toolName: 'second_brain_task_upsert',
-            args: { title },
+            args: {
+              title,
+              ...(details ? { details } : {}),
+              ...(priority ? { priority } : {}),
+            },
             userContent: requestText,
             referenceTime: Date.now(),
             getTaskById: (id) => input.secondBrainService?.getTaskById(id) ?? null,
@@ -318,11 +330,19 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
           if (!title) {
             return 'To create a local calendar event, I need the event title.';
           }
+          const explicitLocation = input.collapseWhitespace(
+            input.extractQuotedLabeledValue(requestText, ['location', 'place', 'venue']) || extractQuotedAtValue(requestText),
+          );
+          const explicitDescription = input.collapseWhitespace(
+            input.extractQuotedLabeledValue(requestText, ['description', 'notes', 'note', 'summary']),
+          );
           const args = normalizeSecondBrainMutationArgs({
             toolName: 'second_brain_calendar_upsert',
             args: {
               title,
               startsAt: Date.now(),
+              ...(explicitLocation ? { location: explicitLocation } : {}),
+              ...(explicitDescription ? { description: explicitDescription } : {}),
             },
             userContent: requestText,
             referenceTime: Date.now(),
@@ -353,15 +373,25 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
           if (!existingEvent) {
             return `Local calendar event "${focusItem.label ?? focusItem.id}" was not found.`;
           }
+          const explicitTitle = input.extractRetitledTitle(requestText)
+            || input.normalizeInlineFieldValue(input.extractQuotedLabeledValue(requestText, ['title']));
+          const explicitLocation = input.collapseWhitespace(
+            input.extractQuotedLabeledValue(requestText, ['location', 'place', 'venue']) || extractQuotedAtValue(requestText),
+          );
+          const explicitDescription = input.collapseWhitespace(
+            input.extractQuotedLabeledValue(requestText, ['description', 'notes', 'note', 'summary']),
+          );
           const args = normalizeSecondBrainMutationArgs({
             toolName: 'second_brain_calendar_upsert',
             args: {
               id: existingEvent.id,
-              title: existingEvent.title,
+              title: explicitTitle || existingEvent.title,
               startsAt: existingEvent.startsAt,
               ...(existingEvent.endsAt != null ? { endsAt: existingEvent.endsAt } : {}),
-              ...(existingEvent.location ? { location: existingEvent.location } : {}),
-              ...(existingEvent.description ? { description: existingEvent.description } : {}),
+              ...(explicitLocation || existingEvent.location ? { location: explicitLocation || existingEvent.location } : {}),
+              ...(explicitDescription || existingEvent.description
+                ? { description: explicitDescription || existingEvent.description }
+                : {}),
             },
             userContent: requestText,
             referenceTime: Date.now(),
@@ -416,11 +446,15 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
       const focusItem = libraryFocus
         ? libraryFocus.items.find((item) => item.id === libraryFocus.focusId) ?? null
         : null;
-      const explicitTitle = input.normalizeInlineFieldValue(input.extractQuotedLabeledValue(requestText, ['title']));
+      const explicitTitle = input.normalizeInlineFieldValue(
+        input.extractQuotedLabeledValue(requestText, ['title']) || input.extractExplicitNamedTitle(requestText),
+      );
       const explicitUrl = input.extractUrlFromText(requestText);
       const explicitSummary = input.collapseWhitespace(
         input.extractQuotedLabeledValue(requestText, ['notes', 'note', 'summary', 'description']),
       );
+      const explicitTags = input.extractTags(requestText);
+      const explicitKind = extractLibraryKind(requestText);
 
       switch (input.decision.operation) {
         case 'create':
@@ -438,6 +472,8 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
               url: explicitUrl,
               ...(explicitTitle ? { title: explicitTitle } : {}),
               ...(explicitSummary ? { summary: explicitSummary } : {}),
+              ...(explicitTags.length > 0 ? { tags: explicitTags } : {}),
+              ...(explicitKind ? { kind: explicitKind } : {}),
             },
             summary: 'Creates a local Second Brain library item.',
             pendingIntro: 'I prepared a local library item save, but it needs approval first.',
@@ -456,7 +492,7 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
           if (!existingLink) {
             return `Local library item "${focusItem.label ?? focusItem.id}" was not found.`;
           }
-          if (!explicitTitle && !explicitUrl && !explicitSummary) {
+          if (!explicitTitle && !explicitUrl && !explicitSummary && explicitTags.length === 0) {
             return 'To update that local library item, tell me the new title, URL, or notes.';
           }
           return input.executeMutation({
@@ -471,6 +507,8 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
               url: explicitUrl || existingLink.url,
               ...(explicitSummary || existingLink.summary ? { summary: explicitSummary || existingLink.summary } : {}),
               ...(existingLink.kind ? { kind: existingLink.kind } : {}),
+              ...(explicitTags.length > 0 ? { tags: explicitTags } : {}),
+              ...(explicitKind ? { kind: explicitKind } : {}),
             },
             summary: 'Updates a local Second Brain library item.',
             pendingIntro: 'I prepared a local library item update, but it needs approval first.',
@@ -518,6 +556,25 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
       switch (input.decision.operation) {
         case 'create':
         case 'save': {
+          const generatedKind = extractGeneratedBriefKind(requestText);
+          if (generatedKind) {
+            return input.executeMutation({
+              message: input.message,
+              ctx: input.ctx,
+              userKey: input.userKey,
+              decision: input.decision,
+              toolName: 'second_brain_generate_brief',
+              args: { kind: generatedKind },
+              summary: 'Generates a local Second Brain brief.',
+              pendingIntro: 'I prepared a local brief generation, but it needs approval first.',
+              successDescriptor: {
+                itemType: 'brief',
+                action: 'create',
+                fallbackLabel: generatedKind.replace(/_/g, ' '),
+              },
+              focusState: input.focusState,
+            });
+          }
           const title = input.extractNamedTitle(requestText);
           if (!title) {
             return 'To create a local brief, I need the brief title.';
@@ -546,34 +603,45 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
             focusState: input.focusState,
           });
         }
-        case 'update':
-          if (!focusItem) {
+        case 'update': {
+          if (!input.secondBrainService) return null;
+          const existingBrief = focusItem
+            ? input.secondBrainService.getBriefById(focusItem.id)
+            : findLatestBrief(input.secondBrainService.listBriefs({ kind: extractBriefKindFilter(requestText), limit: 20 }));
+          if (!existingBrief) {
             return 'I need to know which local brief to update. Try "Show my briefs." first.';
           }
-          if (!content) {
-            return 'To update that local brief, I need the new brief content.';
+          const explicitTitle = input.extractRetitledTitle(requestText)
+            || input.normalizeInlineFieldValue(input.extractQuotedLabeledValue(requestText, ['title']));
+          const appendedContent = input.collapseWhitespace(extractQuotedAppendValue(requestText));
+          const explicitContent = appendedContent
+            ? `${existingBrief.content.trim()}\n\n${appendedContent}`.trim()
+            : content;
+          if (!explicitTitle && !explicitContent) {
+            return 'To update that local brief, tell me the new title or content.';
           }
           return input.executeMutation({
             message: input.message,
             ctx: input.ctx,
             userKey: input.userKey,
             decision: input.decision,
-            toolName: 'second_brain_brief_upsert',
+            toolName: 'second_brain_brief_update',
             args: {
-              id: focusItem.id,
-              ...(focusItem.label ? { title: focusItem.label } : {}),
-              content,
+              id: existingBrief.id,
+              ...(explicitTitle ? { title: explicitTitle } : {}),
+              ...(explicitContent ? { content: explicitContent } : {}),
             },
             summary: 'Updates a local Second Brain brief.',
             pendingIntro: 'I prepared a local brief update, but it needs approval first.',
             successDescriptor: {
               itemType: 'brief',
               action: 'update',
-              fallbackId: focusItem.id,
-              fallbackLabel: focusItem.label,
+              fallbackId: existingBrief.id,
+              fallbackLabel: explicitTitle || existingBrief.title,
             },
             focusState: input.focusState,
           });
+        }
         case 'delete':
           if (!focusItem) {
             return 'I need to know which local brief to delete. Try "Show my briefs." first.';
@@ -769,4 +837,46 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
     default:
       return null;
   }
+}
+
+function extractQuotedAtValue(text: string): string {
+  const match = text.match(/\bat\s*(["'])([\s\S]+?)\1/i);
+  return match?.[2]?.trim() ?? '';
+}
+
+function extractLibraryKind(text: string): 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other' | undefined {
+  const lower = text.toLowerCase();
+  if (/\bfile\s+reference\b/.test(lower)) return 'file';
+  if (/\brepo(?:sitory)?\s+reference\b/.test(lower)) return 'repo';
+  if (/\barticle\b/.test(lower)) return 'article';
+  if (/\bdocument\b/.test(lower)) return 'document';
+  if (/\breference\b/.test(lower)) return 'reference';
+  return undefined;
+}
+
+function extractGeneratedBriefKind(text: string): 'morning' | 'weekly_review' | 'pre_meeting' | 'follow_up' | undefined {
+  const lower = text.toLowerCase();
+  if (/\bmorning\s+brief\b/.test(lower)) return 'morning';
+  if (/\bweekly\s+review\b|\bweekly\s+brief\b/.test(lower)) return 'weekly_review';
+  if (/\bpre[-\s]?meeting\s+brief\b/.test(lower)) return 'pre_meeting';
+  if (/\bfollow[-\s]?up\s+(?:brief|draft)\b/.test(lower)) return 'follow_up';
+  return undefined;
+}
+
+function extractBriefKindFilter(text: string): 'morning' | 'weekly_review' | 'pre_meeting' | 'follow_up' | undefined {
+  return extractGeneratedBriefKind(text);
+}
+
+function extractQuotedAppendValue(text: string): string {
+  const match = text.match(/\bappend\s*(["'])([\s\S]+?)\1/i);
+  return match?.[2]?.trim() ?? '';
+}
+
+function findLatestBrief<T extends { generatedAt?: number; updatedAt?: number; createdAt?: number }>(briefs: T[]): T | null {
+  return [...briefs]
+    .sort((left, right) => {
+      const leftTime = left.updatedAt ?? left.generatedAt ?? left.createdAt ?? 0;
+      const rightTime = right.updatedAt ?? right.generatedAt ?? right.createdAt ?? 0;
+      return rightTime - leftTime;
+    })[0] ?? null;
 }

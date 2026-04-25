@@ -718,9 +718,9 @@ function buildFixtures(tmpDir) {
       appendedLine: 'Edited by the Second Brain chat CRUD harness.',
     },
     routine: {
-      templateId: 'pre-meeting-brief',
-      createName: `Harness Pre-Meeting Brief ${suffix}`,
-      updatedName: `Harness Pre-Meeting Brief ${suffix} Updated`,
+      templateId: 'scheduled-review',
+      createName: `Harness Scheduled Review ${suffix}`,
+      updatedName: `Harness Scheduled Review ${suffix} Updated`,
     },
   };
 }
@@ -1211,12 +1211,12 @@ function buildSteps(fixtures) {
     },
     {
       id: 'routine-create',
-      prompt: `Create the Pre-Meeting Brief routine in Second Brain and name it "${fixtures.routine.createName}".`,
+      prompt: `Create the Scheduled Review routine in Second Brain and name it "${fixtures.routine.createName}".`,
       scenario: buildLookupMutationScenario({
         decision: buildRouteDecision({
           operation: 'create',
           personalItemType: 'routine',
-          summary: 'Create the Pre-Meeting Brief routine in Second Brain.',
+          summary: 'Create the Scheduled Review routine in Second Brain.',
         }),
         findQuery: 'second brain routines routine catalog create update delete',
         lookupTool: 'second_brain_routine_catalog',
@@ -1234,7 +1234,7 @@ function buildSteps(fixtures) {
         const routine = await waitFor(async () => {
           const routines = await listRoutines(baseUrl, token);
           return Array.isArray(routines)
-            ? routines.find((entry) => entry.id === fixtures.routine.templateId) ?? null
+            ? findByName(routines, fixtures.routine.createName)
             : null;
         }, 12_000, 'Expected created routine from chat flow.');
         assert.equal(routine.name, fixtures.routine.createName);
@@ -1401,6 +1401,7 @@ function assertRequiredJobs(jobs, requiredToolNames, stepId, mode) {
   }
   const directSecondBrainMutation = requiredToolNames.find((toolName) => (
     /^second_brain_(?:note|task|calendar|person|library|brief|routine)_(?:upsert|delete|create|update)$/.test(toolName)
+    || toolName === 'second_brain_generate_brief'
   ));
   if (mode === 'fake' && directSecondBrainMutation && jobs.some((job) => job.toolName === directSecondBrainMutation)) {
     return;
@@ -1456,6 +1457,16 @@ runtime:
     enabled: false
 guardian:
   enabled: true
+  rateLimit:
+    enabled: true
+    maxPerMinute: 300
+    maxPerHour: 2000
+    burstAllowed: 200
+    burstWindowMs: 10000
+    maxPerMinutePerUser: 300
+    maxPerHourPerUser: 2000
+    maxGlobalPerMinute: 1000
+    maxGlobalPerHour: 10000
 `;
   fs.writeFileSync(configPath, config);
 

@@ -150,7 +150,11 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
     case 'create': {
       const explicitDelivery = input.extractRoutineDeliveryDefaults(input.message.content);
       const explicitScheduleTiming = input.extractRoutineScheduleTiming(input.message.content);
-      const explicitFocusQuery = input.extractRoutineFocusQuery(input.message.content);
+      const explicitRoutineName = extractRoutineNameOverride(input.message.content);
+      const explicitFocusQuery = suppressNameOnlyFocusQuery(
+        input.extractRoutineFocusQuery(input.message.content),
+        [explicitRoutineName],
+      );
       const inferredRoutineCreate = input.extractCustomRoutineCreate(input.message.content);
       const createCatalogEntry = matchedCatalogEntry
         ?? (inferredRoutineCreate
@@ -178,6 +182,7 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
       }
       const createArgs: Record<string, unknown> = {
         templateId: createCatalogEntry.templateId,
+        ...(explicitRoutineName ? { name: explicitRoutineName } : {}),
         ...(explicitDelivery?.length ? { delivery: explicitDelivery } : {}),
         ...(explicitScheduleTiming ? { timing: explicitScheduleTiming } : {}),
       };
@@ -269,8 +274,12 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
       const explicitDeliveryDefaults = input.extractRoutineDeliveryDefaults(input.message.content);
       const explicitLookaheadMinutes = input.extractRoutineLookaheadMinutes(input.message.content);
       const explicitScheduleTiming = input.extractRoutineScheduleTiming(input.message.content);
+      const explicitRoutineName = extractRoutineNameOverride(input.message.content);
       const explicitFocusQuery = existingRoutine.focusQuery != null || existingCatalogEntry?.supportsFocusQuery
-        ? input.extractRoutineFocusQuery(input.message.content)
+        ? suppressNameOnlyFocusQuery(
+          input.extractRoutineFocusQuery(input.message.content),
+          [explicitRoutineName, existingRoutine.name, focusItem?.label],
+        )
         : undefined;
       const templateId = existingRoutine.templateId ?? existingRoutine.id;
       const explicitTopicQuery = templateId === 'topic-watch'
@@ -292,7 +301,7 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
       const existingConfig = isRecord(existingRoutineRecord?.config) ? existingRoutineRecord.config : null;
       const nextArgs: Record<string, unknown> = {
         id: existingRoutine.id,
-        name: existingRoutine.name,
+        name: explicitRoutineName || existingRoutine.name,
         enabled: explicitEnabled ?? existingRoutine.enabled,
         ...(explicitRoutingBias ?? existingRoutingBias ? { defaultRoutingBias: explicitRoutingBias ?? existingRoutingBias } : {}),
         ...(existingBudgetProfileId ? { budgetProfileId: existingBudgetProfileId } : {}),
@@ -344,6 +353,7 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
       }
 
       const hasExplicitChange = explicitEnabled !== undefined
+        || explicitRoutineName !== undefined
         || explicitRoutingBias !== undefined
         || explicitDeliveryDefaults !== undefined
         || explicitLookaheadMinutes !== undefined
@@ -369,7 +379,7 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
           itemType: 'routine',
           action: 'update',
           fallbackId: existingRoutine.id,
-          fallbackLabel: existingRoutine.name,
+          fallbackLabel: explicitRoutineName || existingRoutine.name,
         },
         focusState: focused,
       });
@@ -405,4 +415,33 @@ export async function tryDirectSecondBrainRoutineWrite<TFocusState>(input: {
     default:
       return null;
   }
+}
+
+function extractRoutineNameOverride(text: string): string | undefined {
+  const patterns = [
+    /\bname\s+it\s*(["'])([\s\S]+?)\1/i,
+    /\brenamed?\s+to\s*(["'])([\s\S]+?)\1/i,
+    /\bname\s+becomes?\s*(["'])([\s\S]+?)\1/i,
+    /\brename\b[\s\S]*?\bto\s*(["'])([\s\S]+?)\1/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = toString(match?.[2]).trim().replace(/\s+/g, ' ');
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+function suppressNameOnlyFocusQuery(
+  focusQuery: string | undefined,
+  names: Array<string | undefined>,
+): string | undefined {
+  const normalizedFocus = toString(focusQuery).trim().toLowerCase();
+  if (!normalizedFocus) return undefined;
+  for (const name of names) {
+    if (normalizedFocus === toString(name).trim().toLowerCase()) {
+      return undefined;
+    }
+  }
+  return focusQuery;
 }
