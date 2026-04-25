@@ -174,6 +174,70 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('does not direct-dispatch multi-step personal plans that include other domains', () => {
+    const gateway = mockGateway({
+      route: 'personal_assistant_task',
+      operation: 'create',
+      entities: { personalItemType: 'note' },
+    });
+    gateway.decision.plannedSteps = [
+      {
+        kind: 'write',
+        summary: 'Create a Second Brain note.',
+        expectedToolCategories: ['second_brain_note_upsert'],
+        required: true,
+      },
+      {
+        kind: 'write',
+        summary: 'Create an automation reminder.',
+        expectedToolCategories: ['automation_save'],
+        required: true,
+      },
+    ];
+    const result = resolveDirectIntentRoutingCandidates(
+      gateway,
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('does not direct-dispatch automation plans that include repo or cloud/security tooling', () => {
+    const gateway = mockGateway({ route: 'automation_authoring', operation: 'create' });
+    gateway.decision.plannedSteps = [
+      {
+        kind: 'write',
+        summary: 'Create the automation.',
+        expectedToolCategories: ['automation_save'],
+        required: true,
+      },
+      {
+        kind: 'search',
+        summary: 'Inspect the repo.',
+        expectedToolCategories: ['fs_search'],
+        required: true,
+      },
+      {
+        kind: 'tool_call',
+        summary: 'Check hosting status.',
+        expectedToolCategories: ['whm_status'],
+        required: true,
+      },
+      {
+        kind: 'tool_call',
+        summary: 'Inspect assistant security posture.',
+        expectedToolCategories: ['assistant_security_summary'],
+        required: true,
+      },
+    ];
+    const result = resolveDirectIntentRoutingCandidates(
+      gateway,
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('maps memory_task save requests to the memory_write candidate', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'memory_task', operation: 'save' }),

@@ -7,7 +7,10 @@ import type {
   IntentGatewayDecision,
   IntentGatewayOperation,
 } from './intent/types.js';
-import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
+import {
+  hasRequiredToolOrMutationPlannedStep,
+  hasRequiredWritePlannedStep,
+} from './intent/planned-steps.js';
 import {
   normalizeOrchestrationRoleDescriptor,
   type OrchestrationCoreRole,
@@ -182,6 +185,10 @@ export function inferDelegatedOrchestrationDescriptor(
     || decision.executionClass === 'repo_grounded';
   const isProviderCrud = decision.executionClass === 'provider_crud';
   const isSecurityAnalysis = decision.executionClass === 'security_analysis';
+  const isStructuredToolOrchestration = decision.executionClass === 'tool_orchestration'
+    || decision.requiresToolSynthesis
+    || decision.preferredAnswerPath === 'tool_loop'
+    || hasRequiredToolOrMutationPlannedStep(decision);
 
   if (decision.route === 'personal_assistant_task') {
     return buildRoleDescriptor(
@@ -213,6 +220,19 @@ export function inferDelegatedOrchestrationDescriptor(
   }
 
   if (decision.route === 'complex_planning_task') {
+    return buildRoleDescriptor('coordinator', 'Guardian Coordinator');
+  }
+
+  if (
+    isStructuredToolOrchestration
+    && (
+      decision.route === 'automation_authoring'
+      || decision.route === 'automation_control'
+      || decision.route === 'automation_output_task'
+      || decision.route === 'general_assistant'
+      || decision.route === 'channel_delivery'
+    )
+  ) {
     return buildRoleDescriptor('coordinator', 'Guardian Coordinator');
   }
 

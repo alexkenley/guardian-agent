@@ -5,7 +5,10 @@ import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
-import { buildDelegatedExecutionMetadata } from '../runtime/execution/metadata.js';
+import {
+  buildDelegatedExecutionMetadata,
+  buildDelegatedSyntheticEnvelope,
+} from '../runtime/execution/metadata.js';
 import {
   buildFileReadSetArtifact,
   buildSearchResultSetArtifact,
@@ -62,6 +65,70 @@ function automationAuthoringMetadata(
       turnRelation: 'new_request',
       resolution: 'ready',
       missingFields: [],
+      entities: {},
+    },
+  });
+}
+
+function mixedAutomationAuthoringMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return attachPreRoutedIntentGatewayMetadata(metadata, {
+    mode: 'primary',
+    available: true,
+    model: 'test-model',
+    latencyMs: 1,
+    decision: {
+      route: 'automation_authoring',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Create an automation and coordinate repo, Second Brain, cloud, and security follow-up work.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'write',
+          summary: 'Create the automation definition.',
+          expectedToolCategories: ['automation_save'],
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search the repository for TODOs.',
+          expectedToolCategories: ['fs_search'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'write',
+          summary: 'Create a Second Brain task for urgent evidence.',
+          expectedToolCategories: ['second_brain_task_upsert'],
+          required: true,
+          dependsOn: ['step_2'],
+        },
+        {
+          kind: 'tool_call',
+          summary: 'Check WHM status for the social profile.',
+          expectedToolCategories: ['whm_status'],
+          required: true,
+          dependsOn: ['step_3'],
+        },
+        {
+          kind: 'tool_call',
+          summary: 'Summarize Assistant Security findings.',
+          expectedToolCategories: ['assistant_security_findings'],
+          required: true,
+          dependsOn: ['step_4'],
+        },
+      ],
       entities: {},
     },
   });
@@ -4216,6 +4283,8 @@ describe('WorkerManager', () => {
       record: vi.fn(),
     };
     const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestDelegatedExecutionEvents: vi.fn(),
       ingestExecutionGraphEvent: vi.fn(),
     };
     const executeModelTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
@@ -4357,6 +4426,191 @@ describe('WorkerManager', () => {
       writeSpecArtifactId: expect.stringContaining('write-spec'),
       verificationArtifactId: expect.stringContaining('verification'),
     });
+
+    manager.shutdown();
+  });
+
+  it('falls back to delegated orchestration when graph read-only evidence cannot use a non-local profile', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const dispatchModes: string[] = [];
+    workerMessageHandler = (params) => {
+      const directReasoning = params.directReasoning === true;
+      const groundedSynthesis = !!params.groundedSynthesis;
+      dispatchModes.push(directReasoning ? 'direct' : groundedSynthesis ? 'synthesis' : 'delegated');
+      expect(directReasoning).toBe(false);
+      expect(groundedSynthesis).toBe(false);
+
+      const gateway = readPreRoutedIntentGatewayMetadata(
+        (params.message as { metadata?: Record<string, unknown> } | undefined)?.metadata,
+      );
+      const taskContract = buildDelegatedTaskContract(gateway?.decision);
+      const evidenceReceipts = [
+        {
+          receiptId: 'fallback-search',
+          sourceType: 'tool_call' as const,
+          toolName: 'fs_search',
+          status: 'succeeded' as const,
+          refs: ['src/runtime/intent/route-classifier.ts'],
+          summary: 'Searched src/runtime for planned_steps.',
+          startedAt: 1,
+          endedAt: 1,
+        },
+        {
+          receiptId: 'fallback-write',
+          sourceType: 'tool_call' as const,
+          toolName: 'fs_write',
+          status: 'succeeded' as const,
+          refs: ['tmp/manual-web/planned-steps-summary.txt'],
+          summary: 'Wrote tmp/manual-web/planned-steps-summary.txt.',
+          startedAt: 2,
+          endedAt: 2,
+        },
+      ];
+      const matchedStepIds = new Map<string, string>();
+      for (const receipt of evidenceReceipts) {
+        const matchedStepId = matchPlannedStepForTool({
+          plannedTask: taskContract.plan,
+          toolName: receipt.toolName,
+          args: { refs: receipt.refs },
+          previouslyMatchedStepIds: new Set(matchedStepIds.values()),
+        });
+        if (matchedStepId) {
+          matchedStepIds.set(receipt.receiptId, matchedStepId);
+        }
+      }
+      const stepReceipts = buildStepReceipts({
+        plannedTask: taskContract.plan,
+        evidenceReceipts,
+        toolReceiptStepIds: matchedStepIds,
+      });
+      const runStatus = computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn');
+      const content = 'Delegated fallback wrote tmp/manual-web/planned-steps-summary.txt.';
+      return {
+        content,
+        metadata: buildDelegatedExecutionMetadata({
+          taskContract,
+          runStatus,
+          stopReason: 'end_turn',
+          stepReceipts,
+          finalUserAnswer: content,
+          operatorSummary: content,
+          claims: [],
+          evidenceReceipts,
+          interruptions: [],
+          artifacts: [],
+          events: [],
+        }),
+      };
+    };
+
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestDelegatedExecutionEvents: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
+    };
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listJobs: vi.fn(() => []),
+        executeModelTool: vi.fn(),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        getConfigSnapshot: () => structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig,
+        auditLog: { record: vi.fn() },
+        registry: {
+          get: (agentId: string) => agentId === 'local'
+            ? {
+                agent: { name: 'Guardian Agent' },
+                definition: {
+                  orchestration: {
+                    role: 'implementer',
+                    label: 'Workspace Implementer',
+                    lenses: ['coding-workspace'],
+                  },
+                },
+              }
+            : undefined,
+        },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+        runTimeline,
+        now: () => 1_111_500,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-search-write-local-fallback',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Search src/runtime for planned_steps. Write a short summary of what you find to tmp/manual-web/planned-steps-summary.txt.',
+        metadata: filesystemSearchWriteMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      executionProfile: {
+        id: 'local_tool',
+        providerName: 'local',
+        providerType: 'ollama',
+        providerModel: 'test-local',
+        providerLocality: 'local',
+        providerTier: 'local',
+        requestedTier: 'local',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 16_000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['local'],
+        reason: 'local-only test profile',
+        routingMode: 'auto',
+        selectionSource: 'primary',
+      },
+      delegation: {
+        requestId: 'm-search-write-local-fallback',
+        executionId: 'exec-search-write-local-fallback',
+        rootExecutionId: 'exec-search-write-local-root',
+        originChannel: 'web',
+        orchestration: {
+          role: 'implementer',
+          label: 'Workspace Implementer',
+          lenses: ['coding-workspace'],
+        },
+      },
+    });
+
+    expect(dispatchModes).toEqual(['delegated']);
+    expect(result.content).toContain('Delegated fallback wrote');
+    expect(result.content).not.toContain('Execution graph could not complete');
+    expect(runTimeline.ingestExecutionGraphEvent.mock.calls
+      .map(([event]) => event.kind))
+      .not.toContain('graph_failed');
 
     manager.shutdown();
   });
@@ -5030,6 +5284,104 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('delegates mixed automation plans instead of using native automation authoring', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+    const sandbox = await import('../sandbox/index.js');
+
+    const executeModelTool = vi.fn();
+    workerMessageHandler = (params) => {
+      const request = params.message as { metadata?: Record<string, unknown> } | undefined;
+      const gateway = readPreRoutedIntentGatewayMetadata(request?.metadata);
+      expect(gateway?.decision.route).toBe('automation_authoring');
+      expect(gateway?.decision.plannedSteps?.map((step) => step.expectedToolCategories?.[0])).toEqual([
+        'automation_save',
+        'fs_search',
+        'second_brain_task_upsert',
+        'whm_status',
+        'assistant_security_findings',
+      ]);
+      const taskContract = buildDelegatedTaskContract(gateway?.decision);
+      const now = Date.now();
+      return {
+        content: 'Delegated mixed automation plan through the brokered worker.',
+        metadata: buildDelegatedExecutionMetadata(buildDelegatedSyntheticEnvelope({
+          taskContract,
+          runStatus: 'completed',
+          stopReason: 'end_turn',
+          operatorSummary: 'Delegated mixed automation plan through the brokered worker.',
+          stepReceipts: taskContract.plan.steps.map((step, index) => ({
+            stepId: step.id,
+            status: 'satisfied',
+            evidenceReceiptIds: [`evidence-${index + 1}`],
+            summary: step.summary,
+            startedAt: now + index,
+            endedAt: now + index + 1,
+          })),
+          evidenceReceipts: taskContract.plan.steps.map((step, index) => ({
+            receiptId: `evidence-${index + 1}`,
+            sourceType: 'tool_call',
+            toolName: step.expectedToolCategories?.[0],
+            status: 'succeeded',
+            refs: [],
+            summary: step.summary,
+            startedAt: now + index,
+            endedAt: now + index + 1,
+          })),
+        })),
+      };
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        executeModelTool,
+        getApprovalSummaries: () => new Map(),
+        decideApproval: vi.fn(),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+    );
+
+    const response = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-mixed-automation',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        metadata: mixedAutomationAuthoringMetadata(),
+        content: 'Create an automation that checks the Guardian repo for TODOs, saves a Second Brain task for anything urgent, checks whm_status profileId social, and summarizes assistant_security_findings.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    expect(response.content).toContain('Delegated mixed automation plan');
+    expect(executeModelTool).not.toHaveBeenCalled();
+    expect(vi.mocked(sandbox.sandboxedSpawn)).toHaveBeenCalledTimes(1);
+
+    manager.shutdown();
+  });
+
   it('continues automation creation after remediation approvals are granted', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
     const sandbox = await import('../sandbox/index.js');
@@ -5375,6 +5727,16 @@ describe('WorkerManager', () => {
       };
     };
 
+    const pendingActionStore = {
+      replaceActive: vi.fn((scope, record) => ({
+        id: 'pending-worker-approval-1',
+        scope,
+        createdAt: 1,
+        updatedAt: 1,
+        ...record,
+      } satisfies PendingActionRecord)),
+    };
+
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
@@ -5392,6 +5754,11 @@ describe('WorkerManager', () => {
         capabilityTokenTtlMs: 600_000,
         capabilityTokenMaxToolCalls: 0,
       } as never,
+      undefined,
+      {
+        pendingActionStore,
+        now: () => 1,
+      },
     );
 
     const initial = await manager.handleMessage({
@@ -5429,6 +5796,33 @@ describe('WorkerManager', () => {
       },
     });
     expect(manager.hasSuspendedApproval('approval-outlook-1')).toBe(true);
+    expect(pendingActionStore.replaceActive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'local',
+        userId: 'tester',
+        channel: 'web',
+      }),
+      expect.objectContaining({
+        blocker: expect.objectContaining({
+          kind: 'approval',
+          approvalIds: ['approval-outlook-1'],
+          approvalSummaries: [expect.objectContaining({ id: 'approval-outlook-1' })],
+        }),
+        intent: expect.objectContaining({
+          originalUserContent: 'Draft an Outlook email to alex@example.com.',
+        }),
+      }),
+      1,
+    );
+    expect(initial.metadata).toMatchObject({
+      pendingAction: {
+        id: 'pending-worker-approval-1',
+        blocker: {
+          approvalIds: ['approval-outlook-1'],
+        },
+      },
+      continueConversationAfterApproval: true,
+    });
 
     const resumed = await manager.continueAfterApproval(
       'approval-outlook-1',
@@ -5499,6 +5893,155 @@ describe('WorkerManager', () => {
 
     expect(manager.hasSuspendedApproval('approval-auto-run-1')).toBe(false);
 
+    manager.shutdown();
+  });
+
+  it('stores new pending actions created while a worker approval continuation is running', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = (params) => {
+      const message = (params.message ?? {}) as {
+        metadata?: Record<string, unknown>;
+      };
+      const continuation = message.metadata?.[APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY] as
+        | { type?: string; approvalId?: string; decision?: string; resultMessage?: string }
+        | undefined;
+      if (continuation?.approvalId === 'approval-note-1') {
+        return {
+          content: 'Waiting for approval to create the weekly automation.',
+          metadata: {
+            continueConversationAfterApproval: true,
+            ...approvalPendingActionMetadata([
+              {
+                id: 'approval-automation-2',
+                toolName: 'automation_save',
+                argsPreview: '{"name":"Weekly Security Posture Check"}',
+              },
+            ]),
+          },
+        };
+      }
+      if (continuation?.approvalId === 'approval-automation-2') {
+        return { content: 'Created the task and weekly automation.' };
+      }
+      return {
+        content: 'Waiting for approval to create the Second Brain task.',
+        metadata: {
+          continueConversationAfterApproval: true,
+          ...approvalPendingActionMetadata([
+            {
+              id: 'approval-note-1',
+              toolName: 'second_brain_task_upsert',
+              argsPreview: '{"title":"Review Guardian security posture findings"}',
+            },
+          ]),
+        },
+      };
+    };
+
+    const pendingActionStore = {
+      replaceActive: vi.fn((scope, record) => ({
+        id: `pending-${record.blocker.approvalIds?.[0] ?? 'approval'}`,
+        scope,
+        createdAt: 1,
+        updatedAt: 1,
+        ...record,
+      } satisfies PendingActionRecord)),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listApprovals: vi.fn(() => []),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        pendingActionStore,
+        now: () => 1,
+      },
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-security-follow-up',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        surfaceId: 'surface-1',
+        content: 'Create a security follow-up task and weekly automation.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    const afterFirstApproval = await manager.continueAfterApproval(
+      'approval-note-1',
+      'approved',
+      'Task created.',
+    );
+
+    expect(afterFirstApproval?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          approvalIds: ['approval-automation-2'],
+          approvalSummaries: [
+            {
+              id: 'approval-automation-2',
+              toolName: 'automation_save',
+            },
+          ],
+        },
+      },
+      continueConversationAfterApproval: true,
+    });
+    expect(manager.hasSuspendedApproval('approval-automation-2')).toBe(true);
+    expect(pendingActionStore.replaceActive).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentId: 'local',
+        userId: 'tester',
+        channel: 'web',
+        surfaceId: 'surface-1',
+      }),
+      expect.objectContaining({
+        blocker: expect.objectContaining({
+          approvalIds: ['approval-automation-2'],
+        }),
+        intent: {
+          originalUserContent: 'Create a security follow-up task and weekly automation.',
+        },
+      }),
+      1,
+    );
+
+    const completed = await manager.continueAfterApproval(
+      'approval-automation-2',
+      'approved',
+      'Automation created.',
+    );
+
+    expect(completed?.content).toBe('Created the task and weekly automation.');
     manager.shutdown();
   });
 

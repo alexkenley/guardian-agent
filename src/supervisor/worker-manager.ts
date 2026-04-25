@@ -47,6 +47,7 @@ import {
   type IntentGatewayDecision,
   type IntentGatewayRecord,
 } from '../runtime/intent-gateway.js';
+import { resolveIntentCapabilityCandidates } from '../runtime/intent/capability-resolver.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from '../runtime/intent-routing-trace.js';
 import type { DelegatedWorkerProgressEvent, RunTimelineStore } from '../runtime/run-timeline.js';
 import {
@@ -121,9 +122,13 @@ import {
   type RecoveryAdvisorProposal,
   type RecoveryAdvisorRequest,
 } from '../runtime/execution/recovery-advisor.js';
-import type { DirectReasoningTraceContext } from '../runtime/direct-reasoning-mode.js';
+import {
+  shouldHandleDirectReasoningMode,
+  type DirectReasoningTraceContext,
+} from '../runtime/direct-reasoning-mode.js';
 import {
   toPendingActionClientMetadata,
+  type PendingActionApprovalSummary,
   type PendingActionRecord,
   type PendingActionScope,
   type PendingActionStore,
@@ -369,6 +374,71 @@ interface DelegatedJobSnapshot {
   error?: string;
 }
 
+function normalizeDelegatedApprovalSummaries(value: unknown): PendingActionApprovalSummary[] {
+  if (!Array.isArray(value)) return [];
+  const summaries: PendingActionApprovalSummary[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    if (!id || seen.has(id)) continue;
+    const toolName = typeof item.toolName === 'string' && item.toolName.trim()
+      ? item.toolName.trim()
+      : 'unknown';
+    const argsPreview = typeof item.argsPreview === 'string'
+      ? item.argsPreview
+      : '';
+    const actionLabel = typeof item.actionLabel === 'string' && item.actionLabel.trim()
+      ? item.actionLabel.trim()
+      : undefined;
+    const requestId = typeof item.requestId === 'string' && item.requestId.trim()
+      ? item.requestId.trim()
+      : undefined;
+    const codeSessionId = typeof item.codeSessionId === 'string' && item.codeSessionId.trim()
+      ? item.codeSessionId.trim()
+      : undefined;
+    summaries.push({
+      id,
+      toolName,
+      argsPreview,
+      ...(actionLabel ? { actionLabel } : {}),
+      ...(requestId ? { requestId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
+    });
+    seen.add(id);
+  }
+  return summaries;
+}
+
+function readDelegatedPendingApprovalMetadata(metadata: Record<string, unknown> | undefined): {
+  approvalIds: string[];
+  approvalSummaries: PendingActionApprovalSummary[];
+  prompt: string;
+} | null {
+  const pendingAction = isRecord(metadata?.pendingAction) ? metadata.pendingAction : null;
+  const blocker = isRecord(pendingAction?.blocker) ? pendingAction.blocker : null;
+  if (!blocker || blocker.kind !== 'approval') return null;
+  const summaries = normalizeDelegatedApprovalSummaries(blocker.approvalSummaries);
+  const idsFromSummaries = summaries.map((summary) => summary.id);
+  const idsFromBlocker = Array.isArray(blocker.approvalIds)
+    ? blocker.approvalIds
+        .map((id) => typeof id === 'string' ? id.trim() : '')
+        .filter(Boolean)
+    : [];
+  const approvalIds = [...new Set([...idsFromBlocker, ...idsFromSummaries])];
+  if (approvalIds.length === 0) return null;
+  const prompt = typeof blocker.prompt === 'string' && blocker.prompt.trim()
+    ? blocker.prompt.trim()
+    : formatPendingApprovalMessage(summaries);
+  return {
+    approvalIds,
+    approvalSummaries: summaries.length > 0
+      ? summaries
+      : approvalIds.map((id) => ({ id, toolName: 'unknown', argsPreview: '' })),
+    prompt: prompt || 'Approval required for the pending delegated action.',
+  };
+}
+
 const DELEGATED_REQUEST_JOB_LOOKUP_LIMIT = 500;
 const DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT = 120;
 const DELEGATED_EVIDENCE_REF_LIMIT = 8;
@@ -452,6 +522,8 @@ interface WorkerSuspendedApprovalState {
   sessionId: string;
   agentId: string;
   userId: string;
+  surfaceId?: string;
+  originalUserContent?: string;
   principalId: string;
   principalRole: NonNullable<UserMessage['principalRole']>;
   channel: string;
@@ -641,6 +713,18 @@ export class WorkerManager {
     if (!gatewayRecord) {
       return this.buildGraphControlledFailureResponse(input, 'Graph-controlled execution could not derive a read-only routing decision.');
     }
+    const graphExecutionProfile = selectGraphControllerExecutionProfile({
+      runtime: this.runtime,
+      target: input.target,
+      decision: input.effectiveIntentDecision,
+      currentProfile: input.request.executionProfile,
+    });
+    if (!shouldHandleDirectReasoningMode({
+      gateway: gatewayRecord,
+      selectedExecutionProfile: graphExecutionProfile,
+    })) {
+      return null;
+    }
 
     const now = this.observability.now ?? Date.now;
     const graphId = `graph:${input.taskRunId}`;
@@ -820,12 +904,6 @@ export class WorkerManager {
         input.request.grantedCapabilities,
       );
       const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.request.agentId);
-      const graphExecutionProfile = selectGraphControllerExecutionProfile({
-        runtime: this.runtime,
-        target: input.target,
-        decision: input.effectiveIntentDecision,
-        currentProfile: input.request.executionProfile,
-      });
       const additionalSections = appendPromptAdditionalSection(
         input.request.additionalSections ?? [],
         this.buildCodeSessionRegistrySection(input.request),
@@ -1849,8 +1927,10 @@ export class WorkerManager {
       orchestration: delegatedTarget.orchestration,
       parentProfile: input.executionProfile,
     });
+    const directIntentCandidates = intentDecision ? resolveIntentCapabilityCandidates(intentDecision) : [];
     const canDirectAutomation = intentDecision?.route === 'automation_authoring'
-      && ['create', 'update', 'schedule'].includes(intentDecision.operation);
+      && ['create', 'update', 'schedule'].includes(intentDecision.operation)
+      && directIntentCandidates.some((candidate) => candidate === 'automation' || candidate === 'scheduled_email_automation');
     if (canDirectAutomation) {
       const directAutomation = await this.tryDirectAutomationAuthoring(input, {
         assumeAuthoring: true,
@@ -2257,6 +2337,18 @@ export class WorkerManager {
         normalizedResult.metadata = {
           ...(normalizedResult.metadata ?? {}),
           executionGraph: executionGraphMetadata,
+        };
+      }
+      const pendingApprovalRecord = this.recordDelegatedPendingApprovalAction({
+        request: effectiveInput,
+        result: normalizedResult,
+        intentDecision: effectiveIntentDecision ?? undefined,
+      });
+      if (pendingApprovalRecord) {
+        normalizedResult.metadata = {
+          ...(normalizedResult.metadata ?? {}),
+          pendingAction: toPendingActionClientMetadata(pendingApprovalRecord),
+          continueConversationAfterApproval: true,
         };
       }
       this.recordDelegatedExecutionArtifacts(
@@ -3518,12 +3610,96 @@ export class WorkerManager {
       sessionId: worker.sessionId,
       agentId: worker.agentId,
       userId: message.userId,
+      ...(message.surfaceId ? { surfaceId: message.surfaceId } : {}),
+      ...(message.content ? { originalUserContent: message.content } : {}),
       principalId: message.principalId ?? message.userId,
       principalRole: message.principalRole ?? 'owner',
       channel: message.channel,
       approvalIds: [...new Set(approvalIds)],
       expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
     });
+  }
+
+  private recordDelegatedPendingApprovalAction(input: {
+    request: WorkerMessageRequest;
+    result: { metadata?: Record<string, unknown> };
+    intentDecision?: IntentGatewayDecision;
+  }): PendingActionRecord | null {
+    if (!this.observability.pendingActionStore) return null;
+    const approvalMetadata = readDelegatedPendingApprovalMetadata(input.result.metadata);
+    if (!approvalMetadata) return null;
+    const surfaceId = input.request.message.surfaceId?.trim()
+      || input.request.delegation?.originSurfaceId?.trim()
+      || input.request.message.channel;
+    const nowMs = this.observability.now?.() ?? Date.now();
+    return this.observability.pendingActionStore.replaceActive(
+      {
+        agentId: input.request.agentId,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        surfaceId,
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'origin_surface_only',
+        blocker: {
+          kind: 'approval',
+          prompt: approvalMetadata.prompt,
+          approvalIds: approvalMetadata.approvalIds,
+          approvalSummaries: approvalMetadata.approvalSummaries,
+        },
+        intent: {
+          ...(input.intentDecision?.route ? { route: input.intentDecision.route } : {}),
+          ...(input.intentDecision?.operation ? { operation: input.intentDecision.operation } : {}),
+          ...(input.intentDecision?.summary ? { summary: input.intentDecision.summary } : {}),
+          ...(input.intentDecision?.turnRelation ? { turnRelation: input.intentDecision.turnRelation } : {}),
+          ...(input.intentDecision?.resolution ? { resolution: input.intentDecision.resolution } : {}),
+          ...(input.intentDecision?.missingFields?.length ? { missingFields: input.intentDecision.missingFields } : {}),
+          ...(input.intentDecision?.resolvedContent ? { resolvedContent: input.intentDecision.resolvedContent } : {}),
+          ...(input.intentDecision?.provenance ? { provenance: input.intentDecision.provenance } : {}),
+          ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
+          originalUserContent: input.request.message.content,
+        },
+        ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+        ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+        expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+      },
+      nowMs,
+    );
+  }
+
+  private recordWorkerContinuationPendingApprovalAction(
+    state: WorkerSuspendedApprovalState,
+    metadata: Record<string, unknown> | undefined,
+  ): PendingActionRecord | null {
+    if (!this.observability.pendingActionStore) return null;
+    const approvalMetadata = readDelegatedPendingApprovalMetadata(metadata);
+    if (!approvalMetadata) return null;
+    const nowMs = this.observability.now?.() ?? Date.now();
+    return this.observability.pendingActionStore.replaceActive(
+      {
+        agentId: state.agentId,
+        userId: state.userId,
+        channel: state.channel,
+        surfaceId: state.surfaceId?.trim() || state.channel,
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'origin_surface_only',
+        blocker: {
+          kind: 'approval',
+          prompt: approvalMetadata.prompt,
+          approvalIds: approvalMetadata.approvalIds,
+          approvalSummaries: approvalMetadata.approvalSummaries,
+        },
+        intent: {
+          originalUserContent: state.originalUserContent ?? '',
+        },
+        expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+      },
+      nowMs,
+    );
   }
 
   private setWorkerSuspendedApprovals(state: WorkerSuspendedApprovalState): void {
@@ -3589,13 +3765,14 @@ export class WorkerManager {
     this.clearWorkerSuspendedApprovals(state.workerSessionKey);
     if (!worker || worker.status !== 'ready') return null;
 
-    return this.dispatchToWorker(worker, {
+    const continuationResult = await this.dispatchToWorker(worker, {
       message: {
         id: randomUUID(),
         userId: state.userId,
         principalId: state.principalId,
         principalRole: state.principalRole,
         channel: state.channel,
+        ...(state.surfaceId ? { surfaceId: state.surfaceId } : {}),
         content: '',
         metadata: buildApprovalOutcomeContinuationMetadata({
           approvalId,
@@ -3613,6 +3790,19 @@ export class WorkerManager {
       runtimeNotices: [],
       hasFallbackProvider: !!this.runtime.getFallbackProviderConfig?.(worker.agentId),
     });
+    const pendingRecord = this.recordWorkerContinuationPendingApprovalAction(
+      state,
+      continuationResult.metadata,
+    );
+    if (!pendingRecord) return continuationResult;
+    return {
+      content: continuationResult.content,
+      metadata: {
+        ...(continuationResult.metadata ?? {}),
+        pendingAction: toPendingActionClientMetadata(pendingRecord),
+        continueConversationAfterApproval: true,
+      },
+    };
   }
 }
 

@@ -18,6 +18,7 @@ function mockDecision(partial: Partial<IntentGatewayDecision> & Pick<IntentGatew
     expectedContextPressure: partial.expectedContextPressure ?? 'low',
     preferredAnswerPath: partial.preferredAnswerPath ?? 'direct',
     entities: partial.entities ?? {},
+    ...(partial.plannedSteps ? { plannedSteps: partial.plannedSteps } : {}),
     ...(partial.resolvedContent ? { resolvedContent: partial.resolvedContent } : {}),
   };
 }
@@ -27,6 +28,61 @@ describe('resolveIntentCapabilityCandidates', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({ route: 'automation_authoring', operation: 'create' }),
     )).toEqual(['scheduled_email_automation', 'automation']);
+  });
+
+  it('defers cross-domain automation plans to full orchestration', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'automation_authoring',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        plannedSteps: [
+          {
+            kind: 'write',
+            summary: 'Create the requested automation.',
+            expectedToolCategories: ['automation_save'],
+            required: true,
+          },
+          {
+            kind: 'search',
+            summary: 'Inspect the active repo for related implementation files.',
+            expectedToolCategories: ['fs_search'],
+            required: true,
+          },
+          {
+            kind: 'tool_call',
+            summary: 'Check cloud hosting status.',
+            expectedToolCategories: ['whm_status'],
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
+  it('defers multi-action Second Brain plans to full orchestration', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'personal_assistant_task',
+        operation: 'create',
+        entities: { personalItemType: 'note' },
+        plannedSteps: [
+          {
+            kind: 'write',
+            summary: 'Create a Second Brain note.',
+            expectedToolCategories: ['second_brain_note_upsert'],
+            required: true,
+          },
+          {
+            kind: 'write',
+            summary: 'Create an automation reminder.',
+            expectedToolCategories: ['automation_save'],
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual([]);
   });
 
   it('maps provider-crud general assistant requests to provider_read', () => {

@@ -1,4 +1,5 @@
 import type { IntentGatewayDecision } from './types.js';
+import { getBuiltinToolCategory } from './capability-inventory.js';
 
 export type IntentCapabilityCandidate =
   | 'personal_assistant'
@@ -26,6 +27,10 @@ export function resolveIntentCapabilityCandidates(
 function preferredCandidatesForDecision(
   decision: IntentGatewayDecision,
 ): IntentCapabilityCandidate[] {
+  if (shouldDeferDirectCapabilityCandidates(decision)) {
+    return [];
+  }
+
   switch (decision.route) {
     case 'automation_authoring':
       return ['create', 'update', 'schedule'].includes(decision.operation)
@@ -86,6 +91,53 @@ function preferredCandidatesForDecision(
     default:
       return [];
   }
+}
+
+function requiredPlannedSteps(decision: IntentGatewayDecision) {
+  return Array.isArray(decision.plannedSteps)
+    ? decision.plannedSteps.filter((step) => step.required !== false)
+    : [];
+}
+
+function plannedStepExpectedCategories(decision: IntentGatewayDecision): string[] {
+  return requiredPlannedSteps(decision)
+    .flatMap((step) => Array.isArray(step.expectedToolCategories) ? step.expectedToolCategories : [])
+    .map((category) => category.trim())
+    .filter(Boolean);
+}
+
+function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision): boolean {
+  const requiredSteps = requiredPlannedSteps(decision);
+  if (requiredSteps.length <= 0) {
+    return false;
+  }
+
+  if (decision.route === 'personal_assistant_task') {
+    return requiredSteps.length > 1
+      || plannedStepExpectedCategories(decision).some((category) => !isSecondBrainDirectCategory(category));
+  }
+
+  if (decision.route === 'automation_authoring' || decision.route === 'automation_control') {
+    return plannedStepExpectedCategories(decision).some((category) => !isAutomationDirectCategory(category));
+  }
+
+  return false;
+}
+
+function isSecondBrainDirectCategory(category: string): boolean {
+  const normalized = category.trim();
+  if (!normalized) return true;
+  if (normalized === 'personal_assistant' || normalized === 'second_brain') return true;
+  if (normalized.startsWith('second_brain_')) return true;
+  return getBuiltinToolCategory(normalized) === 'memory' && normalized.startsWith('second_brain_');
+}
+
+function isAutomationDirectCategory(category: string): boolean {
+  const normalized = category.trim();
+  if (!normalized) return true;
+  if (normalized === 'automation' || normalized === 'scheduled_email_automation') return true;
+  if (normalized.startsWith('automation_')) return true;
+  return getBuiltinToolCategory(normalized) === 'automation';
 }
 
 function dedupeCandidates(

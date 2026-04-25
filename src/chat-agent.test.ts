@@ -7941,6 +7941,134 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).not.toHaveBeenCalled();
   });
 
+  it('delegates structured general-assistant follow-ups that need tool synthesis', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-general-tool-synthesis.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: process.cwd(),
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const localChat = vi.fn(async () => ({
+      content: 'Inline answer.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Delegated follow-up complete.',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-delegated-general-tool-synthesis',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Using the security summary and posture from that last answer, create a Second Brain task for the concern and a weekly automation to revisit it.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Use the prior security answer to create a task and follow-up automation.',
+          turnRelation: 'follow_up',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'tool_orchestration',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'tool_loop',
+          simpleVsComplex: 'complex',
+          plannedSteps: [
+            {
+              kind: 'tool_call',
+              summary: 'Re-check the prior security context.',
+              expectedToolCategories: ['assistant_security_findings', 'security_posture_status'],
+              required: true,
+            },
+            {
+              kind: 'write',
+              summary: 'Create the follow-up task.',
+              expectedToolCategories: ['second_brain_task_upsert'],
+              required: true,
+            },
+            {
+              kind: 'write',
+              summary: 'Create the weekly automation.',
+              expectedToolCategories: ['automation_save'],
+              required: true,
+            },
+          ],
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: ['read_files', 'write_files', 'network_access'],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Delegated follow-up complete.');
+    expect(workerManager.handleMessage).toHaveBeenCalledOnce();
+    expect(workerManager.handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      delegation: expect.objectContaining({
+        orchestration: {
+          role: 'coordinator',
+          label: 'Guardian Coordinator',
+        },
+      }),
+    }));
+    expect(localChat).not.toHaveBeenCalled();
+  });
+
   it('still delegates explicit coding workloads when a coding session is attached', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

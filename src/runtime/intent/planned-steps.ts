@@ -60,3 +60,15 @@ export function hasRequiredReadWritePlan(
   return hasRequiredWritePlannedStep(decision)
     && hasRequiredReadOrSearchPlannedStep(decision);
 }
+
+export function hasRequiredToolOrMutationPlannedStep(
+  decision: IntentGatewayDecision | null | undefined,
+): boolean {
+  return plannedSteps(decision).some((step) => isRequiredStep(step)
+    && (
+      step.kind === 'tool_call'
+      || step.kind === 'write'
+      || step.kind === 'memory_save'
+      || hasAnyExpectedCategory(step, WRITE_TOOL_CATEGORIES)
+    ));
+}

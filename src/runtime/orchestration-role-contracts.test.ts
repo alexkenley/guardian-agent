@@ -193,6 +193,70 @@ describe('orchestration role contracts', () => {
     expect(descriptor).toBeUndefined();
   });
 
+  it('infers coordinator metadata for structured general-assistant tool orchestration', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'general_assistant',
+      operation: 'create',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'tool_call',
+          summary: 'Re-check the previously summarized security posture.',
+          expectedToolCategories: ['assistant_security_findings', 'security_posture_status'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Create the follow-up task and automation from the prior result.',
+          expectedToolCategories: ['second_brain_task_upsert', 'automation_save'],
+          required: true,
+        },
+      ],
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'coordinator',
+      label: 'Guardian Coordinator',
+    });
+  });
+
+  it('infers coordinator metadata when mixed automation plans cannot stay on the native automation lane', () => {
+    const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
+      route: 'automation_authoring',
+      operation: 'create',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+      plannedSteps: [
+        {
+          kind: 'write',
+          summary: 'Create an automation.',
+          expectedToolCategories: ['automation_save'],
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search the workspace for supporting details.',
+          expectedToolCategories: ['fs_search'],
+          required: true,
+        },
+      ],
+    }));
+
+    expect(descriptor).toEqual({
+      role: 'coordinator',
+      label: 'Guardian Coordinator',
+    });
+  });
+
   it('still infers provider-specialist roles for provider CRUD workloads routed through general assistant', () => {
     const descriptor = inferDelegatedOrchestrationDescriptor(buildDecision({
       route: 'general_assistant',
