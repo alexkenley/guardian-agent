@@ -3429,7 +3429,9 @@ async function main(): Promise<void> {
   let secondBrainSyncService: SyncService | undefined;
   secondBrainBriefingService.start();
   const runTimeline = new RunTimelineStore();
-  const executionGraphStore = new ExecutionGraphStore();
+  const executionGraphStore = new ExecutionGraphStore({
+    persistPath: join(getGuardianBaseDir(), 'execution-graphs.json'),
+  });
   const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
   let refreshRunTimelineSnapshots: () => void = () => {};
   codeSessionStore.subscribe((event) => {
@@ -6489,6 +6491,8 @@ async function main(): Promise<void> {
       tryDelete('audit/ (audit log)', join(baseDir, 'audit'), { recursive: true });
       tryDelete('device-inventory.json', join(baseDir, 'device-inventory.json'));
       tryDelete('scheduled-tasks.json', join(baseDir, 'scheduled-tasks.json'));
+      tryDelete('execution-graphs.json', join(baseDir, 'execution-graphs.json'));
+      tryDelete('execution-graphs.json.tmp', join(baseDir, 'execution-graphs.json.tmp'));
       tryDelete('network-baseline.json', join(baseDir, 'network-baseline.json'));
       tryDelete('network-traffic.json', join(baseDir, 'network-traffic.json'));
       tryDelete('security-activity-log.json', join(baseDir, 'security-activity-log.json'));

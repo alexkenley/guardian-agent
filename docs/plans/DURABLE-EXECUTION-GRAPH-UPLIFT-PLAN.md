@@ -480,7 +480,7 @@ Expected:
 
 Goal: approvals, clarification, auth, workspace switch, and policy blockers become durable graph interrupts.
 
-Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Approval resume can reconstruct from the in-process graph artifact store if the worker-manager suspension map is missing. Broader blocker kinds and restart-durable graph persistence are still pending.
+Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Approval resume can reconstruct from persisted graph artifacts if the worker-manager suspension map is missing after restart. Broader blocker kinds are still pending.
 
 Files:
 

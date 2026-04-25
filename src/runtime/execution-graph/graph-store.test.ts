@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { IntentGatewayDecision } from '../intent/types.js';
 import { createExecutionGraphEvent } from './graph-events.js';
@@ -171,5 +174,59 @@ describe('ExecutionGraphStore', () => {
     expect(store.getArtifact('graph-1', 'old-search')).toBeNull();
     expect(store.listArtifacts('graph-1').map((artifact) => artifact.artifactId)).toEqual(['new-search']);
     expect(store.getSnapshot('graph-1')?.graph.artifacts.map((artifact) => artifact.artifactId)).toEqual(['new-search']);
+  });
+
+  it('persists graph snapshots, events, and artifacts across store instances', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'guardianagent-execution-graph-store-'));
+    try {
+      const persistPath = join(tempDir, 'execution-graphs.json');
+      const store = new ExecutionGraphStore({
+        now: () => 100,
+        persistPath,
+      });
+      store.createGraph({
+        graphId: 'graph-1',
+        executionId: 'exec-1',
+        requestId: 'req-1',
+        intent: decision(),
+        nodes: [{
+          nodeId: 'node-1',
+          graphId: 'graph-1',
+          kind: 'explore_readonly',
+          status: 'pending',
+          title: 'Read-only exploration',
+          requiredInputIds: [],
+          outputArtifactTypes: ['SearchResultSet'],
+          allowedToolCategories: ['filesystem.read'],
+        }],
+      });
+      store.appendEvent(event({ kind: 'graph_started', sequence: 1 }));
+      store.appendEvent(event({ kind: 'approval_requested', sequence: 2, nodeId: 'node-1', payload: { approvalId: 'approval-1' } }));
+      store.writeArtifact(buildSearchResultSetArtifact({
+        graphId: 'graph-1',
+        nodeId: 'node-1',
+        artifactId: 'search-1',
+        query: 'planned_steps',
+        matches: [{ relativePath: 'src/runtime/intent/types.ts', line: 12 }],
+        createdAt: 120,
+      }));
+
+      const reloaded = new ExecutionGraphStore({
+        now: () => 200,
+        persistPath,
+      });
+
+      expect(reloaded.getSnapshot('graph-1')?.graph.status).toBe('awaiting_approval');
+      expect(reloaded.getSnapshot('graph-1')?.events.map((entry) => entry.kind)).toEqual([
+        'graph_started',
+        'approval_requested',
+      ]);
+      expect(reloaded.getArtifact('graph-1', 'search-1')?.content).toMatchObject({
+        totalMatches: 1,
+      });
+      expect(reloaded.listArtifacts('graph-1').map((artifact) => artifact.artifactId)).toEqual(['search-1']);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
