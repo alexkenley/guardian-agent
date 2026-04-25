@@ -57,9 +57,11 @@ import {
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
+  buildVerificationResultArtifact,
   buildWriteSpecArtifact,
   type EvidenceLedgerContent,
   type ExecutionArtifact,
+  type VerificationCheckRecord,
   type WriteSpecContent,
 } from '../runtime/execution-graph/graph-artifacts.js';
 import {
@@ -1720,6 +1722,7 @@ export class WorkerManager {
       lifecycle: 'completed' | 'blocked' | 'failed';
       handoff: DelegatedWorkerHandoff;
       taskContract: DelegatedResultEnvelope['taskContract'];
+      verification: VerificationDecision;
       workerId?: string;
     },
   ): void {
@@ -1735,13 +1738,48 @@ export class WorkerManager {
       ...(options.workerId ? { workerId: options.workerId } : {}),
       ...buildDelegatedTaskContractTraceMetadata(options.taskContract),
     };
+    const verificationArtifact = buildVerificationResultArtifact({
+      graphId: run.context.graphId,
+      nodeId: run.context.nodeId,
+      artifactId: `${run.context.graphId}:${run.context.nodeId}:verification`,
+      subjectArtifactId: `delegated-result:${run.context.executionId}`,
+      checks: buildDelegatedWorkerVerificationChecks(options.verification),
+      createdAt: this.observability.now?.() ?? Date.now(),
+    });
+    this.observability.executionGraphStore?.writeArtifact(verificationArtifact);
+    const verificationRef = artifactRefFromArtifact(verificationArtifact);
+    this.emitDelegatedWorkerGraphEvent(run, 'artifact_created', {
+      artifactId: verificationRef.artifactId,
+      artifactType: verificationRef.artifactType,
+      label: verificationRef.label,
+      ...(verificationRef.preview ? { preview: verificationRef.preview } : {}),
+      ...(verificationRef.trustLevel ? { trustLevel: verificationRef.trustLevel } : {}),
+      ...(verificationRef.taintReasons ? { taintReasons: verificationRef.taintReasons } : {}),
+      ...(verificationRef.redactionPolicy ? { redactionPolicy: verificationRef.redactionPolicy } : {}),
+    }, `artifact:${verificationArtifact.artifactId}`);
+    this.emitDelegatedWorkerGraphEvent(run, 'verification_completed', {
+      verificationArtifactId: verificationArtifact.artifactId,
+      decision: options.verification.decision,
+      valid: verificationArtifact.content.valid,
+      retryable: options.verification.retryable,
+      checkCount: verificationArtifact.content.checks.length,
+      failedChecks: verificationArtifact.content.checks
+        .filter((check) => check.status === 'failed')
+        .map((check) => check.name),
+      ...(options.verification.requiredNextAction ? { requiredNextAction: options.verification.requiredNextAction } : {}),
+      ...(options.verification.missingEvidenceKinds?.length ? { missingEvidenceKinds: options.verification.missingEvidenceKinds } : {}),
+      ...(options.verification.unsatisfiedStepIds?.length ? { unsatisfiedStepIds: options.verification.unsatisfiedStepIds } : {}),
+      ...(options.verification.qualityNotes?.length ? { qualityNotes: options.verification.qualityNotes } : {}),
+    }, 'verification:completed');
     if (options.lifecycle === 'failed') {
       this.emitDelegatedWorkerGraphEvent(run, 'node_failed', {
         ...sharedPayload,
+        verificationArtifactId: verificationArtifact.artifactId,
         reason: options.handoff.summary,
       }, 'node:failed');
       this.emitDelegatedWorkerGraphEvent(run, 'graph_failed', {
         ...sharedPayload,
+        verificationArtifactId: verificationArtifact.artifactId,
         reason: options.handoff.summary,
       }, 'graph:failed', { nodeScoped: false });
       return;
@@ -1754,8 +1792,14 @@ export class WorkerManager {
       }, 'node:interruption');
       return;
     }
-    this.emitDelegatedWorkerGraphEvent(run, 'node_completed', sharedPayload, 'node:completed');
-    this.emitDelegatedWorkerGraphEvent(run, 'graph_completed', sharedPayload, 'graph:completed', { nodeScoped: false });
+    this.emitDelegatedWorkerGraphEvent(run, 'node_completed', {
+      ...sharedPayload,
+      verificationArtifactId: verificationArtifact.artifactId,
+    }, 'node:completed');
+    this.emitDelegatedWorkerGraphEvent(run, 'graph_completed', {
+      ...sharedPayload,
+      verificationArtifactId: verificationArtifact.artifactId,
+    }, 'graph:completed', { nodeScoped: false });
   }
 
   private failDelegatedWorkerGraph(
@@ -2255,6 +2299,7 @@ export class WorkerManager {
           lifecycle,
           handoff,
           taskContract: effectiveTaskContract,
+          verification: verifiedResult.decision,
           workerId: worker.id,
         });
         this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
@@ -2317,6 +2362,7 @@ export class WorkerManager {
         lifecycle,
         handoff,
         taskContract: effectiveTaskContract,
+        verification: verifiedResult.decision,
         workerId: worker.id,
       });
       this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
@@ -5101,6 +5147,38 @@ function normalizeDelegatedGraphBlockerKind(
     default:
       return 'missing_context';
   }
+}
+
+function buildDelegatedWorkerVerificationChecks(
+  decision: VerificationDecision,
+): VerificationCheckRecord[] {
+  const checks: VerificationCheckRecord[] = [{
+    name: 'delegated_worker_sufficiency',
+    status: decision.decision === 'satisfied' ? 'passed' : 'failed',
+    ...(decision.reasons[0] ? { reason: decision.reasons[0] } : {}),
+  }];
+  if (decision.unsatisfiedStepIds && decision.unsatisfiedStepIds.length > 0) {
+    checks.push({
+      name: 'unsatisfied_required_steps',
+      status: 'failed',
+      reason: decision.unsatisfiedStepIds.join(', '),
+    });
+  }
+  if (decision.missingEvidenceKinds && decision.missingEvidenceKinds.length > 0) {
+    checks.push({
+      name: 'missing_required_evidence',
+      status: 'failed',
+      reason: decision.missingEvidenceKinds.join(', '),
+    });
+  }
+  for (const [index, note] of (decision.qualityNotes ?? []).entries()) {
+    checks.push({
+      name: `quality_note_${index + 1}`,
+      status: 'skipped',
+      reason: note,
+    });
+  }
+  return checks;
 }
 
 function readDelegatedApprovalInterruption(

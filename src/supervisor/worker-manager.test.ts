@@ -1358,9 +1358,19 @@ describe('WorkerManager', () => {
     expect(graphEvents.map((event) => event.kind)).toEqual([
       'graph_started',
       'node_started',
+      'artifact_created',
+      'verification_completed',
       'interruption_requested',
     ]);
-    expect(graphEvents[2]).toMatchObject({
+    expect(graphEvents[3]).toMatchObject({
+      kind: 'verification_completed',
+      nodeKind: 'delegated_worker',
+      payload: {
+        decision: 'blocked',
+        valid: false,
+      },
+    });
+    expect(graphEvents[4]).toMatchObject({
       kind: 'interruption_requested',
       nodeKind: 'delegated_worker',
       payload: {
@@ -1374,6 +1384,9 @@ describe('WorkerManager', () => {
     expect(delegatedSnapshot?.graph.status).toBe('awaiting_approval');
     expect(delegatedSnapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
       ['delegated_worker', 'awaiting_approval'],
+    ]);
+    expect(executionGraphStore.listArtifacts(delegatedGraphId).map((artifact) => artifact.artifactType)).toEqual([
+      'VerificationResult',
     ]);
 
     manager.shutdown();
@@ -1454,6 +1467,8 @@ describe('WorkerManager', () => {
     expect(graphEvents.map((event) => event.kind)).toEqual([
       'graph_started',
       'node_started',
+      'artifact_created',
+      'verification_completed',
       'node_completed',
       'graph_completed',
     ]);
@@ -1462,6 +1477,9 @@ describe('WorkerManager', () => {
     expect(snapshot?.graph.status).toBe('completed');
     expect(snapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
       ['delegated_worker', 'completed'],
+    ]);
+    expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual([
+      'VerificationResult',
     ]);
 
     manager.shutdown();
@@ -4028,6 +4046,8 @@ describe('WorkerManager', () => {
     expect(delegatedEvents.map((event) => event.kind)).toEqual([
       'graph_started',
       'node_started',
+      'artifact_created',
+      'verification_completed',
       'node_failed',
       'graph_failed',
     ]);
@@ -4035,6 +4055,9 @@ describe('WorkerManager', () => {
     expect(delegatedSnapshot?.graph.status).toBe('failed');
     expect(delegatedSnapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
       ['delegated_worker', 'failed'],
+    ]);
+    expect(executionGraphStore.listArtifacts(delegatedEvents[0]?.graphId ?? '').map((artifact) => artifact.artifactType)).toEqual([
+      'VerificationResult',
     ]);
     const recoveryEvents = graphEvents.filter((event) => event.graphId === graphId);
     expect(recoveryEvents.map((event) => event.kind)).toEqual([
