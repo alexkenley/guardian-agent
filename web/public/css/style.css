@@ -3221,6 +3221,7 @@ tr:hover td {
 .sb-board {
   display: grid;
   gap: 1rem;
+  min-width: 0;
 }
 
 .sb-layout--today {
@@ -3243,7 +3244,7 @@ tr:hover td {
 }
 
 .sb-split--calendar {
-  grid-template-columns: minmax(360px, 0.98fr) minmax(0, 1.55fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
 }
 
 .sb-split--board {
@@ -3253,6 +3254,12 @@ tr:hover td {
 .sb-board {
   grid-template-columns: repeat(3, minmax(220px, 1fr));
   align-items: start;
+}
+
+.sb-split > *,
+.sb-board > *,
+.sb-layout > * {
+  min-width: 0;
 }
 
 .sb-routines-layout {
@@ -3279,6 +3286,7 @@ tr:hover td {
 .sb-card--editor,
 .sb-card--sidebar {
   min-height: 100%;
+  min-width: 0;
 }
 
 .sb-card--calendar-main {
@@ -3347,6 +3355,7 @@ tr:hover td {
   gap: 0.6rem;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
 }
 
 .sb-toolbar--search input {
@@ -3397,7 +3406,7 @@ tr:hover td {
 
 .sb-form__row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
   gap: 0.75rem;
 }
 
@@ -3453,6 +3462,19 @@ tr:hover td {
   gap: 0.7rem;
 }
 
+.sb-card--rail .sb-stack,
+.sb-board__body,
+.sb-agenda-pane {
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  padding-right: 0.2rem;
+  scrollbar-gutter: stable;
+}
+
+.sb-agenda-pane {
+  max-height: min(34vh, 320px);
+}
+
 .sb-filter-divider {
   width: 1px;
   align-self: stretch;
@@ -3484,6 +3506,7 @@ tr:hover td {
 .sb-task-card,
 .sb-routine-card {
   width: 100%;
+  min-width: 0;
   padding: 0.85rem;
   border-radius: 0;
   border: 1px solid var(--border);
@@ -3526,6 +3549,7 @@ tr:hover td {
 .sb-routine-card strong {
   display: block;
   margin-bottom: 0.2rem;
+  overflow-wrap: anywhere;
 }
 
 .sb-list-card span,
@@ -3535,6 +3559,7 @@ tr:hover td {
 .sb-readout span {
   color: #9fb2cf;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .sb-tag-row,
@@ -3743,6 +3768,10 @@ tr:hover td {
   gap: 0.55rem;
 }
 
+.sb-calendar__grid {
+  grid-auto-rows: 150px;
+}
+
 .sb-calendar__weekdays span {
   padding: 0 0.2rem;
   color: #8aa0c0;
@@ -3752,12 +3781,14 @@ tr:hover td {
 }
 
 .sb-calendar-day {
-  min-height: 150px;
+  min-height: 0;
+  height: 100%;
   padding: 0.65rem;
   border-radius: 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.55rem;
   align-content: start;
   position: relative;
@@ -3794,7 +3825,11 @@ tr:hover td {
 }
 
 .sb-calendar-day__label {
-  width: max-content;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
   pointer-events: none;
 }
 
@@ -3806,6 +3841,14 @@ tr:hover td {
   height: 2rem;
   border-radius: 0;
   background: rgba(79, 172, 254, 0.08);
+}
+
+.sb-calendar-day__count,
+.sb-calendar-day__summary {
+  color: #7dd3fc;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .sb-calendar-day__header {
@@ -3824,6 +3867,9 @@ tr:hover td {
 .sb-calendar-day__events {
   display: grid;
   gap: 0.35rem;
+  min-height: 0;
+  overflow: hidden;
+  align-content: start;
 }
 
 .sb-calendar-day__empty {
@@ -3839,12 +3885,19 @@ tr:hover td {
 
 .sb-calendar-day--week {
   min-height: 260px;
+  height: min(52vh, 360px);
 }
 
 .sb-calendar-week {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0.75rem;
+}
+
+.sb-calendar-day--week .sb-calendar-day__events {
+  overflow-y: auto;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
 }
 
 .sb-calendar-year {
@@ -3933,6 +3986,7 @@ tr:hover td {
   display: grid;
   gap: 0.08rem;
   width: 100%;
+  min-width: 0;
   padding: 0.45rem 0.55rem;
   border-radius: 0;
   border: 1px solid var(--border);
@@ -3944,11 +3998,16 @@ tr:hover td {
 .sb-event-chip__time {
   color: #fdba74;
   font-size: 0.68rem;
+  white-space: nowrap;
 }
 
 .sb-event-chip__title {
   color: #dce5f5;
   font-size: 0.74rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sb-event-chip--overflow {
@@ -4008,10 +4067,11 @@ tr:hover td {
 
   .sb-calendar__grid {
     gap: 0.45rem;
+    grid-auto-rows: 132px;
   }
 
   .sb-calendar-day {
-    min-height: 132px;
+    min-height: 0;
   }
 }
 
@@ -4038,6 +4098,7 @@ tr:hover td {
   .sb-calendar__weekdays,
   .sb-calendar__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: minmax(8.5rem, auto);
   }
 
   .sb-calendar-week,
@@ -4046,7 +4107,18 @@ tr:hover td {
   }
 
   .sb-calendar-day {
-    min-height: auto;
+    min-height: 8.5rem;
+    height: auto;
+  }
+
+  .sb-calendar-day__events {
+    overflow: visible;
+  }
+
+  .sb-card--rail .sb-stack,
+  .sb-board__body,
+  .sb-agenda-pane {
+    max-height: none;
   }
 }
 

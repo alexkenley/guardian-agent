@@ -734,11 +734,14 @@ function renderTodayCaptureForm(nowDate) {
 
 function renderCalendar(panel, data) {
   const selectedDate = parseDayKey(state.selectedCalendarDate);
-  const selectedEvent = state.creatingCalendarEvent
-    ? null
-    : (findRecord(data.calendarEvents, state.selectedCalendarEventId) ?? findRecord(data.focusEvents, state.selectedCalendarEventId));
   const dayEventMap = buildDayEventMap(data.calendarEvents);
   const dayEvents = getDayEvents(dayEventMap, selectedDate);
+  const selectedEventCandidate = state.creatingCalendarEvent
+    ? null
+    : (findRecord(data.calendarEvents, state.selectedCalendarEventId) ?? findRecord(data.focusEvents, state.selectedCalendarEventId));
+  const selectedEvent = selectedEventCandidate && dayEvents.some((event) => event.id === selectedEventCandidate.id)
+    ? selectedEventCandidate
+    : null;
 
   panel.innerHTML = `
     <section class="sb-section">
@@ -822,6 +825,7 @@ function renderCalendarMonthView(cursor, dayEventMap) {
 function renderCalendarMonthDay(day, monthStart, dayEventMap) {
   const key = dayKey(day);
   const dayEvents = getDayEvents(dayEventMap, day);
+  const eventCount = dayEvents.length;
   const isOutside = !isSameMonth(day, monthStart);
   const isSelected = key === state.selectedCalendarDate;
   const isToday = key === dayKey(new Date());
@@ -836,6 +840,7 @@ function renderCalendarMonthDay(day, monthStart, dayEventMap) {
       ></button>
       <div class="sb-calendar-day__label" aria-hidden="true">
         <span>${esc(String(day.getDate()))}</span>
+        ${eventCount > 0 ? `<strong class="sb-calendar-day__count">${esc(String(eventCount))}</strong>` : ''}
       </div>
       <div class="sb-calendar-day__events">
         ${renderCalendarEventChips(dayEvents, key, day, 3)}
@@ -865,6 +870,7 @@ function renderCalendarWeekView(cursor, dayEventMap) {
 function renderCalendarWeekDay(day, dayEventMap) {
   const key = dayKey(day);
   const dayEvents = getDayEvents(dayEventMap, day);
+  const eventCount = dayEvents.length;
   const isSelected = key === state.selectedCalendarDate;
   const isToday = key === dayKey(new Date());
 
@@ -879,6 +885,7 @@ function renderCalendarWeekDay(day, dayEventMap) {
       <div class="sb-calendar-day__header" aria-hidden="true">
         <span class="sb-calendar-day__weekday">${esc(formatWeekdayLabel(day))}</span>
         <strong>${esc(formatMonthDayLabel(day))}</strong>
+        ${eventCount > 0 ? `<span class="sb-calendar-day__summary">${esc(`${eventCount} event${eventCount === 1 ? '' : 's'}`)}</span>` : ''}
       </div>
       <div class="sb-calendar-day__events">
         ${dayEvents.length > 0
@@ -956,7 +963,13 @@ function renderCalendarEventChips(events, dateKey, day, limit) {
   const visibleEvents = events.slice(0, limit);
   return `
     ${visibleEvents.map((event) => `
-      <button class="sb-event-chip" type="button" data-calendar-select-event="${escAttr(event.id)}" data-calendar-select-date="${escAttr(dateKey)}">
+      <button
+        class="sb-event-chip"
+        type="button"
+        data-calendar-select-event="${escAttr(event.id)}"
+        data-calendar-select-date="${escAttr(dateKey)}"
+        aria-label="${escAttr(`${formatEventChipTime(event, day)} ${event.title}`)}"
+      >
         <span class="sb-event-chip__time">${esc(formatEventChipTime(event, day))}</span>
         <span class="sb-event-chip__title">${esc(event.title)}</span>
       </button>
