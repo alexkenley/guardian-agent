@@ -624,6 +624,7 @@ export class WorkerManager {
     const readNodeId = `node:${input.taskRunId}:explore`;
     const synthesisNodeId = `node:${input.taskRunId}:synthesize`;
     const mutationNodeId = `node:${input.taskRunId}:mutate`;
+    const verificationNodeId = `node:${input.taskRunId}:verify`;
     this.observability.executionGraphStore?.createGraph({
       graphId,
       executionId: input.taskRunId,
@@ -681,6 +682,18 @@ export class WorkerManager {
           approvalPolicy: 'if_required',
           checkpointPolicy: 'phase_boundary',
         },
+        {
+          nodeId: verificationNodeId,
+          graphId,
+          kind: 'verify',
+          status: 'pending',
+          title: 'Mutation verification',
+          requiredInputIds: [],
+          outputArtifactTypes: ['VerificationResult'],
+          allowedToolCategories: ['filesystem.read'],
+          approvalPolicy: 'none',
+          checkpointPolicy: 'terminal_only',
+        },
       ],
       edges: [
         {
@@ -694,6 +707,12 @@ export class WorkerManager {
           graphId,
           fromNodeId: synthesisNodeId,
           toNodeId: mutationNodeId,
+        },
+        {
+          edgeId: `${mutationNodeId}->${verificationNodeId}`,
+          graphId,
+          fromNodeId: mutationNodeId,
+          toNodeId: verificationNodeId,
         },
       ],
     });
@@ -956,6 +975,7 @@ export class WorkerManager {
         agentId: input.target.agentId,
         userId: input.request.userId,
         ...(codeSessionId ? { codeSessionId } : {}),
+        verificationNodeId,
         sequenceStart: sequence,
         now,
         emit: (event) => {
@@ -1291,6 +1311,7 @@ export class WorkerManager {
     const channel = graph.securityContext.channel ?? pendingAction.scope.channel;
     const userId = graph.securityContext.userId ?? pendingAction.scope.userId;
     const agentId = graph.securityContext.agentId ?? pendingAction.scope.agentId;
+    const verificationNodeId = graph.nodes.find((node) => node.kind === 'verify')?.nodeId;
     return {
       graphId: graph.graphId,
       nodeId: payload.nodeId,
@@ -1309,6 +1330,7 @@ export class WorkerManager {
         agentId,
         userId,
         ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
+        ...(verificationNodeId ? { verificationNodeId } : {}),
         sequenceStart,
       },
       toolRequest: {

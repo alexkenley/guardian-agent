@@ -4141,6 +4141,13 @@ describe('WorkerManager', () => {
       'verification_completed',
       'graph_completed',
     ]));
+    const verificationEvent = runTimeline.ingestExecutionGraphEvent.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.kind === 'verification_completed');
+    expect(verificationEvent).toMatchObject({
+      nodeKind: 'verify',
+      nodeId: expect.stringContaining(':verify'),
+    });
     expect(result.content).toContain('Wrote tmp/manual-web/planned-steps-summary.txt and verified');
     expect(result.metadata?.executionGraph).toMatchObject({
       status: 'succeeded',
@@ -4360,6 +4367,7 @@ describe('WorkerManager', () => {
     const snapshot = executionGraphStore.getSnapshot(graphId);
     expect(snapshot?.graph.status).toBe('awaiting_approval');
     expect(snapshot?.graph.nodes.find((node) => node.kind === 'mutate')?.status).toBe('awaiting_approval');
+    expect(snapshot?.graph.nodes.find((node) => node.kind === 'verify')?.status).toBe('pending');
     expect(snapshot?.graph.checkpoints.map((checkpoint) => checkpoint.reason)).toContain('approval_interrupt');
     expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual(expect.arrayContaining([
       'SearchResultSet',
@@ -4427,6 +4435,7 @@ describe('WorkerManager', () => {
     const resumedSnapshot = executionGraphStore.getSnapshot(graphId);
     expect(resumedSnapshot?.graph.status).toBe('completed');
     expect(resumedSnapshot?.graph.nodes.find((node) => node.kind === 'mutate')?.status).toBe('completed');
+    expect(resumedSnapshot?.graph.nodes.find((node) => node.kind === 'verify')?.status).toBe('completed');
     expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual(expect.arrayContaining([
       'VerificationResult',
     ]));

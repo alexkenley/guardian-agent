@@ -9,6 +9,7 @@ import {
   type WriteSpecContent,
 } from './graph-artifacts.js';
 import { createExecutionGraphEvent, type ExecutionGraphEvent } from './graph-events.js';
+import type { ExecutionNodeKind } from './types.js';
 import { buildWriteMutationVerificationArtifact } from './node-verifier.js';
 
 export type SupervisorToolExecutor = (
@@ -29,6 +30,7 @@ export interface MutationNodeExecutionContext {
   agentId?: string;
   userId?: string;
   codeSessionId?: string;
+  verificationNodeId?: string;
   sequenceStart?: number;
   now?: () => number;
   emit?: (event: ExecutionGraphEvent) => void;
@@ -65,13 +67,19 @@ export async function executeWriteSpecMutationNode(
   const events: ExecutionGraphEvent[] = [];
   let sequence = input.context.sequenceStart ?? 0;
   const now = input.context.now ?? Date.now;
-  const emit = (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string): ExecutionGraphEvent => {
+  const emitForNode = (
+    kind: ExecutionGraphEvent['kind'],
+    payload: Record<string, unknown>,
+    eventKey: string,
+    nodeId = input.context.nodeId,
+    nodeKind: ExecutionNodeKind = 'mutate',
+  ): ExecutionGraphEvent => {
     sequence += 1;
     const event = createExecutionGraphEvent({
       ...baseEventContext(input.context),
-      eventId: `${input.context.graphId}:${input.context.nodeId}:${eventKey}:${sequence}`,
-      nodeId: input.context.nodeId,
-      nodeKind: 'mutate',
+      eventId: `${input.context.graphId}:${nodeId}:${eventKey}:${sequence}`,
+      nodeId,
+      nodeKind,
       kind,
       timestamp: now(),
       sequence,
@@ -82,14 +90,21 @@ export async function executeWriteSpecMutationNode(
     input.context.emit?.(event);
     return event;
   };
-  const emitArtifact = (artifact: ExecutionArtifact): ExecutionGraphEvent => {
+  const emit = (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string): ExecutionGraphEvent => (
+    emitForNode(kind, payload, eventKey)
+  );
+  const emitArtifactForNode = (
+    artifact: ExecutionArtifact,
+    nodeId = input.context.nodeId,
+    nodeKind: ExecutionNodeKind = 'mutate',
+  ): ExecutionGraphEvent => {
     sequence += 1;
     const artifactRef = artifactRefFromArtifact(artifact);
     const event = createExecutionGraphEvent({
       ...baseEventContext(input.context),
-      eventId: `${input.context.graphId}:${input.context.nodeId}:artifact:${artifact.artifactId}:${sequence}`,
-      nodeId: input.context.nodeId,
-      nodeKind: 'mutate',
+      eventId: `${input.context.graphId}:${nodeId}:artifact:${artifact.artifactId}:${sequence}`,
+      nodeId,
+      nodeKind,
       kind: 'artifact_created',
       timestamp: now(),
       sequence,
@@ -108,6 +123,7 @@ export async function executeWriteSpecMutationNode(
     input.context.emit?.(event);
     return event;
   };
+  const emitArtifact = (artifact: ExecutionArtifact): ExecutionGraphEvent => emitArtifactForNode(artifact);
 
   emit('node_started', {
     writeSpecArtifactId: input.writeSpec.artifactId,
@@ -180,23 +196,47 @@ export async function executeWriteSpecMutationNode(
     return { status: 'failed', receiptArtifact, events };
   }
 
+  const verificationNodeId = input.context.verificationNodeId;
+  const verificationEmitter = verificationNodeId
+    ? (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string) => (
+        emitForNode(kind, payload, eventKey, verificationNodeId, 'verify')
+      )
+    : emit;
+  if (verificationNodeId) {
+    emit('node_completed', {
+      receiptArtifactId: receiptArtifact.artifactId,
+      path: input.writeSpec.content.path,
+      verificationNodeId,
+    }, 'node-completed');
+    verificationEmitter('node_started', {
+      writeSpecArtifactId: input.writeSpec.artifactId,
+      receiptArtifactId: receiptArtifact.artifactId,
+      path: input.writeSpec.content.path,
+    }, 'node-started');
+  }
+
   const readBackResult = input.verifyReadBack === false
     ? null
     : await executeReadBack({
-        input,
-        emit,
-      });
+      input,
+      emit: verificationEmitter,
+    });
+  const verificationArtifactNodeId = verificationNodeId ?? input.context.nodeId;
   const verificationArtifact = buildWriteMutationVerificationArtifact({
     graphId: input.context.graphId,
-    nodeId: input.context.nodeId,
-    artifactId: `${input.context.graphId}:${input.context.nodeId}:verification`,
+    nodeId: verificationArtifactNodeId,
+    artifactId: `${input.context.graphId}:${verificationArtifactNodeId}:verification`,
     writeSpec: input.writeSpec,
     receipt: receiptArtifact,
     readBackResult,
     createdAt: now(),
   });
-  emitArtifact(verificationArtifact);
-  emit('verification_completed', {
+  emitArtifactForNode(
+    verificationArtifact,
+    verificationArtifactNodeId,
+    verificationNodeId ? 'verify' : 'mutate',
+  );
+  verificationEmitter('verification_completed', {
     verificationArtifactId: verificationArtifact.artifactId,
     valid: verificationArtifact.content.valid,
     checkCount: verificationArtifact.content.checks.length,
@@ -206,14 +246,14 @@ export async function executeWriteSpecMutationNode(
   }, 'verification-completed');
 
   if (!verificationArtifact.content.valid) {
-    emit('node_failed', {
+    verificationEmitter('node_failed', {
       reason: 'Mutation verification failed.',
       verificationArtifactId: verificationArtifact.artifactId,
     }, 'node-failed');
     return { status: 'failed', receiptArtifact, verificationArtifact, events };
   }
 
-  emit('node_completed', {
+  verificationEmitter('node_completed', {
     receiptArtifactId: receiptArtifact.artifactId,
     verificationArtifactId: verificationArtifact.artifactId,
     path: input.writeSpec.content.path,
@@ -227,13 +267,19 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
   const events: ExecutionGraphEvent[] = [];
   let sequence = input.context.sequenceStart ?? 0;
   const now = input.context.now ?? Date.now;
-  const emit = (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string): ExecutionGraphEvent => {
+  const emitForNode = (
+    kind: ExecutionGraphEvent['kind'],
+    payload: Record<string, unknown>,
+    eventKey: string,
+    nodeId = input.context.nodeId,
+    nodeKind: ExecutionNodeKind = 'mutate',
+  ): ExecutionGraphEvent => {
     sequence += 1;
     const event = createExecutionGraphEvent({
       ...baseEventContext(input.context),
-      eventId: `${input.context.graphId}:${input.context.nodeId}:${eventKey}:${sequence}`,
-      nodeId: input.context.nodeId,
-      nodeKind: 'mutate',
+      eventId: `${input.context.graphId}:${nodeId}:${eventKey}:${sequence}`,
+      nodeId,
+      nodeKind,
       kind,
       timestamp: now(),
       sequence,
@@ -244,14 +290,21 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
     input.context.emit?.(event);
     return event;
   };
-  const emitArtifact = (artifact: ExecutionArtifact): ExecutionGraphEvent => {
+  const emit = (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string): ExecutionGraphEvent => (
+    emitForNode(kind, payload, eventKey)
+  );
+  const emitArtifactForNode = (
+    artifact: ExecutionArtifact,
+    nodeId = input.context.nodeId,
+    nodeKind: ExecutionNodeKind = 'mutate',
+  ): ExecutionGraphEvent => {
     sequence += 1;
     const artifactRef = artifactRefFromArtifact(artifact);
     const event = createExecutionGraphEvent({
       ...baseEventContext(input.context),
-      eventId: `${input.context.graphId}:${input.context.nodeId}:artifact:${artifact.artifactId}:${sequence}`,
-      nodeId: input.context.nodeId,
-      nodeKind: 'mutate',
+      eventId: `${input.context.graphId}:${nodeId}:artifact:${artifact.artifactId}:${sequence}`,
+      nodeId,
+      nodeKind,
       kind: 'artifact_created',
       timestamp: now(),
       sequence,
@@ -270,6 +323,7 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
     input.context.emit?.(event);
     return event;
   };
+  const emitArtifact = (artifact: ExecutionArtifact): ExecutionGraphEvent => emitArtifactForNode(artifact);
 
   emit('approval_resolved', {
     approvalId: input.approvalId,
@@ -305,23 +359,46 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
     context: input.context,
     verifyReadBack: input.verifyReadBack,
   };
+  const verificationNodeId = input.context.verificationNodeId;
+  const verificationEmitter = verificationNodeId
+    ? (kind: ExecutionGraphEvent['kind'], payload: Record<string, unknown>, eventKey: string) => (
+        emitForNode(kind, payload, eventKey, verificationNodeId, 'verify')
+      )
+    : emit;
+  if (verificationNodeId) {
+    emit('node_completed', {
+      receiptArtifactId: receiptArtifact.artifactId,
+      path: input.writeSpec.content.path,
+      verificationNodeId,
+    }, 'node-completed');
+    verificationEmitter('node_started', {
+      writeSpecArtifactId: input.writeSpec.artifactId,
+      receiptArtifactId: receiptArtifact.artifactId,
+      path: input.writeSpec.content.path,
+    }, 'node-started');
+  }
   const readBackResult = input.verifyReadBack === false
     ? null
     : await executeReadBack({
-        input: executionInput,
-        emit,
-      });
+      input: executionInput,
+      emit: verificationEmitter,
+    });
+  const verificationArtifactNodeId = verificationNodeId ?? input.context.nodeId;
   const verificationArtifact = buildWriteMutationVerificationArtifact({
     graphId: input.context.graphId,
-    nodeId: input.context.nodeId,
-    artifactId: `${input.context.graphId}:${input.context.nodeId}:verification`,
+    nodeId: verificationArtifactNodeId,
+    artifactId: `${input.context.graphId}:${verificationArtifactNodeId}:verification`,
     writeSpec: input.writeSpec,
     receipt: receiptArtifact,
     readBackResult,
     createdAt: now(),
   });
-  emitArtifact(verificationArtifact);
-  emit('verification_completed', {
+  emitArtifactForNode(
+    verificationArtifact,
+    verificationArtifactNodeId,
+    verificationNodeId ? 'verify' : 'mutate',
+  );
+  verificationEmitter('verification_completed', {
     verificationArtifactId: verificationArtifact.artifactId,
     valid: verificationArtifact.content.valid,
     checkCount: verificationArtifact.content.checks.length,
@@ -331,14 +408,14 @@ export async function resumeWriteSpecMutationNodeAfterApproval(
   }, 'verification-completed');
 
   if (!verificationArtifact.content.valid) {
-    emit('node_failed', {
+    verificationEmitter('node_failed', {
       reason: 'Mutation verification failed after approval.',
       verificationArtifactId: verificationArtifact.artifactId,
     }, 'node-failed');
     return { status: 'failed', receiptArtifact, verificationArtifact, events };
   }
 
-  emit('node_completed', {
+  verificationEmitter('node_completed', {
     receiptArtifactId: receiptArtifact.artifactId,
     verificationArtifactId: verificationArtifact.artifactId,
     path: input.writeSpec.content.path,

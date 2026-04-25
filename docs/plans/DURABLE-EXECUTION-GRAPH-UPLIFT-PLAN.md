@@ -549,6 +549,12 @@ Deliverables:
 - verifier operates on graph artifacts/receipts
 - `priorSatisfiedStepReceipts` either removed or reduced to a compatibility adapter during migration
 
+Status:
+
+- Graph-controlled read/write runs now model mutation verification as a distinct `verify` node while preserving the mutation helper's legacy single-node behavior for non-graph callers.
+- Approval resume reconstruction carries the stored verify node forward so post-approval read-back verification completes the graph-native verifier node.
+- Remaining work: remove the interim delegated retry/handoff compatibility paths only after delegated workers are fully represented as graph node runners.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.

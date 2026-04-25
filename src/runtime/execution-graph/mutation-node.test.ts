@@ -89,6 +89,72 @@ describe('execution graph mutation node', () => {
     expect(payloadText).not.toContain(content);
   });
 
+  it('can emit read-back verification on a separate verify node', async () => {
+    const content = 'verification node content\n';
+    const writeSpec = buildWriteSpecArtifact({
+      graphId: 'graph-1',
+      nodeId: 'synthesize-1',
+      artifactId: 'write-spec-verify-node',
+      path: 'tmp/manual-web/verify-node.txt',
+      content,
+      sourceArtifacts: [buildSearchResultArtifact()],
+      createdAt: 100,
+    });
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'fs_write') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            path: args.path,
+            size: Buffer.byteLength(String(args.content), 'utf-8'),
+          },
+        };
+      }
+      if (toolName === 'fs_read') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: {
+            path: args.path,
+            truncated: false,
+            content,
+          },
+        };
+      }
+      throw new Error(`unexpected tool ${toolName}`);
+    });
+
+    const result = await executeWriteSpecMutationNode({
+      writeSpec,
+      executeTool,
+      toolRequest: baseToolRequest(),
+      context: {
+        ...baseContext(),
+        verificationNodeId: 'verify-1',
+      },
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.verificationArtifact).toMatchObject({
+      nodeId: 'verify-1',
+      artifactId: 'graph-1:verify-1:verification',
+    });
+    expect(result.events.map((event) => [event.kind, event.nodeId, event.nodeKind])).toEqual([
+      ['node_started', 'mutate-1', 'mutate'],
+      ['tool_call_started', 'mutate-1', 'mutate'],
+      ['tool_call_completed', 'mutate-1', 'mutate'],
+      ['artifact_created', 'mutate-1', 'mutate'],
+      ['node_completed', 'mutate-1', 'mutate'],
+      ['node_started', 'verify-1', 'verify'],
+      ['tool_call_started', 'verify-1', 'verify'],
+      ['tool_call_completed', 'verify-1', 'verify'],
+      ['artifact_created', 'verify-1', 'verify'],
+      ['verification_completed', 'verify-1', 'verify'],
+      ['node_completed', 'verify-1', 'verify'],
+    ]);
+  });
+
   it('pauses on ToolExecutor approval instead of marking the mutation complete', async () => {
     const writeSpec = buildWriteSpecArtifact({
       graphId: 'graph-1',
