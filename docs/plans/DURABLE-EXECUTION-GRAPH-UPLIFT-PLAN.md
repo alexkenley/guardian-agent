@@ -553,6 +553,7 @@ Status:
 
 - Graph-controlled read/write runs now model mutation verification as a distinct `verify` node while preserving the mutation helper's legacy single-node behavior for non-graph callers.
 - Approval resume reconstruction carries the stored verify node forward so post-approval read-back verification completes the graph-native verifier node.
+- Brokered delegated worker runs with Intent Gateway decisions now create a durable `delegated_worker` graph node and emit completed, blocked, or failed graph lifecycle events while preserving the existing retry and handoff path.
 - Remaining work: remove the interim delegated retry/handoff compatibility paths only after delegated workers are fully represented as graph node runners.
 
 ### Phase 8: Web UI And Operator Observability

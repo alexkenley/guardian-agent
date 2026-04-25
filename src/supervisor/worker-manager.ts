@@ -67,6 +67,12 @@ import {
   type DirectReasoningGraphContext,
 } from '../runtime/execution-graph/direct-reasoning-node.js';
 import {
+  buildDelegatedWorkerGraphContext,
+  buildDelegatedWorkerGraphEvent,
+  buildDelegatedWorkerNode,
+  type DelegatedWorkerGraphContext,
+} from '../runtime/execution-graph/delegated-worker-node.js';
+import {
   buildGroundedSynthesisLedgerArtifact,
   buildGroundedSynthesisMessages,
   createGroundedSynthesisDraftArtifact,
@@ -378,6 +384,11 @@ interface GraphControlledExecutionSuspension {
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>;
   artifactIds: string[];
   expiresAt: number;
+}
+
+interface DelegatedWorkerGraphRun {
+  context: DelegatedWorkerGraphContext;
+  sequence: number;
 }
 
 interface GraphWriteSpecCandidate {
@@ -1627,6 +1638,166 @@ export class WorkerManager {
     };
   }
 
+  private startDelegatedWorkerGraph(input: {
+    request: WorkerMessageRequest;
+    target: ResolvedDelegatedTargetMetadata;
+    taskContract: DelegatedResultEnvelope['taskContract'];
+    intentDecision?: IntentGatewayDecision;
+    requestId: string;
+    taskRunId: string;
+    detail: string;
+  }): DelegatedWorkerGraphRun | null {
+    if (!input.intentDecision || !this.observability.executionGraphStore) {
+      return null;
+    }
+    const rootExecutionId = input.request.delegation?.rootExecutionId ?? input.taskRunId;
+    const parentExecutionId = input.request.delegation?.executionId;
+    const codeContext = input.request.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
+    const codeSessionId = input.request.delegation?.codeSessionId ?? codeContext?.sessionId;
+    const context = buildDelegatedWorkerGraphContext({
+      graphId: `execution-graph:${input.taskRunId}:delegated-worker`,
+      executionId: input.taskRunId,
+      taskExecutionId: input.taskRunId,
+      rootExecutionId,
+      ...(parentExecutionId ? { parentExecutionId } : {}),
+      requestId: input.requestId,
+      runId: input.requestId,
+      channel: input.request.message.channel,
+      agentId: input.target.agentId,
+      userId: input.request.userId,
+      ...(codeSessionId ? { codeSessionId } : {}),
+      title: describeDelegatedTarget(input.target),
+      decision: input.intentDecision,
+    });
+    this.observability.executionGraphStore.createGraph({
+      graphId: context.graphId,
+      executionId: context.executionId,
+      rootExecutionId: context.rootExecutionId,
+      ...(context.parentExecutionId ? { parentExecutionId: context.parentExecutionId } : {}),
+      requestId: context.requestId,
+      runId: context.runId,
+      intent: input.intentDecision,
+      securityContext: {
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
+        ...(codeSessionId ? { codeSessionId } : {}),
+      },
+      trigger: {
+        type: 'user_request',
+        source: input.request.message.channel,
+        sourceId: input.request.message.id,
+      },
+      nodes: [
+        buildDelegatedWorkerNode({
+          context,
+          ownerAgentId: input.target.agentId,
+          executionProfileName: input.request.executionProfile?.id ?? input.request.executionProfile?.providerName,
+        }),
+      ],
+      edges: [],
+    });
+    const run: DelegatedWorkerGraphRun = { context, sequence: 0 };
+    this.emitDelegatedWorkerGraphEvent(run, 'graph_started', {
+      route: input.intentDecision.route,
+      operation: input.intentDecision.operation,
+      executionClass: input.intentDecision.executionClass,
+      controller: 'delegated_worker',
+      ...buildDelegatedTaskContractTraceMetadata(input.taskContract),
+    }, 'graph:started', { nodeScoped: false });
+    this.emitDelegatedWorkerGraphEvent(run, 'node_started', {
+      summary: input.detail,
+      lifecycle: 'running',
+      ...buildDelegatedTaskContractTraceMetadata(input.taskContract),
+    }, 'node:started');
+    return run;
+  }
+
+  private completeDelegatedWorkerGraph(
+    run: DelegatedWorkerGraphRun | null,
+    options: {
+      lifecycle: 'completed' | 'blocked' | 'failed';
+      handoff: DelegatedWorkerHandoff;
+      taskContract: DelegatedResultEnvelope['taskContract'];
+      workerId?: string;
+    },
+  ): void {
+    if (!run) return;
+    const sharedPayload = {
+      lifecycle: options.lifecycle,
+      summary: options.handoff.summary,
+      ...(options.handoff.nextAction ? { nextAction: options.handoff.nextAction } : {}),
+      ...(options.handoff.unresolvedBlockerKind ? { unresolvedBlockerKind: options.handoff.unresolvedBlockerKind } : {}),
+      ...(typeof options.handoff.approvalCount === 'number' ? { approvalCount: options.handoff.approvalCount } : {}),
+      ...(options.handoff.reportingMode ? { reportingMode: options.handoff.reportingMode } : {}),
+      ...(options.handoff.runClass ? { runClass: options.handoff.runClass } : {}),
+      ...(options.workerId ? { workerId: options.workerId } : {}),
+      ...buildDelegatedTaskContractTraceMetadata(options.taskContract),
+    };
+    if (options.lifecycle === 'failed') {
+      this.emitDelegatedWorkerGraphEvent(run, 'node_failed', {
+        ...sharedPayload,
+        reason: options.handoff.summary,
+      }, 'node:failed');
+      this.emitDelegatedWorkerGraphEvent(run, 'graph_failed', {
+        ...sharedPayload,
+        reason: options.handoff.summary,
+      }, 'graph:failed', { nodeScoped: false });
+      return;
+    }
+    if (options.lifecycle === 'blocked') {
+      this.emitDelegatedWorkerGraphEvent(run, 'interruption_requested', {
+        ...sharedPayload,
+        kind: normalizeDelegatedGraphBlockerKind(options.handoff.unresolvedBlockerKind),
+        prompt: options.handoff.nextAction ?? options.handoff.summary,
+      }, 'node:interruption');
+      return;
+    }
+    this.emitDelegatedWorkerGraphEvent(run, 'node_completed', sharedPayload, 'node:completed');
+    this.emitDelegatedWorkerGraphEvent(run, 'graph_completed', sharedPayload, 'graph:completed', { nodeScoped: false });
+  }
+
+  private failDelegatedWorkerGraph(
+    run: DelegatedWorkerGraphRun | null,
+    error: unknown,
+    taskContract: DelegatedResultEnvelope['taskContract'],
+  ): void {
+    if (!run) return;
+    const reason = error instanceof Error ? error.message : String(error);
+    const sharedPayload = {
+      lifecycle: 'failed',
+      reason,
+      summary: reason,
+      ...buildDelegatedTaskContractTraceMetadata(taskContract),
+    };
+    this.emitDelegatedWorkerGraphEvent(run, 'node_failed', sharedPayload, 'node:failed');
+    this.emitDelegatedWorkerGraphEvent(run, 'graph_failed', sharedPayload, 'graph:failed', { nodeScoped: false });
+  }
+
+  private emitDelegatedWorkerGraphEvent(
+    run: DelegatedWorkerGraphRun,
+    kind: ExecutionGraphEvent['kind'],
+    payload: Record<string, unknown>,
+    eventKey: string,
+    options: {
+      nodeScoped?: boolean;
+    } = {},
+  ): ExecutionGraphEvent {
+    run.sequence += 1;
+    const event = buildDelegatedWorkerGraphEvent(run.context, {
+      kind,
+      sequence: run.sequence,
+      timestamp: this.observability.now?.() ?? Date.now(),
+      eventId: `${run.context.graphId}:${eventKey}:${run.sequence}`,
+      payload,
+      nodeScoped: options.nodeScoped,
+    });
+    this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+    this.observability.executionGraphStore?.appendEvent(event);
+    return event;
+  }
+
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const approvalResponse = await this.tryHandleDirectApprovalMessage(input);
     if (approvalResponse) return approvalResponse;
@@ -1706,6 +1877,15 @@ export class WorkerManager {
       details: buildDelegatedAuditDetails(input, delegatedTarget, requestId, {
         actionType: 'delegated_worker_started',
       }),
+    });
+    const delegatedGraphRun = this.startDelegatedWorkerGraph({
+      request: input,
+      target: delegatedTarget,
+      taskContract,
+      intentDecision: effectiveIntentDecision ?? undefined,
+      requestId,
+      taskRunId: delegatedTaskRunId,
+      detail: delegatedJobDetail,
     });
 
     try {
@@ -2056,21 +2236,27 @@ export class WorkerManager {
             }),
           },
         });
-      this.recordDelegatedWorkerTrace('delegated_worker_failed', effectiveInput, delegatedTarget, {
-        requestId,
-        taskRunId: delegatedTaskRunId,
-        lifecycle,
-        workerId: worker.id,
-        taskContract: effectiveTaskContract,
-        unresolvedBlockerKind: handoff.unresolvedBlockerKind,
-        approvalCount: handoff.approvalCount,
-        reportingMode: handoff.reportingMode,
-        runClass: handoff.runClass,
-        reason: handoff.summary,
-        contentPreview: handoff.summary,
-        handoff,
-        workerMetadata: normalizedResult.metadata,
-      });
+        this.recordDelegatedWorkerTrace('delegated_worker_failed', effectiveInput, delegatedTarget, {
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          lifecycle,
+          workerId: worker.id,
+          taskContract: effectiveTaskContract,
+          unresolvedBlockerKind: handoff.unresolvedBlockerKind,
+          approvalCount: handoff.approvalCount,
+          reportingMode: handoff.reportingMode,
+          runClass: handoff.runClass,
+          reason: handoff.summary,
+          contentPreview: handoff.summary,
+          handoff,
+          workerMetadata: normalizedResult.metadata,
+        });
+        this.completeDelegatedWorkerGraph(delegatedGraphRun, {
+          lifecycle,
+          handoff,
+          taskContract: effectiveTaskContract,
+          workerId: worker.id,
+        });
         this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
           id: `delegated-worker:${delegatedJob.id}:failed`,
           kind: 'failed',
@@ -2127,6 +2313,12 @@ export class WorkerManager {
         handoff,
         workerMetadata: normalizedResult.metadata,
       });
+      this.completeDelegatedWorkerGraph(delegatedGraphRun, {
+        lifecycle,
+        handoff,
+        taskContract: effectiveTaskContract,
+        workerId: worker.id,
+      });
       this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:completed`,
         kind: lifecycle === 'blocked' ? 'blocked' : 'completed',
@@ -2176,6 +2368,7 @@ export class WorkerManager {
         reason: error instanceof Error ? error.message : String(error),
         contentPreview: error instanceof Error ? error.message : String(error),
       });
+      this.failDelegatedWorkerGraph(delegatedGraphRun, error, taskContract);
       this.publishDelegatedWorkerProgress(input, delegatedTarget, {
         id: `delegated-worker:${delegatedJob.id}:failed`,
         kind: 'failed',
@@ -4890,6 +5083,24 @@ function resolveDelegatedBlockedKind(
     return 'policy_blocked';
   }
   return readPendingActionKind(metadata);
+}
+
+function normalizeDelegatedGraphBlockerKind(
+  value: string | undefined,
+): 'approval' | 'clarification' | 'workspace_switch' | 'auth' | 'policy' | 'missing_context' {
+  switch (value) {
+    case 'approval':
+    case 'clarification':
+    case 'workspace_switch':
+    case 'auth':
+    case 'policy':
+    case 'missing_context':
+      return value;
+    case 'policy_blocked':
+      return 'policy';
+    default:
+      return 'missing_context';
+  }
 }
 
 function readDelegatedApprovalInterruption(

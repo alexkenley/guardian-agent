@@ -1152,7 +1152,11 @@ describe('WorkerManager', () => {
     };
     const runTimeline = {
       ingestDelegatedWorkerProgress: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
     };
+    const executionGraphStore = new ExecutionGraphStore({
+      now: () => 123_456,
+    });
 
     const manager = new WorkerManager(
       {
@@ -1187,6 +1191,7 @@ describe('WorkerManager', () => {
       {
         intentRoutingTrace,
         runTimeline,
+        executionGraphStore,
         now: () => 123_456,
       },
     );
@@ -1203,6 +1208,7 @@ describe('WorkerManager', () => {
         principalRole: 'owner',
         channel: 'web',
         content: 'Continue the report export.',
+        metadata: generalAssistantDirectMetadata(),
         timestamp: Date.now(),
       },
       systemPrompt: 'system',
@@ -1348,6 +1354,115 @@ describe('WorkerManager', () => {
       approvalCount: 1,
       detail: 'Resolve the pending approval(s) to continue the delegated run.',
     });
+    const graphEvents = runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event);
+    expect(graphEvents.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'interruption_requested',
+    ]);
+    expect(graphEvents[2]).toMatchObject({
+      kind: 'interruption_requested',
+      nodeKind: 'delegated_worker',
+      payload: {
+        kind: 'approval',
+        approvalCount: 1,
+        reportingMode: 'held_for_approval',
+      },
+    });
+    const delegatedGraphId = graphEvents[0]?.graphId ?? '';
+    const delegatedSnapshot = executionGraphStore.getSnapshot(delegatedGraphId);
+    expect(delegatedSnapshot?.graph.status).toBe('awaiting_approval');
+    expect(delegatedSnapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
+      ['delegated_worker', 'awaiting_approval'],
+    ]);
+
+    manager.shutdown();
+  });
+
+  it('completes delegated worker graph projections for satisfied brokered runs', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    workerMessageHandler = () => ({
+      content: 'The report export path is ready.',
+    });
+
+    const runTimeline = {
+      ingestDelegatedWorkerProgress: vi.fn(),
+      ingestExecutionGraphEvent: vi.fn(),
+    };
+    const executionGraphStore = new ExecutionGraphStore({
+      now: () => 123_789,
+    });
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        runTimeline,
+        executionGraphStore,
+        now: () => 123_789,
+      },
+    );
+
+    const result = await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-completed-delegated-graph',
+        userId: 'tester',
+        channel: 'web',
+        content: 'Summarize the report export path.',
+        metadata: generalAssistantDirectMetadata(),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-completed-delegated-graph',
+        executionId: 'exec-completed-delegated-graph',
+        rootExecutionId: 'exec-completed-root',
+        originChannel: 'web',
+      },
+    });
+
+    expect(result.content).toBe('The report export path is ready.');
+    expect(runTimeline.ingestDelegatedWorkerProgress.mock.calls.map(([event]) => event.kind)).toEqual([
+      'started',
+      'running',
+      'completed',
+    ]);
+    const graphEvents = runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event);
+    expect(graphEvents.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'node_completed',
+      'graph_completed',
+    ]);
+    const graphId = graphEvents[0]?.graphId ?? '';
+    const snapshot = executionGraphStore.getSnapshot(graphId);
+    expect(snapshot?.graph.status).toBe('completed');
+    expect(snapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
+      ['delegated_worker', 'completed'],
+    ]);
 
     manager.shutdown();
   });
@@ -3908,7 +4023,21 @@ describe('WorkerManager', () => {
     });
     const recoveryMetadata = result.metadata?.executionGraphRecovery as { graphId?: string } | undefined;
     const graphId = recoveryMetadata?.graphId ?? '';
-    expect(runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event.kind)).toEqual([
+    const graphEvents = runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event);
+    const delegatedEvents = graphEvents.filter((event) => event.graphId.endsWith(':delegated-worker'));
+    expect(delegatedEvents.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'node_failed',
+      'graph_failed',
+    ]);
+    const delegatedSnapshot = executionGraphStore.getSnapshot(delegatedEvents[0]?.graphId ?? '');
+    expect(delegatedSnapshot?.graph.status).toBe('failed');
+    expect(delegatedSnapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
+      ['delegated_worker', 'failed'],
+    ]);
+    const recoveryEvents = graphEvents.filter((event) => event.graphId === graphId);
+    expect(recoveryEvents.map((event) => event.kind)).toEqual([
       'graph_started',
       'node_started',
       'artifact_created',
