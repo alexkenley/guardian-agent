@@ -388,6 +388,7 @@ interface GraphWriteSpecCandidate {
 }
 
 interface RecoveryAdvisorGraphResult {
+  graphId: string;
   proposalArtifactId: string;
   patch: RecoveryGraphPatch;
   events: ExecutionGraphEvent[];
@@ -1338,6 +1339,7 @@ export class WorkerManager {
     jobSnapshots: DelegatedJobSnapshot[];
     requestId: string;
     taskRunId: string;
+    effectiveIntentDecision?: IntentGatewayDecision;
     dispatchBase: {
       message: UserMessage;
       systemPrompt: string;
@@ -1409,6 +1411,10 @@ export class WorkerManager {
     }
 
     const graphId = `execution-graph:${input.taskRunId}:recovery`;
+    const rootExecutionId = input.request.delegation?.rootExecutionId ?? input.taskRunId;
+    const parentExecutionId = input.request.delegation?.executionId;
+    const recoveryNodeId = `node:${input.taskRunId}:recover`;
+    const now = this.observability.now ?? Date.now;
     const failedNode: DurableExecutionNode = {
       nodeId: `node:${input.taskRunId}:delegated_worker`,
       graphId,
@@ -1419,36 +1425,128 @@ export class WorkerManager {
       outputArtifactTypes: ['VerificationResult'],
       allowedToolCategories: [],
       retryLimit: 1,
-      completedAt: this.observability.now?.() ?? Date.now(),
+      completedAt: now(),
       terminalReason: input.verification.reasons[0] ?? 'Delegated worker failed deterministic verification.',
     };
+    const recoveryNode: DurableExecutionNode = {
+      nodeId: recoveryNodeId,
+      graphId,
+      kind: 'recover',
+      status: 'pending',
+      title: 'Recovery proposal',
+      requiredInputIds: [],
+      outputArtifactTypes: ['RecoveryProposal'],
+      allowedToolCategories: [],
+      approvalPolicy: 'none',
+      checkpointPolicy: 'phase_boundary',
+    };
+    if (input.effectiveIntentDecision) {
+      this.observability.executionGraphStore?.createGraph({
+        graphId,
+        executionId: input.taskRunId,
+        rootExecutionId,
+        ...(parentExecutionId ? { parentExecutionId } : {}),
+        requestId: input.requestId,
+        runId: input.requestId,
+        intent: input.effectiveIntentDecision,
+        securityContext: {
+          agentId: input.target.agentId,
+          userId: input.request.userId,
+          channel: input.request.message.channel,
+          ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
+          ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+        },
+        trigger: {
+          type: 'event',
+          source: 'recovery_advisor',
+          sourceId: input.requestId,
+        },
+        nodes: [failedNode, recoveryNode],
+        edges: [{
+          edgeId: `${failedNode.nodeId}->${recoveryNode.nodeId}`,
+          graphId,
+          fromNodeId: failedNode.nodeId,
+          toNodeId: recoveryNode.nodeId,
+        }],
+      });
+    }
+    let sequence = 0;
+    const emitRecoveryGraphEvent = (
+      kind: ExecutionGraphEvent['kind'],
+      payload: Record<string, unknown>,
+      eventKey: string,
+    ): ExecutionGraphEvent => {
+      sequence += 1;
+      const event = createExecutionGraphEvent({
+        eventId: `${graphId}:${eventKey}:${sequence}`,
+        graphId,
+        executionId: input.taskRunId,
+        rootExecutionId,
+        ...(parentExecutionId ? { parentExecutionId } : {}),
+        requestId: input.requestId,
+        runId: input.requestId,
+        kind,
+        timestamp: now(),
+        sequence,
+        producer: 'supervisor',
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
+        payload,
+      });
+      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
+      return event;
+    };
+    const lifecycleEvents: ExecutionGraphEvent[] = [
+      emitRecoveryGraphEvent('graph_started', {
+        route: input.effectiveIntentDecision?.route,
+        operation: input.effectiveIntentDecision?.operation,
+        executionClass: input.effectiveIntentDecision?.executionClass,
+        controller: 'recovery_advisor',
+        failedNodeId: failedNode.nodeId,
+        advisoryOnly: true,
+      }, 'graph:started'),
+    ];
     const recovery = executeRecoveryProposalNode({
       graph: {
         graphId,
-        nodes: [failedNode],
+        nodes: [failedNode, recoveryNode],
         artifacts: [],
       },
       failedNode,
       context: {
         graphId,
         executionId: input.taskRunId,
-        rootExecutionId: input.request.delegation?.rootExecutionId ?? input.taskRunId,
-        ...(input.request.delegation?.executionId ? { parentExecutionId: input.request.delegation.executionId } : {}),
+        rootExecutionId,
+        ...(parentExecutionId ? { parentExecutionId } : {}),
         requestId: input.requestId,
         runId: input.requestId,
-        nodeId: `node:${input.taskRunId}:recover`,
+        nodeId: recoveryNodeId,
         channel: input.request.message.channel,
         agentId: input.target.agentId,
         userId: input.request.userId,
         ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
-        now: this.observability.now,
+        sequenceStart: sequence,
+        now,
       },
       candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, failedNode.nodeId),
     });
     for (const event of recovery.events) {
+      sequence = Math.max(sequence, event.sequence);
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+      this.observability.executionGraphStore?.appendEvent(event);
+    }
+    if (recovery.proposalArtifact) {
+      this.observability.executionGraphStore?.writeArtifact(recovery.proposalArtifact);
     }
     if (recovery.status !== 'proposed' || !recovery.proposalArtifact || !recovery.patch) {
+      lifecycleEvents.push(emitRecoveryGraphEvent('graph_failed', {
+        reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
+        failedNodeId: failedNode.nodeId,
+        advisoryOnly: true,
+      }, 'graph:failed'));
       this.observability.intentRoutingTrace?.record({
         stage: 'recovery_advisor_rejected',
         requestId: input.requestId,
@@ -1466,6 +1564,12 @@ export class WorkerManager {
       });
       return null;
     }
+    lifecycleEvents.push(emitRecoveryGraphEvent('graph_completed', {
+      proposalArtifactId: recovery.proposalArtifact.artifactId,
+      failedNodeId: failedNode.nodeId,
+      actionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
+      advisoryOnly: true,
+    }, 'graph:completed'));
 
     this.observability.intentRoutingTrace?.record({
       stage: 'recovery_advisor_completed',
@@ -1492,9 +1596,11 @@ export class WorkerManager {
     });
 
     return {
+      graphId,
       proposalArtifactId: recovery.proposalArtifact.artifactId,
       patch: recovery.patch,
-      events: recovery.events,
+      events: [lifecycleEvents[0], ...recovery.events, lifecycleEvents[lifecycleEvents.length - 1]]
+        .filter((event): event is ExecutionGraphEvent => Boolean(event)),
       adviceSource,
     };
   }
@@ -1800,6 +1906,7 @@ export class WorkerManager {
           jobSnapshots,
           requestId,
           taskRunId: delegatedTaskRunId,
+          effectiveIntentDecision: effectiveIntentDecision ?? undefined,
           dispatchBase: {
             ...baseDispatchParams,
             message: effectiveInput.message,
@@ -1829,6 +1936,7 @@ export class WorkerManager {
             metadata: {
               ...(result.metadata ?? {}),
               executionGraphRecovery: {
+                graphId: recoveryProposal.graphId,
                 proposalArtifactId: recoveryProposal.proposalArtifactId,
                 adviceSource: recoveryProposal.adviceSource,
                 actionKinds: recoveryProposal.patch.operations.map((operation) => operation.kind),

@@ -3823,6 +3823,9 @@ describe('WorkerManager', () => {
       ingestDelegatedExecutionEvents: vi.fn(),
       ingestExecutionGraphEvent: vi.fn(),
     };
+    const executionGraphStore = new ExecutionGraphStore({
+      now: () => 1_010_000,
+    });
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
@@ -3858,6 +3861,7 @@ describe('WorkerManager', () => {
       {
         intentRoutingTrace,
         runTimeline,
+        executionGraphStore,
         now: () => 1_010_000,
       },
     );
@@ -3902,11 +3906,32 @@ describe('WorkerManager', () => {
       adviceSource: 'llm',
       actionKinds: ['retry_node'],
     });
+    const recoveryMetadata = result.metadata?.executionGraphRecovery as { graphId?: string } | undefined;
+    const graphId = recoveryMetadata?.graphId ?? '';
     expect(runTimeline.ingestExecutionGraphEvent.mock.calls.map(([event]) => event.kind)).toEqual([
+      'graph_started',
       'node_started',
       'artifact_created',
       'recovery_proposed',
       'node_completed',
+      'graph_completed',
+    ]);
+    const recoverySnapshot = executionGraphStore.getSnapshot(graphId);
+    expect(recoverySnapshot?.graph.status).toBe('completed');
+    expect(recoverySnapshot?.graph.nodes.map((node) => [node.kind, node.status])).toEqual([
+      ['delegated_worker', 'failed'],
+      ['recover', 'completed'],
+    ]);
+    expect(recoverySnapshot?.events.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'artifact_created',
+      'recovery_proposed',
+      'node_completed',
+      'graph_completed',
+    ]);
+    expect(executionGraphStore.listArtifacts(graphId).map((artifact) => artifact.artifactType)).toEqual([
+      'RecoveryProposal',
     ]);
     expect(intentRoutingTrace.record.mock.calls.map(([entry]) => entry.stage)).toEqual(expect.arrayContaining([
       'recovery_advisor_started',

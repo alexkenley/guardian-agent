@@ -524,6 +524,12 @@ Deliverables:
 - recovery events appear in run timeline
 - old worker-manager recovery prompt sections are removed after graph recovery is stable
 
+Status:
+
+- `node-recovery.ts` validates bounded advisory recovery proposals and emits recovery node events.
+- Delegated worker verification failures now persist advisory recovery graphs, terminal graph lifecycle events, and `RecoveryProposal` artifacts when the original request has an Intent Gateway decision.
+- Remaining work: migrate legacy recovery prompt/advice producers onto graph-native failed-node recovery so the old worker-manager recovery prompt sections can be removed.
+
 ### Phase 7: Decommission Interim Hybrid Manager Paths
 
 Goal: remove the half-step architecture once the graph handles hybrid runs.
