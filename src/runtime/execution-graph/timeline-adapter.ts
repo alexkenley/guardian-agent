@@ -98,6 +98,10 @@ function buildGraphTimelineItem(
       return { ...shared, type: 'approval_requested', status: 'blocked', title: 'Approval requested', ...(detail ? { detail } : {}), ...(normalizeText(stringPayload(event, 'approvalId')) ? { approvalId: normalizeText(stringPayload(event, 'approvalId')) } : {}) };
     case 'approval_resolved':
       return { ...shared, type: 'approval_resolved', status: graphEventHasError(event) ? 'failed' : 'succeeded', title: graphEventHasError(event) ? 'Approval denied' : 'Approval resolved', ...(detail ? { detail } : {}), ...(normalizeText(stringPayload(event, 'approvalId')) ? { approvalId: normalizeText(stringPayload(event, 'approvalId')) } : {}) };
+    case 'clarification_requested':
+      return { ...shared, type: 'note', status: 'blocked', title: 'Clarification requested', ...(detail ? { detail } : {}) };
+    case 'clarification_resolved':
+      return { ...shared, type: 'note', status: graphEventHasError(event) ? 'failed' : 'succeeded', title: graphEventHasError(event) ? 'Clarification failed' : 'Clarification resolved', ...(detail ? { detail } : {}) };
     case 'verification_completed':
       return { ...shared, type: 'verification_completed', status: mapVerificationStatus(event), title: 'Verification completed', ...(detail ? { detail } : {}) };
     case 'recovery_proposed':
@@ -122,6 +126,8 @@ function mapGraphEventToBaseStatus(event: ExecutionGraphEvent): DashboardRunStat
       return 'running';
     case 'approval_requested':
       return 'awaiting_approval';
+    case 'clarification_requested':
+      return 'blocked';
     case 'graph_completed':
       return 'completed';
     case 'graph_failed':
@@ -137,6 +143,8 @@ function buildGraphEventDetail(event: ExecutionGraphEvent): string | undefined {
     normalizeText(stringPayload(event, 'resultPreview')),
     normalizeText(stringPayload(event, 'resultMessage')),
     normalizeText(stringPayload(event, 'errorMessage')),
+    normalizeText(stringPayload(event, 'prompt')),
+    normalizeText(stringPayload(event, 'question')),
     normalizeText(stringPayload(event, 'summary')),
     normalizeText(stringPayload(event, 'preview')),
   ].filter((value): value is string => !!value);

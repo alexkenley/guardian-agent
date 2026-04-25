@@ -196,6 +196,8 @@ type ExecutionEventKind =
   | 'artifact_created'
   | 'approval_requested'
   | 'approval_resolved'
+  | 'clarification_requested'
+  | 'clarification_resolved'
   | 'verification_completed'
   | 'recovery_proposed'
   | 'node_completed'
@@ -480,7 +482,7 @@ Expected:
 
 Goal: approvals, clarification, auth, workspace switch, and policy blockers become durable graph interrupts.
 
-Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Approval resume can reconstruct from persisted graph artifacts if the worker-manager suspension map is missing after restart. Broader blocker kinds are still pending.
+Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Approval resume can reconstruct from persisted graph artifacts if the worker-manager suspension map is missing after restart. Clarification graph interrupts now project into graph state, run timeline, and shared pending-action metadata using the existing `clarification` blocker contract. Auth, workspace switch, and policy graph interrupts are still pending.
 
 Files:
 

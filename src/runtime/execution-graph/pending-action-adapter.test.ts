@@ -126,6 +126,109 @@ describe('execution graph pending-action adapter', () => {
     expect(readExecutionGraphResumePayload(payload)).toEqual(payload);
     expect(JSON.stringify(payload)).not.toContain('Write tmp/manual-web');
   });
+
+  it('records clarification graph interrupts as linked pending actions', () => {
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-graph-clarification-actions.test.sqlite',
+      now: () => 2_000,
+    });
+    const event = createExecutionGraphEvent({
+      eventId: 'event-clarification-1',
+      graphId: 'graph-clarification',
+      executionId: 'exec-clarification',
+      rootExecutionId: 'root-clarification',
+      requestId: 'request-clarification',
+      runId: 'request-clarification',
+      nodeId: 'node-plan',
+      nodeKind: 'plan',
+      kind: 'clarification_requested',
+      timestamp: 2_100,
+      sequence: 3,
+      producer: 'runtime',
+      channel: 'web',
+      agentId: 'guardian',
+      userId: 'user-1',
+      payload: {
+        clarificationId: 'clarification-1',
+        field: 'target_file',
+        question: 'Which file should receive the generated note?',
+        options: [
+          { value: 'tmp/manual-web/note.txt', label: 'manual web note' },
+          'tmp/manual-web/alternate-note.txt',
+        ],
+      },
+    });
+
+    const record = recordGraphPendingActionInterrupt({
+      store,
+      scope: {
+        agentId: 'guardian',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'surface-1',
+      },
+      event,
+      originalUserContent: 'Write a note after deciding where it belongs.',
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        summary: 'Write a note after choosing the target file.',
+        missingFields: ['target_file'],
+      },
+      nowMs: 2_000,
+    });
+
+    expect(record).toMatchObject({
+      status: 'pending',
+      transferPolicy: 'linked_surfaces_same_user',
+      executionId: 'exec-clarification',
+      rootExecutionId: 'root-clarification',
+      blocker: {
+        kind: 'clarification',
+        prompt: 'Which file should receive the generated note?',
+        field: 'target_file',
+        options: [
+          { value: 'tmp/manual-web/note.txt', label: 'manual web note' },
+          { value: 'tmp/manual-web/alternate-note.txt', label: 'tmp/manual-web/alternate-note.txt' },
+        ],
+        metadata: {
+          graphId: 'graph-clarification',
+          nodeId: 'node-plan',
+          resumeToken: 'graph-clarification:node-plan:3',
+          clarificationId: 'clarification-1',
+        },
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-clarification',
+          nodeId: 'node-plan',
+          nodeKind: 'plan',
+          resumeToken: 'graph-clarification:node-plan:3',
+          artifactIds: [],
+        },
+      },
+      graphInterrupt: {
+        graphId: 'graph-clarification',
+        nodeId: 'node-plan',
+        nodeKind: 'plan',
+        resumeToken: 'graph-clarification:node-plan:3',
+      },
+    });
+    expect(toPendingActionClientMetadata(record)).toMatchObject({
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'clarification',
+        field: 'target_file',
+      },
+      graphInterrupt: {
+        graphId: 'graph-clarification',
+        nodeId: 'node-plan',
+        resumeToken: 'graph-clarification:node-plan:3',
+      },
+    });
+  });
 });
 
 function buildWriteSpecRef(): ExecutionArtifactRef {

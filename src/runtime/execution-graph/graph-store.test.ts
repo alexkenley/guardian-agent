@@ -135,6 +135,45 @@ describe('ExecutionGraphStore', () => {
     expect(store.getGraph('graph-2')?.executionId).toBe('exec-2');
   });
 
+  it('marks graph and node state awaiting clarification for clarification interrupts', () => {
+    const store = new ExecutionGraphStore({
+      now: () => 100,
+    });
+    store.createGraph({
+      graphId: 'graph-1',
+      executionId: 'exec-1',
+      requestId: 'req-1',
+      intent: decision(),
+      nodes: [{
+        nodeId: 'node-1',
+        graphId: 'graph-1',
+        kind: 'plan',
+        status: 'pending',
+        title: 'Plan target output',
+        requiredInputIds: [],
+        outputArtifactTypes: [],
+        allowedToolCategories: [],
+      }],
+    });
+
+    store.appendEvent(event({
+      kind: 'clarification_requested',
+      sequence: 1,
+      nodeId: 'node-1',
+      payload: {
+        field: 'target_file',
+        question: 'Which file should receive the generated note?',
+      },
+    }));
+
+    const snapshot = store.getSnapshot('graph-1');
+    expect(snapshot?.graph.status).toBe('awaiting_clarification');
+    expect(snapshot?.graph.nodes[0]?.status).toBe('awaiting_clarification');
+    expect(snapshot?.graph.checkpoints.map((checkpoint) => checkpoint.reason)).toEqual([
+      'clarification_interrupt',
+    ]);
+  });
+
   it('stores typed artifacts with graph snapshots and prunes artifact refs with content', () => {
     const store = new ExecutionGraphStore({
       now: () => 100,

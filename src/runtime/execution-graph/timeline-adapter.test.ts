@@ -77,6 +77,39 @@ describe('execution graph timeline adapter', () => {
     expect(approval?.items[0]?.detail).not.toContain('raw prompt');
   });
 
+  it('projects clarification graph interrupts as blocked timeline notes', () => {
+    const clarification = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
+      eventId: 'event-clarification',
+      graphId: 'graph-clarification',
+      executionId: 'exec-clarification',
+      rootExecutionId: 'exec-clarification',
+      requestId: 'req-clarification',
+      runId: 'req-clarification',
+      nodeId: 'node-plan',
+      nodeKind: 'plan',
+      kind: 'clarification_requested',
+      timestamp: 240,
+      sequence: 4,
+      producer: 'runtime',
+      payload: {
+        field: 'target_file',
+        question: 'Which file should receive the generated note?',
+        rawPrompt: 'This raw prompt should not appear.',
+      },
+    }));
+
+    expect(clarification?.baseStatus).toBe('blocked');
+    expect(clarification?.items[0]).toMatchObject({
+      type: 'note',
+      status: 'blocked',
+      source: 'execution_graph',
+      title: 'Clarification requested',
+      detail: 'Which file should receive the generated note?',
+      nodeId: 'node-plan',
+    });
+    expect(clarification?.items[0]?.detail).not.toContain('raw prompt');
+  });
+
   it('projects recovery proposals as warning timeline items', () => {
     const recovery = projectExecutionGraphEventToTimeline(createExecutionGraphEvent({
       eventId: 'event-recovery',

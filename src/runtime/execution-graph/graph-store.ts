@@ -280,6 +280,9 @@ function applyEventToGraph(graph: ExecutionGraph, event: ExecutionGraphEvent): v
     case 'approval_requested':
       graph.status = 'awaiting_approval';
       break;
+    case 'clarification_requested':
+      graph.status = 'awaiting_clarification';
+      break;
     case 'graph_completed':
       graph.status = 'completed';
       break;
@@ -311,6 +314,8 @@ function mapEventToNodeStatus(event: ExecutionGraphEvent): ExecutionNodeStatus |
       return 'running';
     case 'approval_requested':
       return 'awaiting_approval';
+    case 'clarification_requested':
+      return 'awaiting_clarification';
     case 'node_completed':
       return 'completed';
     case 'node_failed':
@@ -353,6 +358,8 @@ function getCheckpointReason(
       return 'phase_boundary';
     case 'approval_requested':
       return 'approval_interrupt';
+    case 'clarification_requested':
+      return 'clarification_interrupt';
     case 'graph_completed':
     case 'graph_failed':
       return 'terminal';
@@ -580,7 +587,10 @@ function normalizeCheckpoint(value: unknown, graphId: string): ExecutionCheckpoi
   const eventId = readString(value.eventId);
   const sequence = readFiniteNumber(value.sequence);
   const createdAt = readFiniteNumber(value.createdAt);
-  const reason = value.reason === 'approval_interrupt' || value.reason === 'terminal' || value.reason === 'interval'
+  const reason = value.reason === 'approval_interrupt'
+    || value.reason === 'clarification_interrupt'
+    || value.reason === 'terminal'
+    || value.reason === 'interval'
     ? value.reason
     : value.reason === 'phase_boundary'
       ? 'phase_boundary'

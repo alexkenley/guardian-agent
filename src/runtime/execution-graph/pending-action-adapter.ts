@@ -1,9 +1,13 @@
 import { formatPendingApprovalMessage } from '../pending-approval-copy.js';
 import {
   defaultPendingActionTransferPolicy,
+  fallbackPendingActionPrompt,
   type PendingActionApprovalSummary,
+  type PendingActionBlocker,
+  type PendingActionBlockerKind,
   type PendingActionGraphInterrupt,
   type PendingActionIntent,
+  type PendingActionOption,
   type PendingActionRecord,
   type PendingActionScope,
   type PendingActionStore,
@@ -38,9 +42,8 @@ const DEFAULT_PENDING_ACTION_TTL_MS = 30 * 60_000;
 export function recordGraphPendingActionInterrupt(
   input: RecordGraphPendingActionInterruptInput,
 ): PendingActionRecord | null {
-  if (input.event.kind !== 'approval_requested') {
-    return null;
-  }
+  const blockerKind = readGraphBlockerKind(input.event);
+  if (!blockerKind) return null;
   const approvalIds = readApprovalIds(input.event.payload);
   const approvalSummaries = normalizeApprovalSummaries(input.approvalSummaries, approvalIds, input.event.payload);
   const graphInterrupt = buildGraphInterrupt({
@@ -48,25 +51,19 @@ export function recordGraphPendingActionInterrupt(
     artifactRefs: input.artifactRefs ?? [],
   });
   const nowMs = input.nowMs ?? Date.now();
-  const prompt = readString(input.event.payload.prompt)
-    || readString(input.event.payload.summary)
-    || (approvalSummaries.length > 0 ? formatPendingApprovalMessage(approvalSummaries) : '')
-    || 'Approval required for the pending graph action.';
+  const blocker = buildPendingActionBlocker({
+    blockerKind,
+    event: input.event,
+    graphInterrupt,
+    approvalIds,
+    approvalSummaries,
+    missingFields: input.intent?.missingFields,
+  });
   const resume = buildExecutionGraphResumePayload(graphInterrupt);
   return input.store.replaceActive(input.scope, {
     status: 'pending',
-    transferPolicy: input.transferPolicy ?? defaultPendingActionTransferPolicy('approval'),
-    blocker: {
-      kind: 'approval',
-      prompt,
-      ...(approvalIds.length > 0 ? { approvalIds } : {}),
-      ...(approvalSummaries.length > 0 ? { approvalSummaries } : {}),
-      metadata: {
-        graphId: graphInterrupt.graphId,
-        nodeId: graphInterrupt.nodeId,
-        resumeToken: graphInterrupt.resumeToken,
-      },
-    },
+    transferPolicy: input.transferPolicy ?? defaultPendingActionTransferPolicy(blockerKind),
+    blocker,
     intent: {
       ...(input.intent?.route ? { route: input.intent.route } : {}),
       ...(input.intent?.operation ? { operation: input.intent.operation } : {}),
@@ -91,6 +88,74 @@ export function recordGraphPendingActionInterrupt(
     ...(input.event.codeSessionId ? { codeSessionId: input.event.codeSessionId } : {}),
     expiresAt: input.expiresAt ?? nowMs + DEFAULT_PENDING_ACTION_TTL_MS,
   }, nowMs);
+}
+
+function readGraphBlockerKind(event: ExecutionGraphEvent): PendingActionBlockerKind | null {
+  switch (event.kind) {
+    case 'approval_requested':
+      return 'approval';
+    case 'clarification_requested':
+      return 'clarification';
+    default:
+      return null;
+  }
+}
+
+function buildPendingActionBlocker(input: {
+  blockerKind: PendingActionBlockerKind;
+  event: ExecutionGraphEvent;
+  graphInterrupt: PendingActionGraphInterrupt;
+  approvalIds: string[];
+  approvalSummaries: PendingActionApprovalSummary[];
+  missingFields?: string[];
+}): PendingActionBlocker {
+  const graphMetadata = {
+    graphId: input.graphInterrupt.graphId,
+    nodeId: input.graphInterrupt.nodeId,
+    resumeToken: input.graphInterrupt.resumeToken,
+  };
+  if (input.blockerKind === 'approval') {
+    return {
+      kind: 'approval',
+      prompt: readApprovalPrompt(input.event.payload, input.approvalSummaries),
+      ...(input.approvalIds.length > 0 ? { approvalIds: input.approvalIds } : {}),
+      ...(input.approvalSummaries.length > 0 ? { approvalSummaries: input.approvalSummaries } : {}),
+      metadata: graphMetadata,
+    };
+  }
+
+  const options = readPendingActionOptions(input.event.payload.options);
+  const field = readString(input.event.payload.field)
+    || readString(input.event.payload.missingField)
+    || readFirstString(input.missingFields);
+  const clarificationId = readString(input.event.payload.clarificationId);
+  return {
+    kind: 'clarification',
+    prompt: readClarificationPrompt(input.event.payload),
+    ...(field ? { field } : {}),
+    ...(options.length > 0 ? { options } : {}),
+    metadata: {
+      ...graphMetadata,
+      ...(clarificationId ? { clarificationId } : {}),
+    },
+  };
+}
+
+function readApprovalPrompt(
+  payload: Record<string, unknown>,
+  approvalSummaries: PendingActionApprovalSummary[],
+): string {
+  return readString(payload.prompt)
+    || readString(payload.summary)
+    || (approvalSummaries.length > 0 ? formatPendingApprovalMessage(approvalSummaries) : '')
+    || 'Approval required for the pending graph action.';
+}
+
+function readClarificationPrompt(payload: Record<string, unknown>): string {
+  return readString(payload.prompt)
+    || readString(payload.question)
+    || readString(payload.summary)
+    || fallbackPendingActionPrompt('clarification');
 }
 
 export function buildExecutionGraphResumePayload(
@@ -183,6 +248,47 @@ function normalizeApprovalSummaries(
     argsPreview,
     actionLabel: toolName === 'unknown' ? 'approve graph action' : `approve ${toolName}`,
   }));
+}
+
+function readPendingActionOptions(value: unknown): PendingActionOption[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const options: PendingActionOption[] = [];
+  for (const item of value) {
+    const option = readPendingActionOption(item);
+    if (!option || seen.has(option.value)) continue;
+    seen.add(option.value);
+    options.push(option);
+  }
+  return options;
+}
+
+function readPendingActionOption(value: unknown): PendingActionOption | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized ? { value: normalized, label: normalized } : null;
+  }
+  if (!isRecord(value)) return null;
+  const optionValue = readString(value.value)
+    || readString(value.id)
+    || readString(value.label);
+  const label = readString(value.label)
+    || optionValue;
+  if (!optionValue || !label) return null;
+  const description = readString(value.description);
+  return {
+    value: optionValue,
+    label,
+    ...(description ? { description } : {}),
+  };
+}
+
+function readFirstString(value: string[] | undefined): string {
+  for (const item of value ?? []) {
+    const normalized = readString(item);
+    if (normalized) return normalized;
+  }
+  return '';
 }
 
 function readExecutionNodeKind(value: unknown): ExecutionNodeKind | undefined {
