@@ -14,9 +14,7 @@ import {
   formatToolThreatWarnings,
   formatToolResultForLLM,
   getCodeSessionPromptRelativePath,
-  isAffirmativeContinuation,
   isRecord,
-  normalizeScheduledEmailBody,
   readCodeRequestMetadata,
   sameCodeWorkspaceWorkingSet,
   shouldRefreshCodeSessionFocus,
@@ -94,10 +92,6 @@ import {
   type MemoryContextQuery,
 } from './runtime/agent-memory-store.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
-import {
-  parseScheduledEmailAutomationIntent,
-  parseScheduledEmailScheduleIntent,
-} from './runtime/email-automation-intent.js';
 import {
   formatSkillInventoryResponse,
   isSkillInventoryQuery,
@@ -189,6 +183,9 @@ import {
   tryDirectAutomationOutput as tryDirectAutomationOutputHelper,
   tryDirectBrowserAutomation as tryDirectBrowserAutomationHelper,
 } from './runtime/chat-agent/direct-automation.js';
+import {
+  tryDirectScheduledEmailAutomation as tryDirectScheduledEmailAutomationHelper,
+} from './runtime/chat-agent/direct-scheduled-email-automation.js';
 import {
   buildStoredAutomationAuthoringInput,
   executeStoredAutomationAuthoring as executeStoredAutomationAuthoringHelper,
@@ -5721,180 +5718,28 @@ type DirectIntentShadowCandidate =
     userKey: string,
     stateAgentId: string,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled() || !this.conversationService) return null;
-
-    const directScheduledIntent = parseScheduledEmailAutomationIntent(message.content);
-    const directScheduleOnlyIntent = parseScheduledEmailScheduleIntent(message.content);
-    const directDetailIntent = parseDirectGmailWriteIntent(message.content);
-    if (directScheduledIntent && directDetailIntent && directDetailIntent.subject && directDetailIntent.body) {
-      return this.createDirectScheduledEmailAutomation(
-        {
-          schedule: directScheduledIntent,
-          detail: directDetailIntent,
-          message,
-          ctx,
-          userKey,
-        },
-      );
-    }
-
-    const history = this.conversationService.getHistoryForContext({
-      agentId: stateAgentId,
-      userId: message.userId,
-      channel: message.channel,
-    });
-    if (history.length === 0) return null;
-
-    const recentHistory = [...history].reverse();
-    const priorDetailedContext = recentHistory.find((entry) => {
-      const detail = parseDirectGmailWriteIntent(entry.content);
-      return Boolean(detail?.subject && detail.body);
-    });
-    const priorScheduleContext = recentHistory.find((entry) => (
-      parseScheduledEmailAutomationIntent(entry.content)
-      || parseScheduledEmailScheduleIntent(entry.content)
-    ));
-    const detailIntent = (directDetailIntent && (directDetailIntent.subject || directDetailIntent.body || directDetailIntent.to))
-      ? directDetailIntent
-      : priorDetailedContext
-        ? parseDirectGmailWriteIntent(priorDetailedContext.content)
-        : null;
-    const scheduledIntent = directScheduledIntent
-      ?? (directScheduleOnlyIntent && detailIntent?.to
-        ? { to: detailIntent.to, ...directScheduleOnlyIntent }
-        : null)
-      ?? (priorScheduleContext
-        ? parseScheduledEmailAutomationIntent(priorScheduleContext.content)
-          ?? (detailIntent?.to
-            ? { to: detailIntent.to, ...parseScheduledEmailScheduleIntent(priorScheduleContext.content)! }
-            : null)
-        : null);
-    const shouldTreatAsFollowUp = Boolean(
-      directScheduleOnlyIntent
-      || (directDetailIntent && (directDetailIntent.subject || directDetailIntent.body))
-      || isAffirmativeContinuation(message.content),
-    );
-    if (!shouldTreatAsFollowUp) return null;
-    if (!scheduledIntent || !detailIntent) return null;
-
-    const subject = detailIntent.subject?.trim();
-    const body = detailIntent.body?.trim();
-    if (!subject || !body) {
-      return 'To schedule that email automation, I still need both the subject and the body text.';
-    }
-
-    const to = detailIntent.to?.trim() || scheduledIntent.to;
-    if (!to) {
-      return 'To schedule that email automation, I still need the recipient email address.';
-    }
-
-    return this.createDirectScheduledEmailAutomation({
-      schedule: { ...scheduledIntent, to },
-      detail: { ...detailIntent, to, subject, body },
+    return tryDirectScheduledEmailAutomationHelper({
       message,
       ctx,
       userKey,
-    });
-  }
-
-  private async createDirectScheduledEmailAutomation(input: {
-    schedule: { to: string; cron: string; runOnce: boolean };
-    detail: { to?: string; subject?: string; body?: string };
-    message: UserMessage;
-    ctx: AgentContext;
-    userKey: string;
-  }): Promise<string | { content: string; metadata?: Record<string, unknown> }> {
-    const to = input.detail.to?.trim() || input.schedule.to;
-    const subject = input.detail.subject?.trim() || '';
-    const body = normalizeScheduledEmailBody(input.detail.body, subject);
-    const raw = buildGmailRawMessage({ to, subject, body });
-    const taskName = input.schedule.runOnce
-      ? `Scheduled Email to ${to}`
-      : `Recurring Email to ${to}`;
-    const toolRequest = {
-      origin: 'assistant' as const,
+      stateAgentId,
+    }, {
       agentId: this.id,
-      userId: input.message.userId,
-      channel: input.message.channel,
-      requestId: input.message.id,
-      agentContext: { checkAction: input.ctx.checkAction },
-    };
-
-    const toolResult = await this.tools!.executeModelTool(
-      'automation_save',
-      {
-        id: taskName
-          .trim()
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-+|-+$/g, '') || 'scheduled-email-automation',
-        name: taskName,
-        enabled: true,
-        kind: 'standalone_task',
-        task: {
-          target: 'gws',
-          args: {
-            service: 'gmail',
-            resource: 'users messages',
-            method: 'send',
-            params: { userId: 'me' },
-            json: { raw },
-          },
-        },
-        schedule: {
-          enabled: true,
-          cron: input.schedule.cron,
-          runOnce: input.schedule.runOnce,
-        },
-      },
-      toolRequest,
-    );
-
-    if (!toBoolean(toolResult.success)) {
-      const status = toString(toolResult.status);
-      if (status === 'pending_approval') {
-        const approvalId = toString(toolResult.approvalId);
-        const existingIds = this.getPendingApprovals(input.userKey)?.ids ?? [];
-        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-        if (approvalId) {
-          this.setApprovalFollowUp(approvalId, {
-            approved: input.schedule.runOnce
-              ? `I created the one-shot email automation to ${to}.`
-              : `I created the recurring email automation to ${to}.`,
-            denied: 'I did not create the scheduled email automation.',
-          });
-        }
-        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        const pendingActionResult = this.setPendingApprovalActionForRequest(
-          input.userKey,
-          input.message.surfaceId,
-          {
-            prompt,
-            approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-            originalUserContent: input.message.content,
-            route: 'automation_authoring',
-            operation: 'schedule',
-            summary: input.schedule.runOnce
-              ? 'Creates a one-shot scheduled email automation.'
-              : 'Creates a recurring scheduled email automation.',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-          },
-        );
-        return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-          `I prepared a ${input.schedule.runOnce ? 'one-shot' : 'recurring'} email automation to ${to}.`,
-          prompt,
-        ].filter(Boolean).join('\n\n'));
-      }
-      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Scheduled email automation creation failed.';
-      return `I tried to create the scheduled email automation, but it failed: ${msg}`;
-    }
-
-    return input.schedule.runOnce
-      ? `I created a one-shot email automation to ${to}. It will run on the next scheduled time.`
-      : `I created a recurring email automation to ${to}.`;
+      tools: this.tools,
+      conversationService: this.conversationService,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    });
   }
 
   private async tryDirectGoogleWorkspaceRead(

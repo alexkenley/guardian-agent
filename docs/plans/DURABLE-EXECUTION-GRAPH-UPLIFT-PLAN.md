@@ -278,6 +278,12 @@ Checkpoint after the blocked tool-loop resume builder cleanup:
 - The live ChatAgent loop, fallback-provider loop, and stored tool-loop resume loop now share the same pending-observation removal, deferred remote sandbox pruning, and `tool_loop` resume payload construction.
 - Remaining tool-loop debt after this slice: the replay payload itself still stores model messages. The next architectural move is to replace `tool_loop` resumes with graph interrupts and artifact-backed observations.
 
+Checkpoint after the scheduled-email direct runtime extraction:
+
+- Scheduled Gmail automation orchestration now lives in `src/runtime/chat-agent/direct-scheduled-email-automation.ts`; `src/chat-agent.ts` only supplies shared dependencies and no longer owns schedule/detail follow-up resolution or `automation_save` approval wrapping.
+- This keeps scheduled-email direct execution aligned with the existing direct automation modules instead of leaving another per-capability flow embedded in the monolith.
+- Remaining direct mailbox debt after this slice: Gmail/Outlook direct read, write, and reply-target lookup still live in `src/chat-agent.ts` and should move behind a shared mailbox runtime before graph-interrupt migration.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
