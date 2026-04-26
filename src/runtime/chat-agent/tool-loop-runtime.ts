@@ -32,9 +32,9 @@ import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 import {
   buildToolLoopPendingApprovalContinuation,
-  type ToolLoopResumePayload,
+  type ToolLoopContinuationPayload,
   type ToolLoopPendingApprovalToolResult,
-} from './tool-loop-resume.js';
+} from './tool-loop-continuation.js';
 import {
   pruneDeferredRemoteSandboxToolCalls,
 } from './tool-execution.js';
@@ -151,7 +151,7 @@ export function buildBlockedToolLoopPendingApprovalContinuation(input: {
   intentDecision?: IntentGatewayDecision;
   codeContext?: { workspaceRoot: string; sessionId?: string };
   selectedExecutionProfile?: SelectedExecutionProfile | null;
-}): ToolLoopResumePayload | undefined {
+}): ToolLoopContinuationPayload | undefined {
   input.llmMessages.splice(-input.toolResults.length, input.toolResults.length);
   pruneDeferredRemoteSandboxToolCalls(input.llmMessages, input.deferredRemoteToolCallIds);
   return buildToolLoopPendingApprovalContinuation({
@@ -179,7 +179,7 @@ export function finalizeToolLoopPendingApprovals(input: {
   originalUserContent: string;
   finalContent: string | undefined;
   intentDecision?: IntentGatewayDecision | null;
-  continuation?: ToolLoopResumePayload;
+  continuation?: ToolLoopContinuationPayload;
   codeSessionId?: string;
   tools?: Pick<ToolExecutor, 'getApprovalSummaries'> | null;
   getPendingApprovalIds: (
@@ -232,7 +232,7 @@ export function finalizeToolLoopPendingApprovals(input: {
       missingFields?: string[];
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
-      continuation: ToolLoopResumePayload;
+      continuation: ToolLoopContinuationPayload;
       codeSessionId?: string;
     },
     nowMs?: number,
@@ -311,7 +311,7 @@ export function finalizeToolLoopPendingApprovals(input: {
 
 export async function resumeStoredToolLoopContinuation(input: {
   pendingAction: PendingActionRecord;
-  continuation: ToolLoopResumePayload;
+  continuation: ToolLoopContinuationPayload;
   options?: {
     approvalId?: string;
     pendingActionAlreadyCleared?: boolean;
@@ -359,7 +359,7 @@ export async function resumeStoredToolLoopContinuation(input: {
       resolution?: string;
       missingFields?: string[];
       entities?: Record<string, unknown>;
-      continuation: ToolLoopResumePayload;
+      continuation: ToolLoopContinuationPayload;
       codeSessionId?: string;
     },
     nowMs?: number,

@@ -6,10 +6,10 @@ import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionApprovalSummary, PendingActionRecord } from '../pending-actions.js';
 import {
   buildDirectFilesystemToolRequest,
-  CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
+  CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
   getFilesystemPolicyRoot,
   isFilesystemPathPolicyError,
-} from './capability-continuation-resume.js';
+} from './chat-continuation-payloads.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export interface StoredFilesystemSaveInput {
@@ -78,7 +78,7 @@ export async function executeStoredFilesystemSave(input: {
       missingFields?: string[];
       entities?: Record<string, unknown>;
       continuation: {
-        type: typeof CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
+        type: typeof CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
         targetPath: string;
         content: string;
         originalUserContent: string;
@@ -219,7 +219,7 @@ function buildPendingFilesystemPathApprovalResponse(
       turnRelation: 'new_request',
       resolution: 'ready',
       continuation: {
-        type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
+        type: CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
         targetPath: input.request.targetPath,
         content: input.request.content,
         originalUserContent: input.request.originalUserContent,

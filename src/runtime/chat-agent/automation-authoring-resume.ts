@@ -8,9 +8,9 @@ import { tryAutomationPreRoute } from '../automation-prerouter.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionApprovalSummary, PendingActionRecord } from '../pending-actions.js';
 import {
-  CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
-  normalizeFilesystemResumePrincipalRole,
-} from './capability-continuation-resume.js';
+  CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+  normalizeChatContinuationPrincipalRole,
+} from './chat-continuation-payloads.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export interface StoredAutomationAuthoringInput {
@@ -111,7 +111,7 @@ export async function executeStoredAutomationAuthoring(input: {
       missingFields?: string[];
       entities?: Record<string, unknown>;
       continuation: {
-        type: typeof CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
+        type: typeof CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
         originalUserContent: string;
         allowRemediation: boolean;
         principalId?: string;
@@ -201,7 +201,7 @@ export async function executeStoredAutomationAuthoring(input: {
       {
         ...pendingActionInput,
         continuation: {
-          type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+          type: CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
           originalUserContent: input.request.originalUserContent,
           allowRemediation: input.request.allowRemediation,
           ...(input.request.principalId ? { principalId: input.request.principalId } : {}),
@@ -245,8 +245,8 @@ export function buildStoredAutomationAuthoringInput(input: {
     channel: input.channel,
     ...(input.surfaceId ? { surfaceId: input.surfaceId } : {}),
     ...(input.principalId ? { principalId: input.principalId } : {}),
-    ...(normalizeFilesystemResumePrincipalRole(input.principalRole) ? {
-      principalRole: normalizeFilesystemResumePrincipalRole(input.principalRole),
+    ...(normalizeChatContinuationPrincipalRole(input.principalRole) ? {
+      principalRole: normalizeChatContinuationPrincipalRole(input.principalRole),
     } : {}),
     requestId: input.requestId || randomUUID(),
     ...(input.agentCheckAction ? { agentCheckAction: input.agentCheckAction } : {}),

@@ -155,8 +155,8 @@ import {
   tryDirectRecentToolReport as tryDirectRecentToolReportHelper,
 } from './runtime/chat-agent/recent-tool-report.js';
 import {
-  normalizeFilesystemResumePrincipalRole,
-} from './runtime/chat-agent/capability-continuation-resume.js';
+  normalizeChatContinuationPrincipalRole,
+} from './runtime/chat-agent/chat-continuation-payloads.js';
 import {
   buildDirectSecondBrainClarificationResponse as buildDirectSecondBrainClarificationResponseHelper,
   buildDirectSecondBrainMutationSuccessResponse as buildDirectSecondBrainMutationSuccessResponseHelper,
@@ -1888,7 +1888,7 @@ type DirectIntentShadowCandidate =
     let finalContent = '';
     let pendingActionMeta: Record<string, unknown> | undefined;
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
-    let toolLoopPendingContinuation: import('./runtime/chat-agent/tool-loop-resume.js').ToolLoopResumePayload | undefined;
+    let toolLoopPendingContinuation: import('./runtime/chat-agent/tool-loop-continuation.js').ToolLoopContinuationPayload | undefined;
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
@@ -5746,7 +5746,7 @@ type DirectIntentShadowCandidate =
           channel: pendingAction.scope.channel,
           surfaceId: pendingAction.scope.surfaceId,
           principalId: chatResume.payload.principalId ?? pendingAction.scope.userId,
-          principalRole: normalizeFilesystemResumePrincipalRole(chatResume.payload.principalRole) ?? 'owner',
+          principalRole: normalizeChatContinuationPrincipalRole(chatResume.payload.principalRole) ?? 'owner',
           requestId: randomUUID(),
           codeContext: chatResume.payload.codeContext,
           allowPathRemediation: chatResume.payload.allowPathRemediation,
@@ -5894,7 +5894,7 @@ type DirectIntentShadowCandidate =
 
   private async resumeStoredToolLoopContinuation(
     pendingAction: PendingActionRecord,
-    continuation: import('./runtime/chat-agent/tool-loop-resume.js').ToolLoopResumePayload,
+    continuation: import('./runtime/chat-agent/tool-loop-continuation.js').ToolLoopContinuationPayload,
     options?: {
       approvalId?: string;
       pendingActionAlreadyCleared?: boolean;
@@ -5934,7 +5934,7 @@ type DirectIntentShadowCandidate =
 
   private async executeStoredAutomationAuthoring(
     pendingAction: PendingActionRecord,
-    resume: import('./runtime/chat-agent/capability-continuation-resume.js').AutomationAuthoringResumePayload,
+    resume: import('./runtime/chat-agent/chat-continuation-payloads.js').AutomationAuthoringContinuationPayload,
     approvalResult?: ToolApprovalDecisionResult,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     if (!approvalResult || !approvalResult.approved) {

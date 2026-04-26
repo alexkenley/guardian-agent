@@ -11,7 +11,7 @@ import { PendingActionStore, type PendingActionRecord } from './runtime/pending-
 import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
 import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
 import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
-import { CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT } from './runtime/chat-agent/capability-continuation-resume.js';
+import { CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT } from './runtime/chat-agent/chat-continuation-payloads.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
 
 const createdFiles: string[] = [];
@@ -110,7 +110,7 @@ function createFilesystemGraphPendingAction(input: {
       turnRelation: 'new_request',
       resolution: 'ready',
       continuation: {
-        type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
+        type: CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
         targetPath: input.targetPath,
         content: input.content,
         originalUserContent: input.originalUserContent,

@@ -20,8 +20,8 @@ import {
   parseDirectFileSearchIntent,
 } from '../search-intent.js';
 import {
-  normalizeFilesystemResumePrincipalRole,
-} from './capability-continuation-resume.js';
+  normalizeChatContinuationPrincipalRole,
+} from './chat-continuation-payloads.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
@@ -157,7 +157,7 @@ export async function tryDirectFilesystemSave(input: DirectFilesystemIntentInput
     channel: input.message.channel,
     surfaceId: input.message.surfaceId,
     principalId: input.message.principalId ?? input.message.userId,
-    principalRole: normalizeFilesystemResumePrincipalRole(input.message.principalRole) ?? 'owner',
+    principalRole: normalizeChatContinuationPrincipalRole(input.message.principalRole) ?? 'owner',
     requestId: input.message.id,
     agentCheckAction: input.ctx.checkAction,
     codeContext: input.codeContext,

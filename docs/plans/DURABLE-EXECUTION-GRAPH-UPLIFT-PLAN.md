@@ -54,7 +54,7 @@ Verified locally after these changes:
 Known remaining problems and risks:
 
 - A live gated approval-resume test is still outstanding. The latest scratch write proved mutation execution, not approval pause/resume, because policy allowed the write without an approval interrupt.
-- Follow-up continuity is improved but not fully proven. A follow-up like "Based on your last answer..." can now recover a useful answer, but one replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-resume.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
+- Follow-up continuity is improved but not fully proven. A follow-up like "Based on your last answer..." can now recover a useful answer, but one replay selected `src/runtime/execution-graph/pending-action-adapter.ts` as the approval-continuity file. That answer is defensible for graph pending actions, but the expected answer may be closer to `approval-continuations.ts`, `tool-loop-continuation.ts`, or `approval-state.ts` depending on which previous answer the user meant. This needs explicit conversation-history/evidence anchoring tests.
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
 - The full `npm test` suite has not been rerun after the latest continuation/provider-fallback fixes. It must run before commit.
 - The web UI approval experience still needs a manual pass once a policy-gated action is identified reliably.
@@ -187,7 +187,7 @@ Checkpoint after the brokered worker graph-suspension and fallback removal slice
 
 Checkpoint after the tool-loop resume helper extraction:
 
-- Tool-loop pending approval resume construction now lives in `src/runtime/chat-agent/tool-loop-resume.ts` beside the serializer/reader instead of being duplicated inside `src/chat-agent.ts` and `tool-loop-runtime.ts`.
+- Tool-loop pending approval continuation construction now lives in `src/runtime/chat-agent/tool-loop-continuation.ts` beside the serializer/reader instead of being duplicated inside `src/chat-agent.ts` and `tool-loop-runtime.ts`.
 - `src/chat-agent.ts` still owns the live tool-loop orchestration path, but it no longer hand-builds `tool_loop` pending-action payloads. Future graph-interrupt migration can replace one helper contract instead of two partial builders.
 - Remaining tool-loop debt after this slice: `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts, and the live tool execution loop still needs further extraction out of the monolithic chat agent.
 
@@ -260,7 +260,7 @@ Checkpoint after the shared tool-loop round extraction:
 Checkpoint after the capability-continuation bridge cleanup:
 
 - `PendingActionResumeKind` no longer accepts the overloaded `direct_route` value. At this intermediate checkpoint, remaining non-graph capability replay payloads were isolated behind a `capability_continuation` bridge so the old route-replay implication could be removed.
-- The resume payload helpers moved to `src/runtime/chat-agent/capability-continuation-resume.ts`, resume execution temporarily moved to `src/runtime/chat-agent/capability-continuation-runtime.ts`, and shared approval orchestration temporarily called `resumeStoredCapabilityContinuationPendingAction`.
+- The payload helpers temporarily moved through the now-deleted capability-continuation bridge before being renamed to `src/runtime/chat-agent/chat-continuation-payloads.ts`; resume execution temporarily moved through the now-deleted capability-continuation runtime before graph-backed chat continuations replaced that dispatcher.
 - `src/runtime/chat-agent/direct-route-runtime.ts` now owns only direct filesystem intent handling; it no longer dispatches stored continuation approvals.
 - No compatibility reader for the old `direct_route` value was retained. Existing durable pending-action rows with that obsolete resume kind are intentionally invalid under the refined contract.
 - This bridge is now retired. Filesystem-save and automation-authoring policy remediation no longer use a non-graph resume kind.
@@ -314,6 +314,12 @@ Checkpoint after the graph-backed tool-loop continuation cleanup:
 - Shared approval continuation dispatch now has one durable branch: `execution_graph`. The old chat-level `tool_loop` pending-action resume kind and dispatcher path were deleted.
 - The graph continuation bridge is now generic chat continuation infrastructure for filesystem save remediation, automation authoring remediation, and suspended tool-loop approvals.
 - Remaining orchestration debt after this slice: `src/chat-agent.ts` still owns the live LLM/tool-loop controller and the continuation artifact still snapshots model messages. The next durable-execution step is to lift the controller out of the monolith and replace transcript snapshots with explicit tool-observation/checkpoint artifacts where practical.
+
+Checkpoint after the chat-continuation naming cleanup:
+
+- The graph-backed continuation payload helpers now live under `src/runtime/chat-agent/chat-continuation-payloads.ts`; capability-specific bridge naming has been removed from source imports and exported symbols.
+- Suspended tool-loop payload helpers now live under `src/runtime/chat-agent/tool-loop-continuation.ts`; the source API now describes graph continuation artifacts instead of pending-action replay resumes.
+- The serialized payload type strings were kept semantically stable because they identify the continuation payload shape, not the retired pending-action resume kind.
 
 Exit criteria for this refinement phase:
 

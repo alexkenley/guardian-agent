@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildToolLoopResumePayload, readToolLoopResumePayload } from './tool-loop-resume.js';
+import { buildToolLoopContinuationPayload, readToolLoopContinuationPayload } from './tool-loop-continuation.js';
 import {
   buildBlockedToolLoopPendingApprovalContinuation,
   finalizeToolLoopPendingApprovals,
@@ -222,7 +222,7 @@ describe('tool-loop-runtime', () => {
       updatedAt: 1,
       expiresAt: 2,
     };
-    const continuation = readToolLoopResumePayload(buildToolLoopResumePayload({
+    const continuation = readToolLoopContinuationPayload(buildToolLoopContinuationPayload({
       llmMessages: [
         { role: 'system', content: 'system prompt' },
         { role: 'user', content: 'Search the web for approval workflow practices and compare them to this repo.' },
@@ -391,7 +391,7 @@ describe('tool-loop-runtime', () => {
       updatedAt: 1,
       expiresAt: 2,
     };
-    const continuation = readToolLoopResumePayload(buildToolLoopResumePayload({
+    const continuation = readToolLoopContinuationPayload(buildToolLoopContinuationPayload({
       llmMessages: [
         { role: 'system', content: 'system prompt' },
         { role: 'user', content: 'Run `pwd` in the remote sandbox.' },

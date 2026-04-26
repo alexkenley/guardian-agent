@@ -9,7 +9,7 @@ import {
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { ContentTrustLevel, PrincipalRole } from '../../tools/types.js';
 
-export const TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL = 'suspended_tool_loop';
+export const TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL = 'suspended_tool_loop';
 
 export interface StoredToolLoopMessageIdentity {
   id: string;
@@ -39,8 +39,8 @@ export interface ToolLoopPendingApprovalToolResult {
   result: Record<string, unknown>;
 }
 
-export interface ToolLoopResumePayload {
-  type: typeof TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL;
+export interface ToolLoopContinuationPayload {
+  type: typeof TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL;
   llmMessages: ChatMessage[];
   pendingTools: StoredToolLoopPendingTool[];
   originalMessage: StoredToolLoopMessageIdentity;
@@ -58,7 +58,7 @@ export interface ToolLoopResumePayload {
   selectedExecutionProfile?: SelectedExecutionProfile;
 }
 
-export function buildToolLoopResumePayload(input: {
+export function buildToolLoopContinuationPayload(input: {
   llmMessages: ChatMessage[];
   pendingTools: StoredToolLoopPendingTool[];
   originalMessage: UserMessage;
@@ -73,7 +73,7 @@ export function buildToolLoopResumePayload(input: {
   selectedExecutionProfile?: SelectedExecutionProfile | null;
 }): Record<string, unknown> {
   return {
-    type: TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL,
+    type: TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL,
     llmMessages: input.llmMessages.map((message) => ({
       role: message.role,
       content: message.content,
@@ -159,10 +159,10 @@ export function buildToolLoopPendingApprovalContinuation(input: {
   intentDecision?: IntentGatewayDecision;
   codeContext?: { workspaceRoot: string; sessionId?: string };
   selectedExecutionProfile?: SelectedExecutionProfile | null;
-}): ToolLoopResumePayload | null {
+}): ToolLoopContinuationPayload | null {
   const pendingTools = collectToolLoopPendingApprovalTools(input.toolResults);
   if (pendingTools.length === 0) return null;
-  return readToolLoopResumePayload(buildToolLoopResumePayload({
+  return readToolLoopContinuationPayload(buildToolLoopContinuationPayload({
     llmMessages: input.llmMessages,
     pendingTools,
     originalMessage: input.originalMessage,
@@ -178,11 +178,11 @@ export function buildToolLoopPendingApprovalContinuation(input: {
   }));
 }
 
-export function readToolLoopResumePayload(
+export function readToolLoopContinuationPayload(
   payload: Record<string, unknown> | undefined,
   normalizePrincipalRole?: (value: string | undefined) => PrincipalRole | undefined,
-): ToolLoopResumePayload | null {
-  if (!isRecord(payload) || payload.type !== TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL) {
+): ToolLoopContinuationPayload | null {
+  if (!isRecord(payload) || payload.type !== TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL) {
     return null;
   }
   const llmMessages = Array.isArray(payload.llmMessages)
@@ -267,7 +267,7 @@ export function readToolLoopResumePayload(
       })
     : null;
   return {
-    type: TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL,
+    type: TOOL_LOOP_CONTINUATION_TYPE_SUSPENDED_APPROVAL,
     llmMessages,
     pendingTools,
     originalMessage,

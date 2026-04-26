@@ -16,8 +16,8 @@ import type {
 import { toPendingActionClientMetadata } from '../pending-actions.js';
 import { toPendingActionEntities } from './intent-gateway-orchestration.js';
 import {
-  CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
-} from './capability-continuation-resume.js';
+  CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+} from './chat-continuation-payloads.js';
 
 interface DirectAutomationClarificationMetadata {
   blockerKind: PendingActionBlocker['kind'];
@@ -105,7 +105,7 @@ export interface DirectAutomationDeps {
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
       continuation: {
-        type: typeof CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
+        type: typeof CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
         originalUserContent: string;
         allowRemediation: boolean;
         principalId?: string;
@@ -266,7 +266,7 @@ export async function tryDirectAutomationAuthoring(input: {
         {
           ...pendingActionInput,
           continuation: {
-            type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+            type: CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
             originalUserContent: input.message.content,
             allowRemediation: input.options?.allowRemediation !== false,
             ...(input.message.principalId ? { principalId: input.message.principalId } : {}),

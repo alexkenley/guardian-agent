@@ -3,8 +3,8 @@ import type { UserMessage } from '../../agent/types.js';
 import {
   buildToolLoopPendingApprovalContinuation,
   collectToolLoopPendingApprovalTools,
-  readToolLoopResumePayload,
-} from './tool-loop-resume.js';
+  readToolLoopContinuationPayload,
+} from './tool-loop-continuation.js';
 
 const message: UserMessage = {
   id: 'message-1',
@@ -88,7 +88,7 @@ describe('tool loop resume helpers', () => {
       taintReasons: [],
     });
 
-    const payload = readToolLoopResumePayload(continuation);
+    const payload = readToolLoopContinuationPayload(continuation);
     expect(payload).toMatchObject({
       type: 'suspended_tool_loop',
       requestText: 'Write the report.',

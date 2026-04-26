@@ -23,20 +23,20 @@ import {
 } from '../execution-graph/pending-action-adapter.js';
 import type { ExecutionArtifactRef, ExecutionGraph } from '../execution-graph/types.js';
 import {
-  readAutomationAuthoringResumePayload,
-  readFilesystemSaveOutputResumePayload,
-  type AutomationAuthoringResumePayload,
-  type FilesystemSaveOutputResumePayload,
-} from './capability-continuation-resume.js';
+  readAutomationAuthoringContinuationPayload,
+  readFilesystemSaveOutputContinuationPayload,
+  type AutomationAuthoringContinuationPayload,
+  type FilesystemSaveOutputContinuationPayload,
+} from './chat-continuation-payloads.js';
 import {
-  readToolLoopResumePayload,
-  type ToolLoopResumePayload,
-} from './tool-loop-resume.js';
+  readToolLoopContinuationPayload,
+  type ToolLoopContinuationPayload,
+} from './tool-loop-continuation.js';
 
 export type ChatContinuationPayload =
-  | FilesystemSaveOutputResumePayload
-  | AutomationAuthoringResumePayload
-  | ToolLoopResumePayload;
+  | FilesystemSaveOutputContinuationPayload
+  | AutomationAuthoringContinuationPayload
+  | ToolLoopContinuationPayload;
 
 export interface ChatContinuationGraphResume {
   graph: ExecutionGraph;
@@ -297,9 +297,9 @@ function readChatContinuationArtifact(
   if (!isRecord(content) || content.type !== CHAT_CONTINUATION_ARTIFACT_CONTENT_TYPE || !isRecord(content.payload)) {
     return null;
   }
-  return readFilesystemSaveOutputResumePayload(content.payload)
-    ?? readAutomationAuthoringResumePayload(content.payload)
-    ?? readToolLoopResumePayload(content.payload);
+  return readFilesystemSaveOutputContinuationPayload(content.payload)
+    ?? readAutomationAuthoringContinuationPayload(content.payload)
+    ?? readToolLoopContinuationPayload(content.payload);
 }
 
 function createChatContinuationGraphEvent(input: {

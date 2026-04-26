@@ -10,7 +10,7 @@ import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
 import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
 import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './runtime/intent-gateway.js';
 import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
-import { buildToolLoopResumePayload, readToolLoopResumePayload } from './runtime/chat-agent/tool-loop-resume.js';
+import { buildToolLoopContinuationPayload, readToolLoopContinuationPayload } from './runtime/chat-agent/tool-loop-continuation.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
 
 function createToolLoopGraphPendingAction(input: {
@@ -30,7 +30,7 @@ function createToolLoopGraphPendingAction(input: {
   codeSessionId?: string;
   continuation: Record<string, unknown>;
 }): PendingActionRecord {
-  const continuation = readToolLoopResumePayload(input.continuation);
+  const continuation = readToolLoopContinuationPayload(input.continuation);
   if (!continuation) {
     throw new Error('Invalid test tool-loop continuation payload.');
   }
@@ -7432,7 +7432,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       route: 'coding_task',
       operation: 'run',
       codeSessionId: 'session-123',
-      continuation: buildToolLoopResumePayload({
+      continuation: buildToolLoopContinuationPayload({
         llmMessages: [
           { role: 'system', content: 'system prompt' },
           { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
@@ -7807,7 +7807,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       route: 'coding_task',
       operation: 'run',
       codeSessionId: 'session-123',
-      continuation: buildToolLoopResumePayload({
+      continuation: buildToolLoopContinuationPayload({
         llmMessages: [
           { role: 'system', content: 'system prompt' },
           { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },

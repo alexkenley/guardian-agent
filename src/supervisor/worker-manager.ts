@@ -143,9 +143,9 @@ import {
   type PendingActionStore,
 } from '../runtime/pending-actions.js';
 import {
-  CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
-  normalizeFilesystemResumePrincipalRole,
-} from '../runtime/chat-agent/capability-continuation-resume.js';
+  CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+  normalizeChatContinuationPrincipalRole,
+} from '../runtime/chat-agent/chat-continuation-payloads.js';
 import {
   emitChatContinuationGraphResumeEvent,
   readChatContinuationGraphResume,
@@ -1563,7 +1563,7 @@ export class WorkerManager {
           id: randomUUID(),
           userId: pendingAction.scope.userId,
           principalId: resume.principalId ?? pendingAction.scope.userId,
-          principalRole: normalizeFilesystemResumePrincipalRole(resume.principalRole) ?? 'owner',
+          principalRole: normalizeChatContinuationPrincipalRole(resume.principalRole) ?? 'owner',
           channel: pendingAction.scope.channel,
           surfaceId: pendingAction.scope.surfaceId,
           content: resume.originalUserContent,
@@ -4186,7 +4186,7 @@ export class WorkerManager {
           ...(input.intentDecision?.provenance ? { provenance: input.intentDecision.provenance } : {}),
           ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
           continuation: {
-            type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+            type: CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
             originalUserContent: input.request.message.content,
             allowRemediation: input.allowRemediation !== false,
             principalId: input.request.message.principalId ?? input.request.userId,

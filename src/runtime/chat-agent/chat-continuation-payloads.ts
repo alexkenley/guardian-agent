@@ -4,11 +4,11 @@ import type { AgentContext } from '../../agent/types.js';
 import { isRecord, toString } from '../../chat-agent-helpers.js';
 import type { PrincipalRole, ToolExecutionRequest } from '../../tools/types.js';
 
-export const CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
-export const CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
+export const CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
+export const CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING = 'automation_authoring';
 
-export interface FilesystemSaveOutputResumePayload {
-  type: typeof CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
+export interface FilesystemSaveOutputContinuationPayload {
+  type: typeof CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT;
   targetPath: string;
   content: string;
   originalUserContent: string;
@@ -21,8 +21,8 @@ export interface FilesystemSaveOutputResumePayload {
   };
 }
 
-export interface AutomationAuthoringResumePayload {
-  type: typeof CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
+export interface AutomationAuthoringContinuationPayload {
+  type: typeof CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING;
   originalUserContent: string;
   allowRemediation: boolean;
   principalId?: string;
@@ -116,11 +116,11 @@ export function normalizeFilesystemPathForComparison(inputPath: string): string 
   return trimmed.replace(/\\/g, '/');
 }
 
-export function readFilesystemSaveOutputResumePayload(
+export function readFilesystemSaveOutputContinuationPayload(
   payload: Record<string, unknown> | undefined,
-): FilesystemSaveOutputResumePayload | null {
+): FilesystemSaveOutputContinuationPayload | null {
   if (!isRecord(payload)) return null;
-  if (payload.type !== CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT) return null;
+  if (payload.type !== CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT) return null;
   const targetPath = toString(payload.targetPath).trim();
   const content = toString(payload.content);
   const originalUserContent = toString(payload.originalUserContent).trim();
@@ -134,7 +134,7 @@ export function readFilesystemSaveOutputResumePayload(
       }
     : undefined;
   return {
-    type: CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
+    type: CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT,
     targetPath,
     content,
     originalUserContent,
@@ -170,7 +170,7 @@ export function getFilesystemPathApi(targetPath: string): typeof win32Path | typ
     : posixPath;
 }
 
-export function normalizeFilesystemResumePrincipalRole(value: string | undefined): PrincipalRole | undefined {
+export function normalizeChatContinuationPrincipalRole(value: string | undefined): PrincipalRole | undefined {
   switch (value) {
     case 'owner':
     case 'operator':
@@ -182,11 +182,11 @@ export function normalizeFilesystemResumePrincipalRole(value: string | undefined
   }
 }
 
-export function readAutomationAuthoringResumePayload(
+export function readAutomationAuthoringContinuationPayload(
   payload: Record<string, unknown> | undefined,
-): AutomationAuthoringResumePayload | null {
+): AutomationAuthoringContinuationPayload | null {
   if (!isRecord(payload)) return null;
-  if (payload.type !== CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING) return null;
+  if (payload.type !== CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING) return null;
   const originalUserContent = toString(payload.originalUserContent).trim();
   if (!originalUserContent) return null;
   const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
@@ -198,7 +198,7 @@ export function readAutomationAuthoringResumePayload(
       }
     : undefined;
   return {
-    type: CAPABILITY_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
+    type: CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING,
     originalUserContent,
     allowRemediation: payload.allowRemediation !== false,
     ...(toString(payload.principalId).trim() ? { principalId: toString(payload.principalId).trim() } : {}),
