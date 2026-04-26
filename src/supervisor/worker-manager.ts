@@ -58,8 +58,6 @@ import {
 import type { ExecutionGraphStore } from '../runtime/execution-graph/graph-store.js';
 import {
   artifactRefFromArtifact,
-  buildWriteSpecArtifact,
-  type EvidenceLedgerContent,
   type ExecutionArtifact,
   type WriteSpecContent,
 } from '../runtime/execution-graph/graph-artifacts.js';
@@ -76,9 +74,9 @@ import {
   type DelegatedWorkerGraphContext,
 } from '../runtime/execution-graph/delegated-worker-node.js';
 import {
+  buildGraphWriteSpecSynthesisMessages,
   buildGroundedSynthesisLedgerArtifact,
-  buildGroundedSynthesisMessages,
-  createGroundedSynthesisDraftArtifact,
+  completeGraphWriteSpecSynthesisNode,
 } from '../runtime/execution-graph/synthesis-node.js';
 import {
   executeWriteSpecMutationNode,
@@ -430,13 +428,6 @@ interface DelegatedWorkerGraphCompletionMetadata extends DelegatedWorkerGraphJob
   status: 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
   lifecycle: 'completed' | 'blocked' | 'failed';
   verificationArtifactId: string;
-}
-
-interface GraphWriteSpecCandidate {
-  path: string;
-  content: string;
-  append: boolean;
-  summary?: string;
 }
 
 interface RecoveryAdvisorGraphResult {
@@ -869,37 +860,19 @@ export class WorkerManager {
         phase: 'write_spec_synthesis',
         resultStatus: synthesisResult.content.trim() ? 'succeeded' : 'failed',
       }, `${synthesisNodeId}:llm:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
-      const candidate = parseGraphWriteSpecCandidate(synthesisResult.content);
-      if (!candidate) {
+      const synthesis = completeGraphWriteSpecSynthesisNode({
+        graphId,
+        nodeId: synthesisNodeId,
+        candidateContent: synthesisResult.content,
+        sourceArtifacts,
+        ledgerArtifact,
+        createdAt: now(),
+      });
+      if (!synthesis) {
         return failGraph('Synthesis node did not produce a valid write specification.', synthesisNodeId, 'synthesize');
       }
-      const draft = createGroundedSynthesisDraftArtifact({
-        graphId,
-        nodeId: synthesisNodeId,
-        artifactId: `${graphId}:${synthesisNodeId}:draft`,
-        content: candidate.summary ?? `Write ${candidate.path}.`,
-        sourceArtifacts: [
-          ...sourceArtifacts,
-          ...(ledgerArtifact ? [ledgerArtifact] : []),
-        ],
-        createdAt: now(),
-      });
+      const { draft, writeSpec } = synthesis;
       emitArtifact(draft.artifact, synthesisNodeId, 'synthesize');
-      const writeSpec = buildWriteSpecArtifact({
-        graphId,
-        nodeId: synthesisNodeId,
-        artifactId: `${graphId}:${synthesisNodeId}:write-spec`,
-        path: candidate.path,
-        content: candidate.content,
-        append: candidate.append,
-        sourceArtifacts: [
-          ...sourceArtifacts,
-          ...(ledgerArtifact ? [ledgerArtifact] : []),
-          draft.artifact,
-        ],
-        redactionPolicy: 'no_secret_values',
-        createdAt: now(),
-      });
       emitArtifact(writeSpec, synthesisNodeId, 'synthesize');
       emitGraphEvent('node_completed', {
         draftArtifactId: draft.artifact.artifactId,
@@ -4597,61 +4570,6 @@ function appendDelegatedRetrySection(
       ].join('\n'),
     },
   ];
-}
-
-function buildGraphWriteSpecSynthesisMessages(input: {
-  request: string;
-  decision?: IntentGatewayDecision | null;
-  workspaceRoot?: string;
-  sourceArtifacts: ExecutionArtifact[];
-  ledgerArtifact?: ExecutionArtifact<EvidenceLedgerContent> | null;
-}): ChatMessage[] {
-  const messages = buildGroundedSynthesisMessages({
-    request: input.request,
-    decision: input.decision ?? null,
-    workspaceRoot: input.workspaceRoot,
-    completedToolCalls: input.sourceArtifacts.length,
-    sourceArtifacts: input.sourceArtifacts,
-    ledgerArtifact: input.ledgerArtifact ?? null,
-    purpose: 'write_spec_candidate',
-  });
-  const finalMessage = messages[messages.length - 1];
-  if (finalMessage?.role === 'user') {
-    finalMessage.content = [
-      finalMessage.content,
-      '',
-      'Return only a JSON object with this exact shape:',
-      '{ "path": "relative/path", "content": "complete file contents to write", "append": false, "summary": "brief grounded rationale" }',
-      'The JSON must describe the mutation candidate only. Do not say the write has happened.',
-    ].join('\n');
-  }
-  return messages;
-}
-
-function parseGraphWriteSpecCandidate(content: string): GraphWriteSpecCandidate | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content.trim());
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return null;
-  }
-  const record = parsed as Record<string, unknown>;
-  const path = typeof record.path === 'string' ? record.path.trim() : '';
-  const writeContent = typeof record.content === 'string' ? record.content : '';
-  const append = record.append === true;
-  const summary = typeof record.summary === 'string' ? record.summary.trim() : undefined;
-  if (!path || !writeContent) {
-    return null;
-  }
-  return {
-    path,
-    content: writeContent,
-    append,
-    ...(summary ? { summary } : {}),
-  };
 }
 
 function buildGraphMutationToolRequest(

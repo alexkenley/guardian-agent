@@ -6,9 +6,12 @@ import {
   type SynthesisDraftContent,
 } from './graph-artifacts.js';
 import {
+  buildGraphWriteSpecSynthesisMessages,
   buildGroundedSynthesisLedgerArtifact,
   buildGroundedSynthesisMessages,
+  completeGraphWriteSpecSynthesisNode,
   createGroundedSynthesisDraftArtifact,
+  parseGraphWriteSpecCandidate,
   validateGroundedSynthesisDraft,
 } from './synthesis-node.js';
 
@@ -80,6 +83,68 @@ describe('grounded synthesis node', () => {
       missingArtifactIds: ['missing-artifact'],
       invalidRefs: [{ artifactId: 'search-1', refs: ['src/runtime/other.ts:1'] }],
     });
+  });
+
+  it('builds write-spec synthesis prompts and artifacts from typed evidence', () => {
+    const search = buildSearchArtifact();
+    const read = buildReadArtifact();
+    const ledger = buildGroundedSynthesisLedgerArtifact({
+      graphId: 'graph-1',
+      nodeId: 'node-synthesize',
+      artifactId: 'ledger-1',
+      sourceArtifacts: [search, read],
+      createdAt: 120,
+    });
+    const messages = buildGraphWriteSpecSynthesisMessages({
+      request: 'Update the target file.',
+      sourceArtifacts: [search, read],
+      ledgerArtifact: ledger,
+      workspaceRoot: 'S:/Development/GuardianAgent',
+    });
+
+    expect(messages[messages.length - 1].content).toContain('Return only a JSON object with this exact shape');
+    expect(parseGraphWriteSpecCandidate(JSON.stringify({
+      path: 'tmp/example.txt',
+      content: 'hello',
+      append: false,
+      summary: 'Write the example file.',
+    }))).toEqual({
+      path: 'tmp/example.txt',
+      content: 'hello',
+      append: false,
+      summary: 'Write the example file.',
+    });
+
+    const completed = completeGraphWriteSpecSynthesisNode({
+      graphId: 'graph-1',
+      nodeId: 'node-synthesize',
+      candidateContent: JSON.stringify({
+        path: 'tmp/example.txt',
+        content: 'hello',
+        append: false,
+        summary: 'Write the example file.',
+      }),
+      sourceArtifacts: [search, read],
+      ledgerArtifact: ledger,
+      createdAt: 140,
+    });
+
+    expect(completed?.draft.artifact.artifactId).toBe('graph-1:node-synthesize:draft');
+    expect(completed?.writeSpec.artifactId).toBe('graph-1:node-synthesize:write-spec');
+    expect(completed?.writeSpec.content).toMatchObject({
+      operation: 'write_file',
+      path: 'tmp/example.txt',
+      content: 'hello',
+      append: false,
+    });
+    expect(completed?.writeSpec.content.sourceArtifactIds).toContain('ledger-1');
+    expect(completeGraphWriteSpecSynthesisNode({
+      graphId: 'graph-1',
+      nodeId: 'node-synthesize',
+      candidateContent: '{"path":"","content":"","append":false}',
+      sourceArtifacts: [search],
+      createdAt: 140,
+    })).toBeNull();
   });
 });
 
