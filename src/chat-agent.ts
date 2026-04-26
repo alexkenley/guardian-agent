@@ -209,17 +209,17 @@ import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
 import {
-  emitCapabilityContinuationGraphResumeEvent,
-  readCapabilityContinuationGraphResume,
-  recordCapabilityContinuationGraphApproval,
-  type CapabilityContinuationPayload,
-} from './runtime/chat-agent/capability-graph-continuation.js';
+  emitChatContinuationGraphResumeEvent,
+  readChatContinuationGraphResume,
+  recordChatContinuationGraphApproval,
+  type ChatContinuationPayload,
+} from './runtime/chat-agent/chat-continuation-graph.js';
 import {
-  buildBlockedToolLoopPendingApprovalResume,
+  buildBlockedToolLoopPendingApprovalContinuation,
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
   finalizeToolLoopPendingApprovals as finalizeToolLoopPendingApprovalsHelper,
   recoverDirectAnswerAfterTools as recoverDirectAnswerAfterToolsHelper,
-  resumeStoredToolLoopPendingAction as resumeStoredToolLoopPendingActionHelper,
+  resumeStoredToolLoopContinuation as resumeStoredToolLoopContinuationHelper,
 } from './runtime/chat-agent/tool-loop-runtime.js';
 import {
   ChatAgentOrchestrationState,
@@ -1888,7 +1888,7 @@ type DirectIntentShadowCandidate =
     let finalContent = '';
     let pendingActionMeta: Record<string, unknown> | undefined;
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
-    let toolLoopPendingResume: PendingActionRecord['resume'] | undefined;
+    let toolLoopPendingContinuation: import('./runtime/chat-agent/tool-loop-resume.js').ToolLoopResumePayload | undefined;
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
@@ -2926,7 +2926,7 @@ type DirectIntentShadowCandidate =
 
         if (roundResult.hasPending) {
           if (roundResult.allBlocked) {
-            toolLoopPendingResume = buildBlockedToolLoopPendingApprovalResume({
+            toolLoopPendingContinuation = buildBlockedToolLoopPendingApprovalContinuation({
               toolResults: roundResult.toolResults,
               llmMessages,
               deferredRemoteToolCallIds: roundResult.deferredRemoteToolCallIds,
@@ -3111,7 +3111,7 @@ type DirectIntentShadowCandidate =
 
             if (fallbackRoundResult.hasPending) {
               if (fallbackRoundResult.allBlocked) {
-                toolLoopPendingResume = buildBlockedToolLoopPendingApprovalResume({
+                toolLoopPendingContinuation = buildBlockedToolLoopPendingApprovalContinuation({
                   toolResults: fallbackRoundResult.toolResults,
                   llmMessages: fbMessages,
                   deferredRemoteToolCallIds: fallbackRoundResult.deferredRemoteToolCallIds,
@@ -3211,7 +3211,7 @@ type DirectIntentShadowCandidate =
         originalUserContent: routedScopedMessage.content,
         finalContent,
         intentDecision: directIntent?.decision,
-        resume: toolLoopPendingResume,
+        continuation: toolLoopPendingContinuation,
         codeSessionId: resolvedCodeSession?.session.id,
         tools: this.tools,
         getPendingApprovalIds: (userId, channel, surfaceId, nowMs) => this.getPendingApprovalIds(
@@ -3229,6 +3229,12 @@ type DirectIntentShadowCandidate =
         setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
           userId,
           channel,
+          surfaceId,
+          action,
+          nowMs,
+        ),
+        setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+          userKey,
           surfaceId,
           action,
           nowMs,
@@ -4603,7 +4609,6 @@ type DirectIntentShadowCandidate =
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       takeApprovalFollowUp: (approvalId, decision) => this.takeApprovalFollowUp(approvalId, decision),
       clearApprovalFollowUp: (approvalId) => this.clearApprovalFollowUp(approvalId),
-      resumeStoredToolLoopPendingAction: (pendingAction, options) => this.resumeStoredToolLoopPendingAction(pendingAction, options),
       resumeStoredExecutionGraphPendingAction: (pendingAction, options) => {
         if (!options?.approvalId || !options.approvalResult) {
           return Promise.resolve(null);
@@ -4820,7 +4825,7 @@ type DirectIntentShadowCandidate =
     return this.orchestrationState.setPendingApprovalActionForRequest(userKey, surfaceId, input, nowMs);
   }
 
-  private setCapabilityGraphPendingApprovalActionForRequest(
+  private setChatContinuationGraphPendingApprovalActionForRequest(
     userKey: string,
     surfaceId: string | undefined,
     input: {
@@ -4836,16 +4841,16 @@ type DirectIntentShadowCandidate =
       missingFields?: string[];
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
-      continuation: CapabilityContinuationPayload;
+      continuation: ChatContinuationPayload;
       codeSessionId?: string;
     },
     nowMs: number = Date.now(),
   ) {
     if (!this.executionGraphStore) {
-      throw new Error('Execution graph store is required for capability approval continuation.');
+      throw new Error('Execution graph store is required for chat approval continuation.');
     }
     const { userId, channel } = this.parsePendingActionUserKey(userKey);
-    return recordCapabilityContinuationGraphApproval({
+    return recordChatContinuationGraphApproval({
       graphStore: this.executionGraphStore,
       runTimeline: this.runTimeline,
       userKey,
@@ -4994,7 +4999,6 @@ type DirectIntentShadowCandidate =
       approvalResult,
       stateAgentId: this.stateAgentId,
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
-      resumeStoredToolLoopPendingAction: (action, options) => this.resumeStoredToolLoopPendingAction(action, options),
       resumeStoredExecutionGraphPendingAction: (action, nextOptions) => this.resumeStoredExecutionGraphPendingAction(
         action,
         nextOptions,
@@ -5239,7 +5243,7 @@ type DirectIntentShadowCandidate =
         surfaceId,
         action,
       ),
-      setCapabilityGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setCapabilityGraphPendingApprovalActionForRequest(
+      setChatContinuationGraphPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setChatContinuationGraphPendingApprovalActionForRequest(
         nextUserKey,
         surfaceId,
         action,
@@ -5682,25 +5686,25 @@ type DirectIntentShadowCandidate =
       options: { approvalId: string; approvalResult: ToolApprovalDecisionResult },
     ) => Promise<{ content: string; metadata?: Record<string, unknown> } | null>,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const capabilityResume = readCapabilityContinuationGraphResume({
+    const chatResume = readChatContinuationGraphResume({
       graphStore: this.executionGraphStore,
       pendingAction,
     });
-    if (!capabilityResume) {
+    if (!chatResume) {
       return fallback ? fallback(pendingAction, options) : null;
     }
     if (!this.executionGraphStore) return null;
     const nowMs = Date.now();
     this.completePendingAction(pendingAction.id, nowMs);
-    emitCapabilityContinuationGraphResumeEvent({
+    emitChatContinuationGraphResumeEvent({
       graphStore: this.executionGraphStore,
       runTimeline: this.runTimeline,
-      resume: capabilityResume,
+      resume: chatResume,
       kind: 'interruption_resolved',
       payload: {
         kind: 'approval',
         approvalId: options.approvalId,
-        resumeToken: capabilityResume.resumeToken,
+        resumeToken: chatResume.resumeToken,
         resultStatus: (options.approvalResult.approved ?? options.approvalResult.success) ? 'approved' : 'denied',
       },
       eventKey: 'approval-resolved',
@@ -5708,14 +5712,14 @@ type DirectIntentShadowCandidate =
     });
 
     if (!(options.approvalResult.approved ?? options.approvalResult.success)) {
-      emitCapabilityContinuationGraphResumeEvent({
+      emitChatContinuationGraphResumeEvent({
         graphStore: this.executionGraphStore,
         runTimeline: this.runTimeline,
-        resume: capabilityResume,
+        resume: chatResume,
         kind: 'graph_failed',
         payload: {
           reason: options.approvalResult.message || 'Approval denied.',
-          continuationArtifactId: capabilityResume.artifact.artifactId,
+          continuationArtifactId: chatResume.artifact.artifactId,
         },
         eventKey: 'denied',
         nowMs,
@@ -5724,7 +5728,7 @@ type DirectIntentShadowCandidate =
         content: options.approvalResult.message || 'Approval denied. I did not continue the pending action.',
         metadata: {
           executionGraph: {
-            graphId: capabilityResume.graph.graphId,
+            graphId: chatResume.graph.graphId,
             status: 'failed',
             reason: 'approval_denied',
           },
@@ -5732,37 +5736,49 @@ type DirectIntentShadowCandidate =
       };
     }
 
-    const result = capabilityResume.payload.type === 'filesystem_save_output'
+    const result = chatResume.payload.type === 'filesystem_save_output'
       ? await this.executeStoredFilesystemSave({
-        targetPath: capabilityResume.payload.targetPath,
-        content: capabilityResume.payload.content,
-        originalUserContent: capabilityResume.payload.originalUserContent,
-        userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
-        userId: pendingAction.scope.userId,
-        channel: pendingAction.scope.channel,
-        surfaceId: pendingAction.scope.surfaceId,
-        principalId: capabilityResume.payload.principalId ?? pendingAction.scope.userId,
-        principalRole: normalizeFilesystemResumePrincipalRole(capabilityResume.payload.principalRole) ?? 'owner',
-        requestId: randomUUID(),
-        codeContext: capabilityResume.payload.codeContext,
-        allowPathRemediation: capabilityResume.payload.allowPathRemediation,
-      })
-      : await this.executeStoredAutomationAuthoring(
-        pendingAction,
-        capabilityResume.payload,
-        options.approvalResult,
-      );
+          targetPath: chatResume.payload.targetPath,
+          content: chatResume.payload.content,
+          originalUserContent: chatResume.payload.originalUserContent,
+          userKey: `${pendingAction.scope.userId}:${pendingAction.scope.channel}`,
+          userId: pendingAction.scope.userId,
+          channel: pendingAction.scope.channel,
+          surfaceId: pendingAction.scope.surfaceId,
+          principalId: chatResume.payload.principalId ?? pendingAction.scope.userId,
+          principalRole: normalizeFilesystemResumePrincipalRole(chatResume.payload.principalRole) ?? 'owner',
+          requestId: randomUUID(),
+          codeContext: chatResume.payload.codeContext,
+          allowPathRemediation: chatResume.payload.allowPathRemediation,
+        })
+      : chatResume.payload.type === 'automation_authoring'
+        ? await this.executeStoredAutomationAuthoring(
+            pendingAction,
+            chatResume.payload,
+            options.approvalResult,
+          )
+        : await this.resumeStoredToolLoopContinuation(
+            pendingAction,
+            chatResume.payload,
+            {
+              approvalId: options.approvalId,
+              pendingActionAlreadyCleared: true,
+              approvalResult: options.approvalResult,
+            },
+          ) ?? {
+            content: 'I could not resume the pending coding run after approval.',
+          };
     const response = typeof result === 'string' ? { content: result } : result;
     const nextPendingAction = isRecord(response.metadata?.pendingAction)
       ? response.metadata.pendingAction
       : null;
-    emitCapabilityContinuationGraphResumeEvent({
+    emitChatContinuationGraphResumeEvent({
       graphStore: this.executionGraphStore,
       runTimeline: this.runTimeline,
-      resume: capabilityResume,
+      resume: chatResume,
       kind: 'graph_completed',
       payload: {
-        continuationArtifactId: capabilityResume.artifact.artifactId,
+        continuationArtifactId: chatResume.artifact.artifactId,
         resultStatus: nextPendingAction ? 'pending_approval' : 'completed',
       },
       eventKey: 'completed',
@@ -5772,9 +5788,9 @@ type DirectIntentShadowCandidate =
       metadata: {
         ...(response.metadata ?? {}),
         executionGraph: {
-          graphId: capabilityResume.graph.graphId,
+          graphId: chatResume.graph.graphId,
           status: nextPendingAction ? 'pending_approval' : 'completed',
-          continuationArtifactId: capabilityResume.artifact.artifactId,
+          continuationArtifactId: chatResume.artifact.artifactId,
         },
       },
     };
@@ -5876,8 +5892,9 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private async resumeStoredToolLoopPendingAction(
+  private async resumeStoredToolLoopContinuation(
     pendingAction: PendingActionRecord,
+    continuation: import('./runtime/chat-agent/tool-loop-resume.js').ToolLoopResumePayload,
     options?: {
       approvalId?: string;
       pendingActionAlreadyCleared?: boolean;
@@ -5885,15 +5902,15 @@ type DirectIntentShadowCandidate =
       ctx?: AgentContext;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    return resumeStoredToolLoopPendingActionHelper({
+    return resumeStoredToolLoopContinuationHelper({
       pendingAction,
+      continuation,
       options,
       agentId: this.id,
       tools: this.tools,
       secondBrainService: this.secondBrainService,
       maxToolRounds: this.maxToolRounds,
       contextBudget: this.contextBudget,
-      normalizePrincipalRole: (value) => normalizeFilesystemResumePrincipalRole(value),
       buildChatRunner: (input) => this.buildStoredToolLoopChatFn(input),
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
@@ -5902,9 +5919,8 @@ type DirectIntentShadowCandidate =
         providerKind,
       ),
       lacksUsableAssistantContent: (content) => this.lacksUsableAssistantContent(content),
-      setPendingApprovalAction: (userId, channel, surfaceId, action, nowMs) => this.setPendingApprovalAction(
-        userId,
-        channel,
+      setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setChatContinuationGraphPendingApprovalActionForRequest(
+        userKey,
         surfaceId,
         action,
         nowMs,
@@ -5948,7 +5964,7 @@ type DirectIntentShadowCandidate =
         action,
         nowMs,
       ),
-      setCapabilityGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setCapabilityGraphPendingApprovalActionForRequest(
+      setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setChatContinuationGraphPendingApprovalActionForRequest(
         userKey,
         surfaceId,
         action,
@@ -5989,7 +6005,7 @@ type DirectIntentShadowCandidate =
         action,
         nowMs,
       ),
-      setCapabilityGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setCapabilityGraphPendingApprovalActionForRequest(
+      setChatContinuationGraphPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setChatContinuationGraphPendingApprovalActionForRequest(
         userKey,
         surfaceId,
         action,

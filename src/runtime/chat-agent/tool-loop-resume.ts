@@ -1,7 +1,6 @@
 import type { UserMessage } from '../../agent/types.js';
 import { isRecord, toNumber, toString } from '../../chat-agent-helpers.js';
 import type { ChatMessage } from '../../llm/types.js';
-import type { PendingActionResume } from '../pending-actions.js';
 import {
   EXECUTION_PROFILE_METADATA_KEY,
   readSelectedExecutionProfileMetadata,
@@ -147,7 +146,7 @@ export function collectToolLoopPendingApprovalTools(
     .filter((tool) => tool.approvalId && tool.toolCallId && tool.jobId && tool.name);
 }
 
-export function buildToolLoopPendingApprovalResume(input: {
+export function buildToolLoopPendingApprovalContinuation(input: {
   toolResults: readonly PromiseSettledResult<ToolLoopPendingApprovalToolResult>[];
   llmMessages: ChatMessage[];
   originalMessage: UserMessage;
@@ -160,26 +159,23 @@ export function buildToolLoopPendingApprovalResume(input: {
   intentDecision?: IntentGatewayDecision;
   codeContext?: { workspaceRoot: string; sessionId?: string };
   selectedExecutionProfile?: SelectedExecutionProfile | null;
-}): PendingActionResume | null {
+}): ToolLoopResumePayload | null {
   const pendingTools = collectToolLoopPendingApprovalTools(input.toolResults);
   if (pendingTools.length === 0) return null;
-  return {
-    kind: 'tool_loop',
-    payload: buildToolLoopResumePayload({
-      llmMessages: input.llmMessages,
-      pendingTools,
-      originalMessage: input.originalMessage,
-      requestText: input.requestText,
-      referenceTime: input.referenceTime,
-      allowModelMemoryMutation: input.allowModelMemoryMutation,
-      activeSkillIds: input.activeSkillIds,
-      contentTrustLevel: input.contentTrustLevel,
-      taintReasons: input.taintReasons,
-      intentDecision: input.intentDecision,
-      codeContext: input.codeContext,
-      selectedExecutionProfile: input.selectedExecutionProfile,
-    }),
-  };
+  return readToolLoopResumePayload(buildToolLoopResumePayload({
+    llmMessages: input.llmMessages,
+    pendingTools,
+    originalMessage: input.originalMessage,
+    requestText: input.requestText,
+    referenceTime: input.referenceTime,
+    allowModelMemoryMutation: input.allowModelMemoryMutation,
+    activeSkillIds: input.activeSkillIds,
+    contentTrustLevel: input.contentTrustLevel,
+    taintReasons: input.taintReasons,
+    intentDecision: input.intentDecision,
+    codeContext: input.codeContext,
+    selectedExecutionProfile: input.selectedExecutionProfile,
+  }));
 }
 
 export function readToolLoopResumePayload(
@@ -237,7 +233,7 @@ export function readToolLoopResumePayload(
         ...(toString(originalMessageRecord.surfaceId).trim() ? { surfaceId: toString(originalMessageRecord.surfaceId).trim() } : {}),
         ...(toString(originalMessageRecord.principalId).trim() ? { principalId: toString(originalMessageRecord.principalId).trim() } : {}),
         ...(toString(originalMessageRecord.principalRole).trim()
-          ? { principalRole: normalizePrincipalRole?.(toString(originalMessageRecord.principalRole).trim()) }
+          ? { principalRole: normalizePrincipalRole?.(toString(originalMessageRecord.principalRole).trim()) ?? normalizeStoredPrincipalRole(toString(originalMessageRecord.principalRole).trim()) }
           : {}),
         timestamp: toNumber(originalMessageRecord.timestamp) ?? Date.now(),
         content: toString(originalMessageRecord.content),
@@ -285,4 +281,16 @@ export function readToolLoopResumePayload(
     ...(codeContext ? { codeContext } : {}),
     ...(selectedExecutionProfile ? { selectedExecutionProfile } : {}),
   };
+}
+
+function normalizeStoredPrincipalRole(value: string | undefined): PrincipalRole | undefined {
+  switch (value) {
+    case 'owner':
+    case 'operator':
+    case 'approver':
+    case 'viewer':
+      return value;
+    default:
+      return undefined;
+  }
 }

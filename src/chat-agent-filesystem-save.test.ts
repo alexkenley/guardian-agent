@@ -10,7 +10,7 @@ import { ConversationService, type ConversationKey } from './runtime/conversatio
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
 import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
 import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
-import { recordCapabilityContinuationGraphApproval } from './runtime/chat-agent/capability-graph-continuation.js';
+import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
 import { CAPABILITY_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT } from './runtime/chat-agent/capability-continuation-resume.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
 
@@ -92,7 +92,7 @@ function createFilesystemGraphPendingAction(input: {
 } {
   const pendingActionStore = createPendingActionStore();
   const executionGraphStore = new ExecutionGraphStore();
-  const result = recordCapabilityContinuationGraphApproval({
+  const result = recordChatContinuationGraphApproval({
     graphStore: executionGraphStore,
     userKey: 'owner:web',
     userId: 'owner',
@@ -246,7 +246,7 @@ describe('LLMChatAgent direct filesystem save', () => {
     const artifactId = pendingAction?.graphInterrupt?.artifactRefs[0]?.artifactId;
     expect(artifactId).toBeTruthy();
     expect(executionGraphStore.getArtifact(pendingAction!.graphInterrupt!.graphId, artifactId!)).toMatchObject({
-      artifactType: 'CapabilityContinuation',
+      artifactType: 'ChatContinuation',
       content: {
         payload: {
           type: 'filesystem_save_output',

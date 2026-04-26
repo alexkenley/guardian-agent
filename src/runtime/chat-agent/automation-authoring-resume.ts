@@ -95,7 +95,7 @@ export async function executeStoredAutomationAuthoring(input: {
     },
     nowMs?: number,
   ) => PendingActionSetResult;
-  setCapabilityGraphPendingApprovalActionForRequest: (
+  setChatContinuationGraphPendingApprovalActionForRequest: (
     userKey: string,
     surfaceId: string | undefined,
     action: {
@@ -195,7 +195,7 @@ export async function executeStoredAutomationAuthoring(input: {
     ...(input.request.codeContext?.sessionId ? { codeSessionId: input.request.codeContext.sessionId } : {}),
   } as const;
   const pendingActionResult = result.metadata?.resumeAutomationAfterApprovals
-    ? input.setCapabilityGraphPendingApprovalActionForRequest(
+    ? input.setChatContinuationGraphPendingApprovalActionForRequest(
       input.request.userKey,
       input.request.surfaceId,
       {

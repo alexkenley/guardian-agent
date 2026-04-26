@@ -88,7 +88,7 @@ export interface DirectAutomationDeps {
       resume?: PendingActionRecord['resume'];
     },
   ) => { action: PendingActionRecord | null; collisionPrompt?: string };
-  setCapabilityGraphPendingApprovalActionForRequest: (
+  setChatContinuationGraphPendingApprovalActionForRequest: (
     userKey: string,
     surfaceId: string | undefined,
     input: {
@@ -260,7 +260,7 @@ export async function tryDirectAutomationAuthoring(input: {
       entities: toPendingActionEntities(input.options?.intentDecision?.entities),
     };
     const pendingActionResult = result.metadata?.resumeAutomationAfterApprovals
-      ? deps.setCapabilityGraphPendingApprovalActionForRequest(
+      ? deps.setChatContinuationGraphPendingApprovalActionForRequest(
         input.userKey,
         input.message.surfaceId,
         {

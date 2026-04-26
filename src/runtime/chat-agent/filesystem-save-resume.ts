@@ -62,7 +62,7 @@ export async function executeStoredFilesystemSave(input: {
     },
     nowMs?: number,
   ) => PendingActionSetResult;
-  setCapabilityGraphPendingApprovalActionForRequest: (
+  setChatContinuationGraphPendingApprovalActionForRequest: (
     userKey: string,
     surfaceId: string | undefined,
     action: {
@@ -205,7 +205,7 @@ function buildPendingFilesystemPathApprovalResponse(
   }
   const summaries = pendingIds.length > 0 ? input.tools?.getApprovalSummaries(pendingIds) : undefined;
   const prompt = input.formatPendingApprovalPrompt(pendingIds, summaries);
-  const pendingActionResult = input.setCapabilityGraphPendingApprovalActionForRequest(
+  const pendingActionResult = input.setChatContinuationGraphPendingApprovalActionForRequest(
     input.request.userKey,
     input.request.surfaceId,
     {

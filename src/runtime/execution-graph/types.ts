@@ -42,7 +42,7 @@ export type ExecutionArtifactType =
   | 'VerificationResult'
   | 'RecoveryProposal'
   | 'WorkerSuspension'
-  | 'CapabilityContinuation';
+  | 'ChatContinuation';
 
 export interface ExecutionSecurityContext {
   agentId?: string;

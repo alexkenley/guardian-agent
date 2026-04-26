@@ -10,7 +10,6 @@ import { buildToolResultPayloadFromJob } from '../../tools/job-results.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from '../../tools/executor.js';
 import type {
   ContentTrustLevel,
-  PrincipalRole,
   ToolExecutionRequest,
 } from '../../tools/types.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../../util/structured-json.js';
@@ -32,8 +31,8 @@ import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 import {
-  buildToolLoopPendingApprovalResume,
-  readToolLoopResumePayload,
+  buildToolLoopPendingApprovalContinuation,
+  type ToolLoopResumePayload,
   type ToolLoopPendingApprovalToolResult,
 } from './tool-loop-resume.js';
 import {
@@ -138,7 +137,7 @@ export async function recoverDirectAnswerAfterTools(input: {
   }
 }
 
-export function buildBlockedToolLoopPendingApprovalResume(input: {
+export function buildBlockedToolLoopPendingApprovalContinuation(input: {
   toolResults: readonly PromiseSettledResult<ToolLoopPendingApprovalToolResult>[];
   llmMessages: ChatMessage[];
   deferredRemoteToolCallIds: Set<string>;
@@ -152,10 +151,10 @@ export function buildBlockedToolLoopPendingApprovalResume(input: {
   intentDecision?: IntentGatewayDecision;
   codeContext?: { workspaceRoot: string; sessionId?: string };
   selectedExecutionProfile?: SelectedExecutionProfile | null;
-}): PendingActionRecord['resume'] | undefined {
+}): ToolLoopResumePayload | undefined {
   input.llmMessages.splice(-input.toolResults.length, input.toolResults.length);
   pruneDeferredRemoteSandboxToolCalls(input.llmMessages, input.deferredRemoteToolCallIds);
-  return buildToolLoopPendingApprovalResume({
+  return buildToolLoopPendingApprovalContinuation({
     toolResults: input.toolResults,
     llmMessages: input.llmMessages,
     originalMessage: input.originalMessage,
@@ -180,7 +179,7 @@ export function finalizeToolLoopPendingApprovals(input: {
   originalUserContent: string;
   finalContent: string | undefined;
   intentDecision?: IntentGatewayDecision | null;
-  resume?: PendingActionRecord['resume'];
+  continuation?: ToolLoopResumePayload;
   codeSessionId?: string;
   tools?: Pick<ToolExecutor, 'getApprovalSummaries'> | null;
   getPendingApprovalIds: (
@@ -217,6 +216,27 @@ export function finalizeToolLoopPendingApprovals(input: {
     },
     nowMs?: number,
   ) => PendingActionSetResult;
+  setChatContinuationGraphPendingApprovalActionForRequest: (
+    userKey: string,
+    surfaceId: string | undefined,
+    action: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      continuation: ToolLoopResumePayload;
+      codeSessionId?: string;
+    },
+    nowMs?: number,
+  ) => PendingActionSetResult;
   lacksUsableAssistantContent: (content: string | undefined) => boolean;
 }): {
   finalContent: string;
@@ -244,27 +264,36 @@ export function finalizeToolLoopPendingApprovals(input: {
     ? formatPendingApprovalMessage(approvalSummaries)
     : 'Approval required for the pending action.';
   const decision = input.intentDecision;
-  const pendingActionResult = input.setPendingApprovalAction(
-    input.pendingActionUserId,
-    input.pendingActionChannel,
-    input.pendingActionSurfaceId,
-    {
-      prompt: pendingApprovalPrompt,
-      approvalIds: merged,
-      approvalSummaries,
-      originalUserContent: input.originalUserContent,
-      route: decision?.route,
-      operation: decision?.operation,
-      summary: decision?.summary,
-      turnRelation: decision?.turnRelation,
-      resolution: decision?.resolution,
-      missingFields: decision?.missingFields,
-      provenance: decision?.provenance,
-      entities: decision?.entities as Record<string, unknown> | undefined,
-      ...(input.resume ? { resume: input.resume } : {}),
-      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
-    },
-  );
+  const pendingActionInput = {
+    prompt: pendingApprovalPrompt,
+    approvalIds: merged,
+    approvalSummaries,
+    originalUserContent: input.originalUserContent,
+    route: decision?.route,
+    operation: decision?.operation,
+    summary: decision?.summary,
+    turnRelation: decision?.turnRelation,
+    resolution: decision?.resolution,
+    missingFields: decision?.missingFields,
+    provenance: decision?.provenance,
+    entities: decision?.entities as Record<string, unknown> | undefined,
+    ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+  };
+  const pendingActionResult = input.continuation
+    ? input.setChatContinuationGraphPendingApprovalActionForRequest(
+      input.pendingActionUserKey,
+      input.pendingActionSurfaceId,
+      {
+        ...pendingActionInput,
+        continuation: input.continuation,
+      },
+    )
+    : input.setPendingApprovalAction(
+      input.pendingActionUserId,
+      input.pendingActionChannel,
+      input.pendingActionSurfaceId,
+      pendingActionInput,
+    );
   const pendingActionMeta = toPendingActionClientMetadata(pendingActionResult.action);
   let finalContent = input.finalContent ?? '';
   if (pendingActionResult.collisionPrompt) {
@@ -280,8 +309,9 @@ export function finalizeToolLoopPendingApprovals(input: {
   };
 }
 
-export async function resumeStoredToolLoopPendingAction(input: {
+export async function resumeStoredToolLoopContinuation(input: {
   pendingAction: PendingActionRecord;
+  continuation: ToolLoopResumePayload;
   options?: {
     approvalId?: string;
     pendingActionAlreadyCleared?: boolean;
@@ -302,7 +332,6 @@ export async function resumeStoredToolLoopPendingAction(input: {
   secondBrainService?: Pick<SecondBrainService, 'getEventById' | 'getPersonById' | 'getTaskById'> | null;
   maxToolRounds: number;
   contextBudget: number;
-  normalizePrincipalRole: (value: string | undefined) => PrincipalRole | undefined;
   buildChatRunner: (input: {
     ctx?: AgentContext;
     selectedExecutionProfile?: SelectedExecutionProfile;
@@ -315,9 +344,8 @@ export async function resumeStoredToolLoopPendingAction(input: {
     providerKind: 'local' | 'external',
   ) => StoredToolLoopSanitizedResult;
   lacksUsableAssistantContent: (content: string | undefined) => boolean;
-  setPendingApprovalAction: (
-    userId: string,
-    channel: string,
+  setChatContinuationGraphPendingApprovalActionForRequest: (
+    userKey: string,
     surfaceId: string | undefined,
     action: {
       prompt: string;
@@ -331,7 +359,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
       resolution?: string;
       missingFields?: string[];
       entities?: Record<string, unknown>;
-      resume?: PendingActionRecord['resume'];
+      continuation: ToolLoopResumePayload;
       codeSessionId?: string;
     },
     nowMs?: number,
@@ -345,13 +373,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
     return { content: 'I could not resume the pending coding run because tool execution is unavailable.' };
   }
 
-  const resume = readToolLoopResumePayload(
-    input.pendingAction.resume?.payload,
-    input.normalizePrincipalRole,
-  );
-  if (!resume) {
-    return null;
-  }
+  const resume = input.continuation;
 
   if (!input.options?.pendingActionAlreadyCleared) {
     input.completePendingAction(input.pendingAction.id);
@@ -490,7 +512,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
           ...(resume.originalMessage.metadata ? { metadata: { ...resume.originalMessage.metadata } } : {}),
         };
         const summaries = input.tools.getApprovalSummaries(pendingIds);
-        const nextResume = buildBlockedToolLoopPendingApprovalResume({
+        const nextContinuation = buildBlockedToolLoopPendingApprovalContinuation({
           toolResults: roundResult.toolResults,
           llmMessages,
           deferredRemoteToolCallIds: roundResult.deferredRemoteToolCallIds,
@@ -505,9 +527,11 @@ export async function resumeStoredToolLoopPendingAction(input: {
           codeContext: resume.codeContext,
           selectedExecutionProfile: resume.selectedExecutionProfile,
         });
-        const pendingActionResult = input.setPendingApprovalAction(
-          input.pendingAction.scope.userId,
-          input.pendingAction.scope.channel,
+        if (!nextContinuation) {
+          return { content: 'I could not resume the pending coding run after approval.' };
+        }
+        const pendingActionResult = input.setChatContinuationGraphPendingApprovalActionForRequest(
+          `${input.pendingAction.scope.userId}:${input.pendingAction.scope.channel}`,
           input.pendingAction.scope.surfaceId,
           {
             prompt: input.pendingAction.blocker.prompt || 'Approval required for the pending action.',
@@ -521,7 +545,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
             resolution: input.pendingAction.intent.resolution,
             missingFields: input.pendingAction.intent.missingFields,
             entities: input.pendingAction.intent.entities,
-            ...(nextResume ? { resume: nextResume } : {}),
+            continuation: nextContinuation,
             codeSessionId: input.pendingAction.codeSessionId ?? resume.codeContext?.sessionId,
           },
         );

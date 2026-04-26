@@ -28,33 +28,38 @@ import {
   type AutomationAuthoringResumePayload,
   type FilesystemSaveOutputResumePayload,
 } from './capability-continuation-resume.js';
+import {
+  readToolLoopResumePayload,
+  type ToolLoopResumePayload,
+} from './tool-loop-resume.js';
 
-export type CapabilityContinuationPayload =
+export type ChatContinuationPayload =
   | FilesystemSaveOutputResumePayload
-  | AutomationAuthoringResumePayload;
+  | AutomationAuthoringResumePayload
+  | ToolLoopResumePayload;
 
-export interface CapabilityContinuationGraphResume {
+export interface ChatContinuationGraphResume {
   graph: ExecutionGraph;
   nodeId: string;
   resumeToken: string;
-  artifact: ExecutionArtifact<CapabilityContinuationArtifactContent>;
-  payload: CapabilityContinuationPayload;
+  artifact: ExecutionArtifact<ChatContinuationArtifactContent>;
+  payload: ChatContinuationPayload;
 }
 
-export interface CapabilityContinuationArtifactContent extends Record<string, unknown> {
-  type: 'chat_capability_continuation';
+export interface ChatContinuationArtifactContent extends Record<string, unknown> {
+  type: 'chat_continuation';
   payload: Record<string, unknown>;
 }
 
-type CapabilityContinuationGraphStore = Pick<
+type ChatContinuationGraphStore = Pick<
   ExecutionGraphStore,
   'appendEvent' | 'createGraph' | 'getArtifact' | 'getSnapshot' | 'writeArtifact'
 >;
 
-const CAPABILITY_CONTINUATION_ARTIFACT_CONTENT_TYPE = 'chat_capability_continuation';
+const CHAT_CONTINUATION_ARTIFACT_CONTENT_TYPE = 'chat_continuation';
 
-export function recordCapabilityContinuationGraphApproval(input: {
-  graphStore: CapabilityContinuationGraphStore;
+export function recordChatContinuationGraphApproval(input: {
+  graphStore: ChatContinuationGraphStore;
   runTimeline?: Pick<RunTimelineStore, 'ingestExecutionGraphEvent'>;
   userKey: string;
   userId: string;
@@ -76,7 +81,7 @@ export function recordCapabilityContinuationGraphApproval(input: {
     missingFields?: string[];
     provenance?: PendingActionRecord['intent']['provenance'];
     entities?: Record<string, unknown>;
-    continuation: CapabilityContinuationPayload;
+    continuation: ChatContinuationPayload;
     codeSessionId?: string;
   };
   setGraphPendingActionForRequest: (
@@ -96,7 +101,7 @@ export function recordCapabilityContinuationGraphApproval(input: {
   nowMs?: number;
 }): PendingActionSetResult {
   const nowMs = input.nowMs ?? Date.now();
-  const executionId = `capability:${randomUUID()}`;
+  const executionId = `chat-continuation:${randomUUID()}`;
   const graphId = `graph:${executionId}`;
   const nodeId = `node:${executionId}:approval`;
   const approvalIds = uniqueStrings(input.action.approvalIds);
@@ -105,7 +110,7 @@ export function recordCapabilityContinuationGraphApproval(input: {
     executionId,
     requestId: input.requestId,
     runId: input.requestId,
-    intent: buildCapabilityGraphIntent(input.action),
+    intent: buildChatContinuationGraphIntent(input.action),
     securityContext: {
       agentId: input.agentId,
       userId: input.userId,
@@ -124,9 +129,9 @@ export function recordCapabilityContinuationGraphApproval(input: {
         graphId,
         kind: 'approval_interrupt',
         status: 'pending',
-        title: 'Capability continuation approval',
+        title: 'Chat continuation approval',
         requiredInputIds: [],
-        outputArtifactTypes: ['CapabilityContinuation'],
+        outputArtifactTypes: ['ChatContinuation'],
         allowedToolCategories: [],
         approvalPolicy: 'if_required',
         checkpointPolicy: 'phase_boundary',
@@ -141,7 +146,7 @@ export function recordCapabilityContinuationGraphApproval(input: {
     eventKey: string,
   ): ExecutionGraphEvent => {
     sequence += 1;
-    const event = createCapabilityContinuationGraphEvent({
+    const event = createChatContinuationGraphEvent({
       graph,
       nodeId,
       kind,
@@ -159,7 +164,7 @@ export function recordCapabilityContinuationGraphApproval(input: {
     route: input.action.route,
     operation: input.action.operation,
   }, 'started');
-  const artifact = buildCapabilityContinuationArtifact({
+  const artifact = buildChatContinuationArtifact({
     graphId,
     nodeId,
     payload: input.action.continuation,
@@ -204,10 +209,10 @@ export function recordCapabilityContinuationGraphApproval(input: {
   );
 }
 
-export function readCapabilityContinuationGraphResume(input: {
+export function readChatContinuationGraphResume(input: {
   graphStore?: Pick<ExecutionGraphStore, 'getArtifact' | 'getSnapshot'>;
   pendingAction: PendingActionRecord;
-}): CapabilityContinuationGraphResume | null {
+}): ChatContinuationGraphResume | null {
   const payload = readExecutionGraphResumePayload(input.pendingAction.resume?.payload);
   if (!payload || !input.graphStore) return null;
   const snapshot = input.graphStore.getSnapshot(payload.graphId);
@@ -218,13 +223,13 @@ export function readCapabilityContinuationGraphResume(input: {
   ]);
   for (const artifactId of artifactIds) {
     const artifact = input.graphStore.getArtifact(payload.graphId, artifactId);
-    const continuation = readCapabilityContinuationArtifact(artifact);
+    const continuation = readChatContinuationArtifact(artifact);
     if (continuation) {
       return {
         graph: snapshot.graph,
         nodeId: payload.nodeId,
         resumeToken: payload.resumeToken,
-        artifact: artifact as ExecutionArtifact<CapabilityContinuationArtifactContent>,
+        artifact: artifact as ExecutionArtifact<ChatContinuationArtifactContent>,
         payload: continuation,
       };
     }
@@ -232,10 +237,10 @@ export function readCapabilityContinuationGraphResume(input: {
   return null;
 }
 
-export function emitCapabilityContinuationGraphResumeEvent(input: {
+export function emitChatContinuationGraphResumeEvent(input: {
   graphStore: Pick<ExecutionGraphStore, 'appendEvent' | 'getSnapshot'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestExecutionGraphEvent'>;
-  resume: CapabilityContinuationGraphResume;
+  resume: ChatContinuationGraphResume;
   kind: ExecutionGraphEvent['kind'];
   payload: Record<string, unknown>;
   eventKey: string;
@@ -244,7 +249,7 @@ export function emitCapabilityContinuationGraphResumeEvent(input: {
   const snapshot = input.graphStore.getSnapshot(input.resume.graph.graphId);
   if (!snapshot) return null;
   const sequence = snapshot.events.reduce((highest, event) => Math.max(highest, event.sequence), 0) + 1;
-  const event = createCapabilityContinuationGraphEvent({
+  const event = createChatContinuationGraphEvent({
     graph: snapshot.graph,
     nodeId: input.resume.nodeId,
     kind: input.kind,
@@ -258,53 +263,46 @@ export function emitCapabilityContinuationGraphResumeEvent(input: {
   return event;
 }
 
-function buildCapabilityContinuationArtifact(input: {
+function buildChatContinuationArtifact(input: {
   graphId: string;
   nodeId: string;
-  payload: CapabilityContinuationPayload;
+  payload: ChatContinuationPayload;
   createdAt: number;
-}): ExecutionArtifact<CapabilityContinuationArtifactContent> {
-  const label = input.payload.type === 'filesystem_save_output'
-    ? 'Filesystem save continuation'
-    : 'Automation authoring continuation';
-  const preview = input.payload.type === 'filesystem_save_output'
-    ? `Resume save to ${input.payload.targetPath}.`
-    : 'Resume automation authoring after policy remediation.';
-  const refs = input.payload.type === 'filesystem_save_output'
-    ? [input.payload.targetPath]
-    : [];
+}): ExecutionArtifact<ChatContinuationArtifactContent> {
+  const descriptor = describeChatContinuationPayload(input.payload);
   return {
     artifactId: `artifact:${randomUUID()}`,
     graphId: input.graphId,
     nodeId: input.nodeId,
-    artifactType: 'CapabilityContinuation',
-    label,
-    preview,
-    refs,
+    artifactType: 'ChatContinuation',
+    label: descriptor.label,
+    preview: descriptor.preview,
+    refs: descriptor.refs,
     trustLevel: 'trusted',
     taintReasons: [],
     redactionPolicy: 'internal_resume_payload',
     content: {
-      type: CAPABILITY_CONTINUATION_ARTIFACT_CONTENT_TYPE,
-      payload: cloneCapabilityContinuationPayload(input.payload),
+      type: CHAT_CONTINUATION_ARTIFACT_CONTENT_TYPE,
+      payload: cloneChatContinuationPayload(input.payload),
     },
     createdAt: input.createdAt,
   };
 }
 
-function readCapabilityContinuationArtifact(
+function readChatContinuationArtifact(
   artifact: ExecutionArtifact | null,
-): CapabilityContinuationPayload | null {
-  if (!artifact || artifact.artifactType !== 'CapabilityContinuation') return null;
+): ChatContinuationPayload | null {
+  if (!artifact || artifact.artifactType !== 'ChatContinuation') return null;
   const content = artifact.content;
-  if (!isRecord(content) || content.type !== CAPABILITY_CONTINUATION_ARTIFACT_CONTENT_TYPE || !isRecord(content.payload)) {
+  if (!isRecord(content) || content.type !== CHAT_CONTINUATION_ARTIFACT_CONTENT_TYPE || !isRecord(content.payload)) {
     return null;
   }
   return readFilesystemSaveOutputResumePayload(content.payload)
-    ?? readAutomationAuthoringResumePayload(content.payload);
+    ?? readAutomationAuthoringResumePayload(content.payload)
+    ?? readToolLoopResumePayload(content.payload);
 }
 
-function createCapabilityContinuationGraphEvent(input: {
+function createChatContinuationGraphEvent(input: {
   graph: ExecutionGraph;
   nodeId: string;
   kind: ExecutionGraphEvent['kind'];
@@ -314,7 +312,7 @@ function createCapabilityContinuationGraphEvent(input: {
   sequence: number;
 }): ExecutionGraphEvent {
   return createExecutionGraphEvent({
-    eventId: `${input.graph.graphId}:capability:${input.eventKey}:${input.sequence}`,
+    eventId: `${input.graph.graphId}:chat-continuation:${input.eventKey}:${input.sequence}`,
     graphId: input.graph.graphId,
     executionId: input.graph.executionId,
     rootExecutionId: input.graph.rootExecutionId,
@@ -335,14 +333,14 @@ function createCapabilityContinuationGraphEvent(input: {
   });
 }
 
-function buildCapabilityGraphIntent(
-  action: Parameters<typeof recordCapabilityContinuationGraphApproval>[0]['action'],
+function buildChatContinuationGraphIntent(
+  action: Parameters<typeof recordChatContinuationGraphApproval>[0]['action'],
 ): IntentGatewayDecision {
   return {
     route: (action.route ?? 'general_assistant') as IntentGatewayDecision['route'],
     confidence: 'high',
     operation: (action.operation ?? 'update') as IntentGatewayDecision['operation'],
-    summary: action.summary ?? 'Resume a chat capability after approval.',
+    summary: action.summary ?? 'Resume chat work after approval.',
     turnRelation: (action.turnRelation ?? 'new_request') as IntentGatewayDecision['turnRelation'],
     resolution: (action.resolution ?? 'ready') as IntentGatewayDecision['resolution'],
     missingFields: action.missingFields ?? [],
@@ -358,13 +356,63 @@ function buildCapabilityGraphIntent(
   };
 }
 
-function cloneCapabilityContinuationPayload(
-  payload: CapabilityContinuationPayload,
+function cloneChatContinuationPayload(
+  payload: ChatContinuationPayload,
 ): Record<string, unknown> {
+  if (payload.type === 'suspended_tool_loop') {
+    return {
+      ...payload,
+      llmMessages: payload.llmMessages.map((message) => ({
+        ...message,
+        ...(message.toolCalls ? { toolCalls: message.toolCalls.map((toolCall) => ({ ...toolCall })) } : {}),
+      })),
+      pendingTools: payload.pendingTools.map((tool) => ({ ...tool })),
+      originalMessage: {
+        ...payload.originalMessage,
+        ...(payload.originalMessage.metadata ? { metadata: { ...payload.originalMessage.metadata } } : {}),
+      },
+      activeSkillIds: [...payload.activeSkillIds],
+      taintReasons: [...payload.taintReasons],
+      ...(payload.codeContext ? { codeContext: { ...payload.codeContext } } : {}),
+      ...(payload.selectedExecutionProfile
+        ? {
+            selectedExecutionProfile: {
+              ...payload.selectedExecutionProfile,
+              fallbackProviderOrder: [...payload.selectedExecutionProfile.fallbackProviderOrder],
+            },
+          }
+        : {}),
+    };
+  }
   return {
     ...payload,
     ...(payload.codeContext ? { codeContext: { ...payload.codeContext } } : {}),
   };
+}
+
+function describeChatContinuationPayload(
+  payload: ChatContinuationPayload,
+): { label: string; preview: string; refs: string[] } {
+  switch (payload.type) {
+    case 'filesystem_save_output':
+      return {
+        label: 'Filesystem save continuation',
+        preview: `Resume save to ${payload.targetPath}.`,
+        refs: [payload.targetPath],
+      };
+    case 'automation_authoring':
+      return {
+        label: 'Automation authoring continuation',
+        preview: 'Resume automation authoring after policy remediation.',
+        refs: [],
+      };
+    case 'suspended_tool_loop':
+      return {
+        label: 'Tool-loop continuation',
+        preview: `Resume ${payload.pendingTools.length} approved tool call${payload.pendingTools.length === 1 ? '' : 's'}.`,
+        refs: payload.pendingTools.map((tool) => tool.name),
+      };
+  }
 }
 
 function uniqueStrings(values: readonly string[]): string[] {

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildToolLoopResumePayload } from './tool-loop-resume.js';
+import { buildToolLoopResumePayload, readToolLoopResumePayload } from './tool-loop-resume.js';
 import {
-  buildBlockedToolLoopPendingApprovalResume,
+  buildBlockedToolLoopPendingApprovalContinuation,
   finalizeToolLoopPendingApprovals,
-  resumeStoredToolLoopPendingAction,
+  resumeStoredToolLoopContinuation,
 } from './tool-loop-runtime.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 
@@ -33,7 +33,7 @@ describe('tool-loop-runtime', () => {
       },
     ];
 
-    const resume = buildBlockedToolLoopPendingApprovalResume({
+    const continuation = buildBlockedToolLoopPendingApprovalContinuation({
       toolResults: [
         {
           status: 'fulfilled',
@@ -73,7 +73,6 @@ describe('tool-loop-runtime', () => {
       taintReasons: [],
     });
 
-    expect(resume?.kind).toBe('tool_loop');
     expect(llmMessages.at(-1)).toEqual({
       role: 'assistant',
       content: '',
@@ -81,7 +80,7 @@ describe('tool-loop-runtime', () => {
         { id: 'pending-call', name: 'fs_write', arguments: '{}' },
       ],
     });
-    expect(resume?.payload).toMatchObject({
+    expect(continuation).toMatchObject({
       type: 'suspended_tool_loop',
       pendingTools: [
         {
@@ -163,6 +162,9 @@ describe('tool-loop-runtime', () => {
       getPendingApprovalIds: vi.fn(() => ['approval-1']),
       setPendingApprovals,
       setPendingApprovalAction,
+      setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => {
+        throw new Error('unexpected graph continuation');
+      }),
       lacksUsableAssistantContent: (content) => !content?.trim(),
     });
 
@@ -216,69 +218,66 @@ describe('tool-loop-runtime', () => {
         missingFields: [],
         entities: {},
       },
-      resume: {
-        kind: 'tool_loop',
-        payload: buildToolLoopResumePayload({
-          llmMessages: [
-            { role: 'system', content: 'system prompt' },
-            { role: 'user', content: 'Search the web for approval workflow practices and compare them to this repo.' },
-            {
-              role: 'assistant',
-              content: '',
-              toolCalls: [
-                {
-                  id: 'tool-call-1',
-                  name: 'web_search',
-                  arguments: JSON.stringify({ query: 'AI agent approval workflow patterns' }),
-                },
-              ],
-            },
-          ],
-          pendingTools: [
-            {
-              approvalId: 'approval-1',
-              toolCallId: 'tool-call-1',
-              jobId: 'job-1',
-              name: 'web_search',
-            },
-          ],
-          originalMessage: {
-            id: 'msg-1',
-            userId: 'owner',
-            channel: 'web',
-            surfaceId: 'web-guardian-chat',
-            timestamp: 1,
-            content: 'Search the web for approval workflow practices and compare them to this repo.',
-          },
-          requestText: 'Search the web for approval workflow practices and compare them to this repo.',
-          referenceTime: 1,
-          allowModelMemoryMutation: false,
-          activeSkillIds: [],
-          contentTrustLevel: 'trusted',
-          taintReasons: [],
-          intentDecision: {
-            route: 'search_task',
-            operation: 'search',
-            summary: 'Search web approval practices.',
-            confidence: 'high',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            missingFields: [],
-            executionClass: 'tool_orchestration',
-            preferredTier: 'external',
-            requiresRepoGrounding: false,
-            requiresToolSynthesis: true,
-            expectedContextPressure: 'medium',
-            preferredAnswerPath: 'tool_loop',
-            simpleVsComplex: 'complex',
-            entities: {},
-          },
-        }),
-      },
       createdAt: 1,
       updatedAt: 1,
       expiresAt: 2,
     };
+    const continuation = readToolLoopResumePayload(buildToolLoopResumePayload({
+      llmMessages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: 'Search the web for approval workflow practices and compare them to this repo.' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'tool-call-1',
+              name: 'web_search',
+              arguments: JSON.stringify({ query: 'AI agent approval workflow patterns' }),
+            },
+          ],
+        },
+      ],
+      pendingTools: [
+        {
+          approvalId: 'approval-1',
+          toolCallId: 'tool-call-1',
+          jobId: 'job-1',
+          name: 'web_search',
+        },
+      ],
+      originalMessage: {
+        id: 'msg-1',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        timestamp: 1,
+        content: 'Search the web for approval workflow practices and compare them to this repo.',
+      },
+      requestText: 'Search the web for approval workflow practices and compare them to this repo.',
+      referenceTime: 1,
+      allowModelMemoryMutation: false,
+      activeSkillIds: [],
+      contentTrustLevel: 'trusted',
+      taintReasons: [],
+      intentDecision: {
+        route: 'search_task',
+        operation: 'search',
+        summary: 'Search web approval practices.',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        entities: {},
+      },
+    }))!;
 
     let callNumber = 0;
     const chatFn = vi.fn(async (messages, options) => {
@@ -301,8 +300,9 @@ describe('tool-loop-runtime', () => {
       };
     });
 
-    const result = await resumeStoredToolLoopPendingAction({
+    const result = await resumeStoredToolLoopContinuation({
       pendingAction,
+      continuation,
       options: {
         approvalId: 'approval-1',
         approvalResult: {
@@ -335,7 +335,6 @@ describe('tool-loop-runtime', () => {
       secondBrainService: null,
       maxToolRounds: 2,
       contextBudget: 32_000,
-      normalizePrincipalRole: () => 'owner',
       buildChatRunner: () => ({
         providerLocality: 'external',
         chatFn,
@@ -347,7 +346,7 @@ describe('tool-loop-runtime', () => {
         trustLevel: 'trusted',
         taintReasons: [],
       })),
-      setPendingApprovalAction: vi.fn(() => {
+      setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => {
         throw new Error('unexpected pending approval');
       }),
       buildPendingApprovalBlockedResponse: vi.fn(() => {
@@ -388,58 +387,55 @@ describe('tool-loop-runtime', () => {
         missingFields: [],
         entities: {},
       },
-      resume: {
-        kind: 'tool_loop',
-        payload: buildToolLoopResumePayload({
-          llmMessages: [
-            { role: 'system', content: 'system prompt' },
-            { role: 'user', content: 'Run `pwd` in the remote sandbox.' },
-          ],
-          pendingTools: [
-            {
-              approvalId: 'approval-1',
-              toolCallId: 'tool-call-1',
-              jobId: 'job-1',
-              name: 'code_remote_exec',
-            },
-          ],
-          originalMessage: {
-            id: 'msg-1',
-            userId: 'owner',
-            channel: 'web',
-            surfaceId: 'web-guardian-chat',
-            timestamp: 1,
-            content: 'Run `pwd` in the remote sandbox.',
-          },
-          requestText: 'Run `pwd` in the remote sandbox.',
-          referenceTime: 1,
-          allowModelMemoryMutation: false,
-          activeSkillIds: [],
-          contentTrustLevel: 'trusted',
-          taintReasons: [],
-          intentDecision: {
-            route: 'coding_task',
-            operation: 'run',
-            summary: 'Run a remote sandbox command.',
-            confidence: 'high',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            missingFields: [],
-            executionClass: 'repo_grounded',
-            preferredTier: 'external',
-            requiresRepoGrounding: true,
-            requiresToolSynthesis: true,
-            expectedContextPressure: 'medium',
-            preferredAnswerPath: 'tool_loop',
-            simpleVsComplex: 'complex',
-            entities: {},
-          },
-        }),
-      },
       createdAt: 1,
       updatedAt: 1,
       expiresAt: 2,
     };
+    const continuation = readToolLoopResumePayload(buildToolLoopResumePayload({
+      llmMessages: [
+        { role: 'system', content: 'system prompt' },
+        { role: 'user', content: 'Run `pwd` in the remote sandbox.' },
+      ],
+      pendingTools: [
+        {
+          approvalId: 'approval-1',
+          toolCallId: 'tool-call-1',
+          jobId: 'job-1',
+          name: 'code_remote_exec',
+        },
+      ],
+      originalMessage: {
+        id: 'msg-1',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        timestamp: 1,
+        content: 'Run `pwd` in the remote sandbox.',
+      },
+      requestText: 'Run `pwd` in the remote sandbox.',
+      referenceTime: 1,
+      allowModelMemoryMutation: false,
+      activeSkillIds: [],
+      contentTrustLevel: 'trusted',
+      taintReasons: [],
+      intentDecision: {
+        route: 'coding_task',
+        operation: 'run',
+        summary: 'Run a remote sandbox command.',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        entities: {},
+      },
+    }))!;
 
     const chatFn = vi.fn(async () => ({
       content: 'Let me retry once to rule out a transient issue:',
@@ -448,8 +444,9 @@ describe('tool-loop-runtime', () => {
       finishReason: 'stop' as const,
     }));
 
-    const result = await resumeStoredToolLoopPendingAction({
+    const result = await resumeStoredToolLoopContinuation({
       pendingAction,
+      continuation,
       options: {
         approvalId: 'approval-1',
         approvalResult: {
@@ -476,7 +473,6 @@ describe('tool-loop-runtime', () => {
       secondBrainService: null,
       maxToolRounds: 2,
       contextBudget: 32_000,
-      normalizePrincipalRole: () => 'owner',
       buildChatRunner: () => ({
         providerLocality: 'external',
         chatFn,
@@ -488,8 +484,7 @@ describe('tool-loop-runtime', () => {
         trustLevel: 'trusted',
         taintReasons: [],
       })),
-      isResponseDegraded: vi.fn(() => false),
-      setPendingApprovalAction: vi.fn(() => {
+      setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => {
         throw new Error('unexpected pending approval');
       }),
       buildPendingApprovalBlockedResponse: vi.fn(() => {

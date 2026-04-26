@@ -147,11 +147,11 @@ import {
   normalizeFilesystemResumePrincipalRole,
 } from '../runtime/chat-agent/capability-continuation-resume.js';
 import {
-  emitCapabilityContinuationGraphResumeEvent,
-  readCapabilityContinuationGraphResume,
-  recordCapabilityContinuationGraphApproval,
-  type CapabilityContinuationGraphResume,
-} from '../runtime/chat-agent/capability-graph-continuation.js';
+  emitChatContinuationGraphResumeEvent,
+  readChatContinuationGraphResume,
+  recordChatContinuationGraphApproval,
+  type ChatContinuationGraphResume,
+} from '../runtime/chat-agent/chat-continuation-graph.js';
 import {
   attachWorkerAutomationAuthoringResumeMetadata,
 } from '../worker/automation-resume.js';
@@ -1058,14 +1058,14 @@ export class WorkerManager {
       return null;
     }
     const now = this.observability.now ?? Date.now;
-    const capabilityResume = readCapabilityContinuationGraphResume({
+    const chatResume = readChatContinuationGraphResume({
       graphStore: this.observability.executionGraphStore,
       pendingAction,
     });
-    if (capabilityResume) {
-      return this.resumeCapabilityContinuationGraphPendingAction(
+    if (chatResume) {
+      return this.resumeChatContinuationGraphPendingAction(
         pendingAction,
-        capabilityResume,
+        chatResume,
         options,
       );
     }
@@ -1496,41 +1496,41 @@ export class WorkerManager {
     };
   }
 
-  private async resumeCapabilityContinuationGraphPendingAction(
+  private async resumeChatContinuationGraphPendingAction(
     pendingAction: PendingActionRecord,
-    capabilityResume: CapabilityContinuationGraphResume,
+    chatResume: ChatContinuationGraphResume,
     options: {
       approvalId: string;
       approvalResult: ToolApprovalDecisionResult;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const graphStore = this.observability.executionGraphStore;
-    if (!graphStore || capabilityResume.payload.type !== 'automation_authoring') return null;
+    if (!graphStore || chatResume.payload.type !== 'automation_authoring') return null;
     const nowMs = this.observability.now?.() ?? Date.now();
     this.completeExecutionGraphPendingAction(pendingAction, nowMs);
-    emitCapabilityContinuationGraphResumeEvent({
+    emitChatContinuationGraphResumeEvent({
       graphStore,
       runTimeline: this.observability.runTimeline,
-      resume: capabilityResume,
+      resume: chatResume,
       kind: 'interruption_resolved',
       payload: {
         kind: 'approval',
         approvalId: options.approvalId,
-        resumeToken: capabilityResume.resumeToken,
+        resumeToken: chatResume.resumeToken,
         resultStatus: (options.approvalResult.approved ?? options.approvalResult.success) ? 'approved' : 'denied',
       },
       eventKey: 'approval-resolved',
       nowMs,
     });
     if (!(options.approvalResult.approved ?? options.approvalResult.success)) {
-      emitCapabilityContinuationGraphResumeEvent({
+      emitChatContinuationGraphResumeEvent({
         graphStore,
         runTimeline: this.observability.runTimeline,
-        resume: capabilityResume,
+        resume: chatResume,
         kind: 'graph_failed',
         payload: {
           reason: options.approvalResult.message || 'Approval denied.',
-          continuationArtifactId: capabilityResume.artifact.artifactId,
+          continuationArtifactId: chatResume.artifact.artifactId,
         },
         eventKey: 'denied',
         nowMs,
@@ -1539,7 +1539,7 @@ export class WorkerManager {
         content: options.approvalResult.message || 'Approval denied. I did not continue automation authoring.',
         metadata: {
           executionGraph: {
-            graphId: capabilityResume.graph.graphId,
+            graphId: chatResume.graph.graphId,
             status: 'failed',
             reason: 'approval_denied',
           },
@@ -1547,7 +1547,7 @@ export class WorkerManager {
       };
     }
 
-    const resume = capabilityResume.payload;
+    const resume = chatResume.payload;
     const codeContext = resume.codeContext;
     const messageMetadata = {
       ...(resume.messageMetadata ?? {}),
@@ -1555,7 +1555,7 @@ export class WorkerManager {
     };
     const result = await this.tryDirectAutomationAuthoring(
       {
-        sessionId: `capability-resume:${pendingAction.id}`,
+        sessionId: `chat-continuation:${pendingAction.id}`,
         agentId: pendingAction.scope.agentId,
         userId: pendingAction.scope.userId,
         grantedCapabilities: [],
@@ -1578,13 +1578,13 @@ export class WorkerManager {
         assumeAuthoring: true,
       },
     );
-    emitCapabilityContinuationGraphResumeEvent({
+    emitChatContinuationGraphResumeEvent({
       graphStore,
       runTimeline: this.observability.runTimeline,
-      resume: capabilityResume,
+      resume: chatResume,
       kind: result ? 'graph_completed' : 'graph_failed',
       payload: {
-        continuationArtifactId: capabilityResume.artifact.artifactId,
+        continuationArtifactId: chatResume.artifact.artifactId,
         resultStatus: result ? 'completed' : 'failed',
       },
       eventKey: result ? 'completed' : 'failed',
@@ -1594,7 +1594,7 @@ export class WorkerManager {
         content: 'Automation authoring could not resume after approval.',
         metadata: {
           executionGraph: {
-            graphId: capabilityResume.graph.graphId,
+            graphId: chatResume.graph.graphId,
             status: 'failed',
           },
         },
@@ -1605,9 +1605,9 @@ export class WorkerManager {
       metadata: {
         ...(result.metadata ?? {}),
         executionGraph: {
-          graphId: capabilityResume.graph.graphId,
+          graphId: chatResume.graph.graphId,
           status: 'completed',
-          continuationArtifactId: capabilityResume.artifact.artifactId,
+          continuationArtifactId: chatResume.artifact.artifactId,
         },
       },
     };
@@ -4162,7 +4162,7 @@ export class WorkerManager {
     if (input.result.metadata?.resumeAutomationAfterApprovals) {
       const graphStore = this.observability.executionGraphStore;
       if (!graphStore) return null;
-      return recordCapabilityContinuationGraphApproval({
+      return recordChatContinuationGraphApproval({
         graphStore,
         runTimeline: this.observability.runTimeline,
         userKey: `${input.request.userId}:${input.request.message.channel}`,

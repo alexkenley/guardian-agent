@@ -140,7 +140,7 @@ Checkpoint after the first approval/resume debt-burn slice:
 Checkpoint after the chat automation-resume debt-burn slice:
 
 - This was an intermediate bridge where chat automation authoring remediation approvals moved out of an in-memory ChatAgent continuation and into durable pending-action metadata.
-- That bridge is now superseded. Automation authoring remediation approvals use `execution_graph` pending actions with a `CapabilityContinuation` graph artifact; `capability_continuation` is no longer a pending-action resume kind.
+- That bridge is now superseded. Automation authoring remediation approvals use `execution_graph` pending actions with a `ChatContinuation` graph artifact; `capability_continuation` is no longer a pending-action resume kind.
 - `approval-orchestration.ts` no longer owns a special automation retry path. Final approval resolution goes through the shared execution-graph continuation path.
 - The temporary `automation-approval-continuation.ts` module and tests were deleted in this slice; the later graph-backed capability cleanup deleted the capability-continuation runtime as well.
 
@@ -274,7 +274,7 @@ Checkpoint after the shared approval-continuation cleanup:
 
 Checkpoint after the blocked tool-loop resume builder cleanup:
 
-- The repeated all-blocked tool-loop resume sequence now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `buildBlockedToolLoopPendingApprovalResume`.
+- The repeated all-blocked tool-loop continuation sequence now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `buildBlockedToolLoopPendingApprovalContinuation`.
 - The live ChatAgent loop, fallback-provider loop, and stored tool-loop resume loop now share the same pending-observation removal, deferred remote sandbox pruning, and `tool_loop` resume payload construction.
 - Remaining tool-loop debt after this slice: the replay payload itself still stores model messages. The next architectural move is to replace `tool_loop` resumes with graph interrupts and artifact-backed observations.
 
@@ -304,10 +304,16 @@ Checkpoint after the live tool-loop pending approval finalization cleanup:
 
 Checkpoint after the graph-backed capability continuation cleanup:
 
-- `PendingActionResumeKind` now accepts only `execution_graph` and `tool_loop`; the non-graph `capability_continuation` resume kind, runtime dispatcher, and tests were deleted.
-- Filesystem-save path-remediation approvals and automation-authoring remediation approvals now create execution graphs, store resumable capability state as `CapabilityContinuation` artifacts, and expose standard `execution_graph` pending-action resume metadata.
+- `PendingActionResumeKind` now accepts only `execution_graph`; the non-graph `capability_continuation` resume kind, runtime dispatcher, and tests were deleted.
+- Filesystem-save path-remediation approvals and automation-authoring remediation approvals now create execution graphs, store resumable capability state as `ChatContinuation` artifacts, and expose standard `execution_graph` pending-action resume metadata.
 - `ChatAgent` and `WorkerManager` both resume these approvals through graph artifacts and emit graph interruption/resolution/completion events into the graph store and run timeline. Pending actions no longer carry executable capability replay payloads.
-- Remaining approval debt after this slice: chat-level `tool_loop` approvals still store replay payloads with model messages. The next durable-execution step is to turn those pauses into graph interrupts with artifact-backed tool observations.
+
+Checkpoint after the graph-backed tool-loop continuation cleanup:
+
+- Blocked live tool-loop approvals now create `execution_graph` pending actions and store the suspended tool-loop continuation in a `ChatContinuation` graph artifact instead of embedding a `tool_loop` replay payload in the pending action.
+- Shared approval continuation dispatch now has one durable branch: `execution_graph`. The old chat-level `tool_loop` pending-action resume kind and dispatcher path were deleted.
+- The graph continuation bridge is now generic chat continuation infrastructure for filesystem save remediation, automation authoring remediation, and suspended tool-loop approvals.
+- Remaining orchestration debt after this slice: `src/chat-agent.ts` still owns the live LLM/tool-loop controller and the continuation artifact still snapshots model messages. The next durable-execution step is to lift the controller out of the monolith and replace transcript snapshots with explicit tool-observation/checkpoint artifacts where practical.
 
 Exit criteria for this refinement phase:
 

@@ -88,7 +88,7 @@ function makeDeps(overrides: Partial<DirectAutomationDeps> = {}): DirectAutomati
     parsePendingActionUserKey: () => ({ userId: 'user-1', channel: 'web' }),
     setClarificationPendingAction: () => ({ action: makePendingAction('Which automation?') }),
     setPendingApprovalActionForRequest: () => ({ action: makePendingAction('Approve this automation.') }),
-    setCapabilityGraphPendingApprovalActionForRequest: () => ({ action: makePendingAction('Approve this automation.') }),
+    setChatContinuationGraphPendingApprovalActionForRequest: () => ({ action: makePendingAction('Approve this automation.') }),
     buildPendingApprovalBlockedResponse: (_result, fallbackContent) => ({ content: fallbackContent }),
     ...overrides,
   };
@@ -187,7 +187,7 @@ describe('direct-automation', () => {
             },
           };
         },
-        setCapabilityGraphPendingApprovalActionForRequest: (_userKey, _surfaceId, input) => {
+        setChatContinuationGraphPendingApprovalActionForRequest: (_userKey, _surfaceId, input) => {
           capturedPendingApprovalInput = input as unknown as Record<string, unknown>;
           return { action: makePendingAction('Approve this automation.') };
         },

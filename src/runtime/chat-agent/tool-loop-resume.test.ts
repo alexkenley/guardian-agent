@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { UserMessage } from '../../agent/types.js';
 import {
-  buildToolLoopPendingApprovalResume,
+  buildToolLoopPendingApprovalContinuation,
   collectToolLoopPendingApprovalTools,
   readToolLoopResumePayload,
 } from './tool-loop-resume.js';
@@ -57,7 +57,7 @@ describe('tool loop resume helpers', () => {
   });
 
   it('builds a tool-loop pending-action resume payload beside the serializer', () => {
-    const resume = buildToolLoopPendingApprovalResume({
+    const continuation = buildToolLoopPendingApprovalContinuation({
       toolResults: [
         {
           status: 'fulfilled',
@@ -88,8 +88,7 @@ describe('tool loop resume helpers', () => {
       taintReasons: [],
     });
 
-    expect(resume?.kind).toBe('tool_loop');
-    const payload = readToolLoopResumePayload(resume?.payload);
+    const payload = readToolLoopResumePayload(continuation);
     expect(payload).toMatchObject({
       type: 'suspended_tool_loop',
       requestText: 'Write the report.',

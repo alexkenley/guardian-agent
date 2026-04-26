@@ -31,15 +31,6 @@ export async function continuePendingActionAfterApproval(input: {
   approvalResult?: ToolApprovalDecisionResult;
   stateAgentId: string;
   completePendingAction: (actionId: string, nowMs?: number) => void;
-  resumeStoredToolLoopPendingAction: (
-    pendingAction: PendingActionRecord,
-    options?: {
-      approvalId?: string;
-      pendingActionAlreadyCleared?: boolean;
-      approvalResult?: ToolApprovalDecisionResult;
-      ctx?: AgentContext;
-    },
-  ) => Promise<ApprovalOrchestrationResponse | null>;
   resumeStoredExecutionGraphPendingAction?: (
     pendingAction: PendingActionRecord,
     options: {
@@ -68,67 +59,51 @@ export async function continuePendingActionAfterApproval(input: {
   const resume = input.pendingAction.resume;
   if (!resume) return null;
   const resumeKind = resume.kind;
-  if (resumeKind !== 'execution_graph' && resumeKind !== 'tool_loop') return null;
-  if (resumeKind === 'execution_graph') {
-    const response = input.approvalResult?.success && input.resumeStoredExecutionGraphPendingAction
-      ? await input.resumeStoredExecutionGraphPendingAction(input.pendingAction, {
-        approvalId: input.approvalId,
-        approvalResult: input.approvalResult,
-      })
-      : null;
-    if (response) {
-      return input.normalizeApprovalContinuationResponse(
-        response,
-        input.pendingAction.scope.userId,
-        input.pendingAction.scope.channel,
-        input.pendingAction.scope.surfaceId,
-      );
-    }
-    const payload = resume.payload as { graphId?: unknown } | undefined;
-    const graphId = typeof payload?.graphId === 'string' ? payload.graphId : undefined;
-    input.completePendingAction(input.pendingAction.id);
-    const metadata = input.withCurrentPendingActionMetadata
-      ? input.withCurrentPendingActionMetadata(
-        {
-          executionGraph: {
-            ...(graphId ? { graphId } : {}),
-            status: 'failed',
-            reason: 'execution_graph_resume_unavailable',
-          },
-        },
-        input.pendingAction.scope.userId,
-        input.pendingAction.scope.channel,
-        input.pendingAction.scope.surfaceId,
-      )
-      : {
-          executionGraph: {
-            ...(graphId ? { graphId } : {}),
-            status: 'failed',
-            reason: 'execution_graph_resume_unavailable',
-          },
-        };
-    return {
-      content: 'Execution graph approval was resolved, but the persisted execution graph could not be resumed. Please retry the request.',
-      ...(metadata ? { metadata } : {}),
-    };
-  }
-
-  const response = resumeKind === 'tool_loop'
-    ? await input.resumeStoredToolLoopPendingAction(
-      input.pendingAction,
-      {
-        approvalId: input.approvalId,
-        approvalResult: input.approvalResult,
-      },
-    )
+  if (resumeKind !== 'execution_graph') return null;
+  const approvalGranted = input.approvalResult
+    ? input.approvalResult.approved ?? input.approvalResult.success
+    : false;
+  const response = approvalGranted && input.approvalResult && input.resumeStoredExecutionGraphPendingAction
+    ? await input.resumeStoredExecutionGraphPendingAction(input.pendingAction, {
+      approvalId: input.approvalId,
+      approvalResult: input.approvalResult,
+    })
     : null;
-  if (!response) return null;
-  return input.normalizeApprovalContinuationResponse(
-    response,
-    input.pendingAction.scope.userId,
-    input.pendingAction.scope.channel,
-    input.pendingAction.scope.surfaceId,
-  );
+  if (response) {
+    return input.normalizeApprovalContinuationResponse(
+      response,
+      input.pendingAction.scope.userId,
+      input.pendingAction.scope.channel,
+      input.pendingAction.scope.surfaceId,
+    );
+  }
+  const payload = resume.payload as { graphId?: unknown } | undefined;
+  const graphId = typeof payload?.graphId === 'string' ? payload.graphId : undefined;
+  input.completePendingAction(input.pendingAction.id);
+  const metadata = input.withCurrentPendingActionMetadata
+    ? input.withCurrentPendingActionMetadata(
+      {
+        executionGraph: {
+          ...(graphId ? { graphId } : {}),
+          status: 'failed',
+          reason: 'execution_graph_resume_unavailable',
+        },
+      },
+      input.pendingAction.scope.userId,
+      input.pendingAction.scope.channel,
+      input.pendingAction.scope.surfaceId,
+    )
+    : {
+        executionGraph: {
+          ...(graphId ? { graphId } : {}),
+          status: 'failed',
+          reason: 'execution_graph_resume_unavailable',
+        },
+      };
+  return {
+    content: 'Execution graph approval was resolved, but the persisted execution graph could not be resumed. Please retry the request.',
+    ...(metadata ? { metadata } : {}),
+  };
 }
 
 export function syncPendingApprovalsFromExecutor(input: {
@@ -226,15 +201,6 @@ export async function handleApprovalMessage(input: {
   completePendingAction: (actionId: string, nowMs?: number) => void;
   takeApprovalFollowUp: (approvalId: string, decision: 'approved' | 'denied') => string | null;
   clearApprovalFollowUp: (approvalId: string) => void;
-  resumeStoredToolLoopPendingAction: (
-    pendingAction: PendingActionRecord,
-    options?: {
-      approvalId?: string;
-      pendingActionAlreadyCleared?: boolean;
-      approvalResult?: ToolApprovalDecisionResult;
-      ctx?: AgentContext;
-    },
-  ) => Promise<ApprovalOrchestrationResponse | null>;
   resumeStoredExecutionGraphPendingAction: (
     pendingAction: PendingActionRecord,
     options?: {
@@ -390,10 +356,6 @@ export async function handleApprovalMessage(input: {
       approvalResult,
       stateAgentId: pendingAction.scope.agentId,
       completePendingAction: input.completePendingAction,
-      resumeStoredToolLoopPendingAction: (action, options) => input.resumeStoredToolLoopPendingAction(
-        action,
-        { ...options, ctx: input.ctx },
-      ),
       resumeStoredExecutionGraphPendingAction: input.resumeStoredExecutionGraphPendingAction,
       normalizeApprovalContinuationResponse: input.normalizeApprovalContinuationResponse,
       withCurrentPendingActionMetadata: input.withCurrentPendingActionMetadata,

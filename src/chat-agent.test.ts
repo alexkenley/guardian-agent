@@ -6,9 +6,81 @@ import { CodeSessionStore } from './runtime/code-sessions.js';
 import { ConversationService } from './runtime/conversation.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
 import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
+import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
+import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
 import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './runtime/intent-gateway.js';
-import { buildToolLoopResumePayload } from './runtime/chat-agent/tool-loop-resume.js';
+import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
+import { buildToolLoopResumePayload, readToolLoopResumePayload } from './runtime/chat-agent/tool-loop-resume.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
+
+function createToolLoopGraphPendingAction(input: {
+  executionGraphStore: ExecutionGraphStore;
+  pendingActionStore: PendingActionStore;
+  agentId: string;
+  userId: string;
+  channel: string;
+  surfaceId?: string;
+  requestId: string;
+  prompt: string;
+  approvalId: string;
+  originalUserContent: string;
+  route: PendingActionRecord['intent']['route'];
+  operation: PendingActionRecord['intent']['operation'];
+  summary?: string;
+  codeSessionId?: string;
+  continuation: Record<string, unknown>;
+}): PendingActionRecord {
+  const continuation = readToolLoopResumePayload(input.continuation);
+  if (!continuation) {
+    throw new Error('Invalid test tool-loop continuation payload.');
+  }
+  const result = recordChatContinuationGraphApproval({
+    graphStore: input.executionGraphStore,
+    userKey: `${input.userId}:${input.channel}`,
+    userId: input.userId,
+    channel: input.channel,
+    surfaceId: input.surfaceId,
+    agentId: input.agentId,
+    requestId: input.requestId,
+    ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+    action: {
+      prompt: input.prompt,
+      approvalIds: [input.approvalId],
+      originalUserContent: input.originalUserContent,
+      route: input.route,
+      operation: input.operation,
+      summary: input.summary,
+      continuation,
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+    },
+    setGraphPendingActionForRequest: (_userKey, surfaceId, action, nowMs) => {
+      const pendingAction = recordGraphPendingActionInterrupt({
+        store: input.pendingActionStore,
+        scope: {
+          agentId: input.agentId,
+          userId: input.userId,
+          channel: input.channel,
+          ...(surfaceId ? { surfaceId } : {}),
+        },
+        event: action.event,
+        originalUserContent: action.originalUserContent,
+        intent: action.intent,
+        artifactRefs: action.artifactRefs,
+        approvalSummaries: action.approvalSummaries,
+        nowMs,
+      });
+      if (!pendingAction) {
+        throw new Error('Failed to record graph pending action.');
+      }
+      return { action: pendingAction };
+    },
+    nowMs: 1,
+  });
+  if (!result.action) {
+    throw new Error('Failed to create graph pending action.');
+  }
+  return result.action;
+}
 
 describe('LLMChatAgent direct intent metadata', () => {
   it('suppresses blocked approval context for unrelated fresh turns before intent-gateway classification', async () => {
@@ -7061,7 +7133,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
-  it('stores a structured tool-loop resume payload for approval-blocked remote sandbox runs', async () => {
+  it('stores graph-backed tool-loop continuation state for approval-blocked remote sandbox runs', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
         debug: vi.fn(),
@@ -7075,6 +7147,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       sqlitePath: '/tmp/guardianagent-chat-agent-remote-tool-loop.test.sqlite',
       now: () => 1_710_000_000_000,
     });
+    const executionGraphStore = new ExecutionGraphStore();
     const llm = {
       name: 'ollama_cloud',
       chat: vi.fn(async () => ({
@@ -7131,6 +7204,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     };
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
     (agent as any).pendingActionStore = pendingActionStore;
+    (agent as any).executionGraphStore = executionGraphStore;
 
     const response = await agent.onMessage({
       id: 'msg-remote-pending',
@@ -7206,24 +7280,31 @@ describe('LLMChatAgent direct intent metadata', () => {
       channel: 'web',
       surfaceId: 'owner',
     });
-    expect(pending?.resume?.kind).toBe('tool_loop');
-    expect(pending?.resume?.payload).toMatchObject({
-      type: 'suspended_tool_loop',
-      codeContext: {
-        workspaceRoot: '/repo',
-        sessionId: 'session-123',
-      },
-      selectedExecutionProfile: {
-        providerName: 'ollama-cloud-coding',
-      },
-      pendingTools: [
-        {
-          approvalId: 'approval-1',
-          toolCallId: 'tool-call-1',
-          jobId: 'job-1',
-          name: 'code_remote_exec',
+    expect(pending?.resume?.kind).toBe('execution_graph');
+    const artifactId = pending?.graphInterrupt?.artifactRefs[0]?.artifactId;
+    expect(artifactId).toBeTruthy();
+    expect(executionGraphStore.getArtifact(pending!.graphInterrupt!.graphId, artifactId!)).toMatchObject({
+      artifactType: 'ChatContinuation',
+      content: {
+        payload: {
+          type: 'suspended_tool_loop',
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'session-123',
+          },
+          selectedExecutionProfile: {
+            providerName: 'ollama-cloud-coding',
+          },
+          pendingTools: [
+            {
+              approvalId: 'approval-1',
+              toolCallId: 'tool-call-1',
+              jobId: 'job-1',
+              name: 'code_remote_exec',
+            },
+          ],
         },
-      ],
+      },
     });
   });
 
@@ -7333,104 +7414,91 @@ describe('LLMChatAgent direct intent metadata', () => {
         sessionId: 'session-123',
       },
     }, selectedExecutionProfile);
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-remote-1',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'owner',
-      },
-      status: 'pending',
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve remote execution.',
-        approvalIds: ['approval-1'],
-      },
-      intent: {
-        route: 'coding_task',
-        operation: 'run',
-        originalUserContent: 'Run npm ci and then npm test in the same remote sandbox.',
-        entities: {
-          codingRemoteExecRequested: true,
-          profileId: 'Daytona',
-        },
-      },
-      resume: {
-        kind: 'tool_loop',
-        payload: buildToolLoopResumePayload({
-          llmMessages: [
-            { role: 'system', content: 'system prompt' },
-            { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
-            {
-              role: 'assistant',
-              content: '',
-              toolCalls: [
-                {
-                  id: 'tool-call-1',
-                  name: 'code_remote_exec',
-                  arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
-                },
-              ],
-            },
-          ],
-          pendingTools: [
-            {
-              approvalId: 'approval-1',
-              toolCallId: 'tool-call-1',
-              jobId: 'job-1',
-              name: 'code_remote_exec',
-            },
-          ],
-          originalMessage: {
-            id: 'msg-remote-1',
-            userId: 'owner',
-            channel: 'web',
-            surfaceId: 'owner',
-            principalId: 'owner',
-            principalRole: 'owner',
-            content: 'Run npm ci and then npm test in the same remote sandbox.',
-            timestamp: 1_710_000_000_000,
-            metadata: originalMetadata,
-          },
-          requestText: 'Run npm ci and then npm test in the same remote sandbox.',
-          referenceTime: 1_710_000_000_000,
-          allowModelMemoryMutation: false,
-          activeSkillIds: [],
-          contentTrustLevel: 'trusted',
-          taintReasons: [],
-          intentDecision: {
-            route: 'coding_task',
-            operation: 'run',
-            summary: 'Run remote sandbox commands.',
-            confidence: 'high',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            missingFields: [],
-            executionClass: 'repo_grounded',
-            preferredTier: 'external',
-            requiresRepoGrounding: true,
-            requiresToolSynthesis: true,
-            expectedContextPressure: 'medium',
-            preferredAnswerPath: 'tool_loop',
-            entities: {
-              codingRemoteExecRequested: true,
-              profileId: 'Daytona',
-            },
-          },
-          codeContext: {
-            workspaceRoot: '/repo',
-            sessionId: 'session-123',
-          },
-          selectedExecutionProfile,
-        }),
-      },
+    const executionGraphStore = new ExecutionGraphStore();
+    const pendingActionStore = new PendingActionStore({ enabled: false, sqlitePath: ':memory:' });
+    (agent as any).executionGraphStore = executionGraphStore;
+    (agent as any).pendingActionStore = pendingActionStore;
+    const pendingAction = createToolLoopGraphPendingAction({
+      executionGraphStore,
+      pendingActionStore,
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+      requestId: 'msg-remote-1',
+      prompt: 'Approve remote execution.',
+      approvalId: 'approval-1',
+      originalUserContent: 'Run npm ci and then npm test in the same remote sandbox.',
+      route: 'coding_task',
+      operation: 'run',
       codeSessionId: 'session-123',
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
+      continuation: buildToolLoopResumePayload({
+        llmMessages: [
+          { role: 'system', content: 'system prompt' },
+          { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'tool-call-1',
+                name: 'code_remote_exec',
+                arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
+              },
+            ],
+          },
+        ],
+        pendingTools: [
+          {
+            approvalId: 'approval-1',
+            toolCallId: 'tool-call-1',
+            jobId: 'job-1',
+            name: 'code_remote_exec',
+          },
+        ],
+        originalMessage: {
+          id: 'msg-remote-1',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'owner',
+          principalId: 'owner',
+          principalRole: 'owner',
+          content: 'Run npm ci and then npm test in the same remote sandbox.',
+          timestamp: 1_710_000_000_000,
+          metadata: originalMetadata,
+        },
+        requestText: 'Run npm ci and then npm test in the same remote sandbox.',
+        referenceTime: 1_710_000_000_000,
+        allowModelMemoryMutation: false,
+        activeSkillIds: [],
+        contentTrustLevel: 'trusted',
+        taintReasons: [],
+        intentDecision: {
+          route: 'coding_task',
+          operation: 'run',
+          summary: 'Run remote sandbox commands.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          entities: {
+            codingRemoteExecRequested: true,
+            profileId: 'Daytona',
+          },
+        },
+        codeContext: {
+          workspaceRoot: '/repo',
+          sessionId: 'session-123',
+        },
+        selectedExecutionProfile,
+      }),
+    });
 
     const result = await (agent as any).continuePendingActionAfterApproval(
       pendingAction,
@@ -7472,6 +7540,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       sqlitePath: '/tmp/guardianagent-chat-agent-remote-sequencing.test.sqlite',
       now: () => 1_710_000_000_000,
     });
+    const executionGraphStore = new ExecutionGraphStore();
     const llm = {
       name: 'ollama_cloud',
       chat: vi.fn(async () => ({
@@ -7539,6 +7608,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     };
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
     (agent as any).pendingActionStore = pendingActionStore;
+    (agent as any).executionGraphStore = executionGraphStore;
 
     const response = await agent.onMessage({
       id: 'msg-remote-sequencing',
@@ -7615,8 +7685,11 @@ describe('LLMChatAgent direct intent metadata', () => {
       channel: 'web',
       surfaceId: 'owner',
     });
-    expect(pending?.resume?.kind).toBe('tool_loop');
-    expect(pending?.resume?.payload).toMatchObject({
+    expect(pending?.resume?.kind).toBe('execution_graph');
+    const artifactId = pending?.graphInterrupt?.artifactRefs[0]?.artifactId;
+    const artifact = executionGraphStore.getArtifact(pending!.graphInterrupt!.graphId, artifactId!);
+    const payload = (artifact?.content as { payload?: Record<string, unknown> } | undefined)?.payload;
+    expect(payload).toMatchObject({
       pendingTools: [
         {
           approvalId: 'approval-1',
@@ -7626,7 +7699,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
       ],
     });
-    expect(((pending?.resume?.payload as Record<string, unknown>).llmMessages as Array<Record<string, unknown>>)
+    expect(((payload as Record<string, unknown>).llmMessages as Array<Record<string, unknown>>)
       .find((message) => message.role === 'assistant')?.toolCalls).toEqual([
       {
         id: 'tool-call-1',
@@ -7716,104 +7789,91 @@ describe('LLMChatAgent direct intent metadata', () => {
         sessionId: 'session-123',
       },
     }, selectedExecutionProfile);
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-remote-failure-1',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'owner',
-      },
-      status: 'pending',
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve remote execution.',
-        approvalIds: ['approval-1'],
-      },
-      intent: {
-        route: 'coding_task',
-        operation: 'run',
-        originalUserContent: 'Run npm ci and then npm test in the same remote sandbox.',
-        entities: {
-          codingRemoteExecRequested: true,
-          profileId: 'Daytona',
-        },
-      },
-      resume: {
-        kind: 'tool_loop',
-        payload: buildToolLoopResumePayload({
-          llmMessages: [
-            { role: 'system', content: 'system prompt' },
-            { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
-            {
-              role: 'assistant',
-              content: '',
-              toolCalls: [
-                {
-                  id: 'tool-call-1',
-                  name: 'code_remote_exec',
-                  arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
-                },
-              ],
-            },
-          ],
-          pendingTools: [
-            {
-              approvalId: 'approval-1',
-              toolCallId: 'tool-call-1',
-              jobId: 'job-1',
-              name: 'code_remote_exec',
-            },
-          ],
-          originalMessage: {
-            id: 'msg-remote-failure-1',
-            userId: 'owner',
-            channel: 'web',
-            surfaceId: 'owner',
-            principalId: 'owner',
-            principalRole: 'owner',
-            content: 'Run npm ci and then npm test in the same remote sandbox.',
-            timestamp: 1_710_000_000_000,
-            metadata: originalMetadata,
-          },
-          requestText: 'Run npm ci and then npm test in the same remote sandbox using the Daytona profile.',
-          referenceTime: 1_710_000_000_000,
-          allowModelMemoryMutation: false,
-          activeSkillIds: [],
-          contentTrustLevel: 'trusted',
-          taintReasons: [],
-          intentDecision: {
-            route: 'coding_task',
-            operation: 'run',
-            summary: 'Run remote sandbox commands.',
-            confidence: 'high',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            missingFields: [],
-            executionClass: 'repo_grounded',
-            preferredTier: 'external',
-            requiresRepoGrounding: true,
-            requiresToolSynthesis: true,
-            expectedContextPressure: 'medium',
-            preferredAnswerPath: 'tool_loop',
-            entities: {
-              codingRemoteExecRequested: true,
-              profileId: 'Daytona',
-            },
-          },
-          codeContext: {
-            workspaceRoot: '/repo',
-            sessionId: 'session-123',
-          },
-          selectedExecutionProfile,
-        }),
-      },
+    const executionGraphStore = new ExecutionGraphStore();
+    const pendingActionStore = new PendingActionStore({ enabled: false, sqlitePath: ':memory:' });
+    (agent as any).executionGraphStore = executionGraphStore;
+    (agent as any).pendingActionStore = pendingActionStore;
+    const pendingAction = createToolLoopGraphPendingAction({
+      executionGraphStore,
+      pendingActionStore,
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+      requestId: 'msg-remote-failure-1',
+      prompt: 'Approve remote execution.',
+      approvalId: 'approval-1',
+      originalUserContent: 'Run npm ci and then npm test in the same remote sandbox.',
+      route: 'coding_task',
+      operation: 'run',
       codeSessionId: 'session-123',
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
+      continuation: buildToolLoopResumePayload({
+        llmMessages: [
+          { role: 'system', content: 'system prompt' },
+          { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'tool-call-1',
+                name: 'code_remote_exec',
+                arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
+              },
+            ],
+          },
+        ],
+        pendingTools: [
+          {
+            approvalId: 'approval-1',
+            toolCallId: 'tool-call-1',
+            jobId: 'job-1',
+            name: 'code_remote_exec',
+          },
+        ],
+        originalMessage: {
+          id: 'msg-remote-failure-1',
+          userId: 'owner',
+          channel: 'web',
+          surfaceId: 'owner',
+          principalId: 'owner',
+          principalRole: 'owner',
+          content: 'Run npm ci and then npm test in the same remote sandbox.',
+          timestamp: 1_710_000_000_000,
+          metadata: originalMetadata,
+        },
+        requestText: 'Run npm ci and then npm test in the same remote sandbox using the Daytona profile.',
+        referenceTime: 1_710_000_000_000,
+        allowModelMemoryMutation: false,
+        activeSkillIds: [],
+        contentTrustLevel: 'trusted',
+        taintReasons: [],
+        intentDecision: {
+          route: 'coding_task',
+          operation: 'run',
+          summary: 'Run remote sandbox commands.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          entities: {
+            codingRemoteExecRequested: true,
+            profileId: 'Daytona',
+          },
+        },
+        codeContext: {
+          workspaceRoot: '/repo',
+          sessionId: 'session-123',
+        },
+        selectedExecutionProfile,
+      }),
+    });
 
     const result = await (agent as any).continuePendingActionAfterApproval(
       pendingAction,

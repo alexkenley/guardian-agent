@@ -32,7 +32,6 @@ export type PendingActionBlockerKind =
   | 'missing_context';
 
 export type PendingActionResumeKind =
-  | 'tool_loop'
   | 'execution_graph';
 
 export type PendingActionTransferPolicy =
@@ -252,7 +251,6 @@ function normalizeBlockerKind(value: unknown): PendingActionBlockerKind {
 
 function normalizeResumeKind(value: unknown): PendingActionResumeKind | undefined {
   switch (value) {
-    case 'tool_loop':
     case 'execution_graph':
       return value;
     default:
