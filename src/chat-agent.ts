@@ -40,7 +40,6 @@ import {
   lacksUsableAssistantContent as _lacksUsableAssistantContent,
   looksLikeOngoingWorkResponse as _looksLikeOngoingWorkResponse,
 } from './util/assistant-response-shape.js';
-import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
   buildAnswerFirstSkillFallbackResponse,
   buildAnswerFirstSkillCorrectionPrompt,
@@ -147,7 +146,7 @@ import {
   resolvePagedListWindow,
 } from './runtime/list-continuation.js';
 import type { ToolApprovalDecisionResult, ToolExecutor } from './tools/executor.js';
-import type { PrincipalRole, ToolJobRecord } from './tools/types.js';
+import type { PrincipalRole } from './tools/types.js';
 import {
   ChatAgentApprovalState,
   type ApprovalFollowUpCopy,
@@ -173,6 +172,9 @@ import {
 import {
   syncCodeSessionRuntimeState as syncCodeSessionRuntimeStateHelper,
 } from './runtime/chat-agent/code-session-runtime-state.js';
+import {
+  tryDirectRecentToolReport as tryDirectRecentToolReportHelper,
+} from './runtime/chat-agent/recent-tool-report.js';
 import {
   normalizeFilesystemResumePrincipalRole,
   type SecondBrainMutationResumePayload,
@@ -4523,54 +4525,11 @@ type DirectIntentShadowCandidate =
     message: UserMessage,
     resolvedCodeSession?: ResolvedCodeSessionContext | null,
   ): string | null {
-    if (!this.tools?.isEnabled()) return null;
-    if (!_isToolReportQuery(message.content)) return null;
-
-    const jobs = this.selectMostRecentToolReportJobs(
-      this.listScopedRecentToolReportJobs(message, resolvedCodeSession),
-    );
-
-    const report = _formatToolReport(jobs);
-    return report || null;
-  }
-
-  private listScopedRecentToolReportJobs(
-    message: UserMessage,
-    resolvedCodeSession?: ResolvedCodeSessionContext | null,
-  ): ToolJobRecord[] {
-    const codeSessionId = resolvedCodeSession?.session.id?.trim();
-    if (codeSessionId) {
-      return this.tools?.listJobsForCodeSession(codeSessionId, 50) ?? [];
-    }
-    return (this.tools?.listJobs(50) ?? [])
-      .filter((job) => job.userId === message.userId && job.channel === message.channel);
-  }
-
-  private selectMostRecentToolReportJobs(jobs: ToolJobRecord[]): ToolJobRecord[] {
-    if (!Array.isArray(jobs) || jobs.length === 0) {
-      return [];
-    }
-    const latestRequestId = this.normalizeToolReportRequestId(jobs[0]?.requestId);
-    if (latestRequestId) {
-      const requestScopedJobs = jobs.filter((job) =>
-        this.normalizeToolReportRequestId(job.requestId) === latestRequestId);
-      if (requestScopedJobs.length > 0) {
-        return requestScopedJobs;
-      }
-    }
-    const leadingUnscopedJobs: ToolJobRecord[] = [];
-    for (const job of jobs) {
-      if (this.normalizeToolReportRequestId(job.requestId)) {
-        break;
-      }
-      leadingUnscopedJobs.push(job);
-    }
-    return leadingUnscopedJobs.length > 0 ? leadingUnscopedJobs : jobs;
-  }
-
-  private normalizeToolReportRequestId(requestId: string | undefined): string | null {
-    const normalized = typeof requestId === 'string' ? requestId.trim() : '';
-    return normalized.length > 0 ? normalized : null;
+    return tryDirectRecentToolReportHelper({
+      tools: this.tools,
+      message,
+      resolvedCodeSession,
+    });
   }
 
   private async executeDirectCodeSessionTool(

@@ -209,6 +209,12 @@ Checkpoint after the code-session runtime-state extraction:
 - `src/chat-agent.ts` still triggers session state synchronization at turn boundaries, but it no longer owns the data-shaping logic for code-session work state. This keeps the monolith closer to turn orchestration while code-session state can evolve and be tested independently.
 - Focused coverage now exists at `src/runtime/chat-agent/code-session-runtime-state.test.ts`, including plan summary formatting, workflow extraction, and store-update projection.
 
+Checkpoint after the recent tool-report extraction:
+
+- Recent tool-report lookup moved from `src/chat-agent.ts` into `src/runtime/chat-agent/recent-tool-report.ts`: query recognition, code-session scoped job lookup, latest request-id grouping, leading unscoped job grouping, and report rendering now have a focused helper.
+- `src/chat-agent.ts` still decides where the direct report response is offered in the turn flow, but no longer owns the job selection and formatting details inline.
+- Focused coverage now exists at `src/runtime/chat-agent/recent-tool-report.test.ts`, including code-session scoping, request grouping, unscoped job grouping, and explicit report-query gating.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
