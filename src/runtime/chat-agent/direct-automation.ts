@@ -15,6 +15,7 @@ import type {
 } from '../pending-actions.js';
 import { toPendingActionClientMetadata } from '../pending-actions.js';
 import { toPendingActionEntities } from './intent-gateway-orchestration.js';
+import type { AutomationApprovalContinuationStore } from './automation-approval-continuation.js';
 
 interface DirectAutomationClarificationMetadata {
   blockerKind: PendingActionBlocker['kind'];
@@ -39,13 +40,7 @@ export interface DirectAutomationDeps {
     approvalId: string,
     copy: { approved: string; denied: string },
   ) => void;
-  clearAutomationApprovalContinuation: (userKey: string) => void;
-  setAutomationApprovalContinuation: (
-    userKey: string,
-    originalMessage: UserMessage,
-    ctx: AgentContext,
-    pendingApprovalIds: string[],
-  ) => void;
+  automationContinuations: Pick<AutomationApprovalContinuationStore, 'clear' | 'set'>;
   formatPendingApprovalPrompt: (
     ids: string[],
     summaries?: Map<string, { toolName: string; argsPreview: string }>,
@@ -213,7 +208,7 @@ export async function tryDirectAutomationAuthoring(input: {
     resolvePendingApprovalMetadata: (ids, fallback) => resolvePendingApprovalMetadata(deps.tools, ids, fallback),
   }, input.options);
   if (!result) {
-    deps.clearAutomationApprovalContinuation(input.userKey);
+    deps.automationContinuations.clear(input.userKey);
     return null;
   }
   if (trackedPendingApprovalIds.length > 0) {
@@ -247,9 +242,9 @@ export async function tryDirectAutomationAuthoring(input: {
     };
   }
   if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
-    deps.setAutomationApprovalContinuation(input.userKey, input.message, input.ctx, trackedPendingApprovalIds);
+    deps.automationContinuations.set(input.userKey, input.message, input.ctx, trackedPendingApprovalIds);
   } else {
-    deps.clearAutomationApprovalContinuation(input.userKey);
+    deps.automationContinuations.clear(input.userKey);
   }
   return result;
 }

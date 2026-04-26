@@ -185,11 +185,16 @@ import {
   type DirectSecondBrainMutationToolName,
 } from './runtime/chat-agent/direct-second-brain-mutation.js';
 import {
+  type DirectAutomationDeps,
   tryDirectAutomationAuthoring as tryDirectAutomationAuthoringHelper,
   tryDirectAutomationControl as tryDirectAutomationControlHelper,
   tryDirectAutomationOutput as tryDirectAutomationOutputHelper,
   tryDirectBrowserAutomation as tryDirectBrowserAutomationHelper,
 } from './runtime/chat-agent/direct-automation.js';
+import {
+  continueAutomationAfterApproval as continueAutomationAfterApprovalHelper,
+  InMemoryAutomationApprovalContinuationStore,
+} from './runtime/chat-agent/automation-approval-continuation.js';
 import {
   tryDirectSecondBrainRead as tryDirectSecondBrainReadHelper,
 } from './runtime/chat-agent/direct-second-brain-read.js';
@@ -229,7 +234,6 @@ import {
 } from './runtime/chat-agent/tool-loop-runtime.js';
 import {
   ChatAgentOrchestrationState,
-  PENDING_APPROVAL_TTL_MS,
 } from './runtime/chat-agent/orchestration-state.js';
 import {
   buildGatewayClarificationResponse as buildGatewayClarificationResponseHelper,
@@ -2006,8 +2010,9 @@ type DirectIntentShadowCandidate =
   private skillResolver?: SkillResolver;
   private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
-  /** Approval follow-up copy, prompt formatting, and remediation continuations. */
+  /** Approval follow-up copy and prompt formatting. */
   private readonly approvalState: ChatAgentApprovalState;
+  private readonly automationApprovalContinuations = new InMemoryAutomationApprovalContinuationStore();
   /** Shared blocked-work and continuity helpers extracted from the chat-agent monolith. */
   private readonly orchestrationState: ChatAgentOrchestrationState;
   get pendingActionStore(): PendingActionStore | undefined {
@@ -6842,15 +6847,7 @@ type DirectIntentShadowCandidate =
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       takeApprovalFollowUp: (approvalId, decision) => this.takeApprovalFollowUp(approvalId, decision),
       clearApprovalFollowUp: (approvalId) => this.clearApprovalFollowUp(approvalId),
-      getAutomationApprovalContinuation: (userKey, nowMs) => this.getAutomationApprovalContinuation(userKey, nowMs),
-      setAutomationApprovalContinuation: (userKey, originalMessage, automationCtx, pendingApprovalIds, expiresAt) => this.setAutomationApprovalContinuation(
-        userKey,
-        originalMessage,
-        automationCtx,
-        pendingApprovalIds,
-        expiresAt,
-      ),
-      clearAutomationApprovalContinuation: (userKey) => this.clearAutomationApprovalContinuation(userKey),
+      automationContinuations: this.automationApprovalContinuations,
       tryDirectAutomationAuthoring: (automationMessage, automationCtx, userKey, codeContext, options) => this.tryDirectAutomationAuthoring(
         automationMessage,
         automationCtx,
@@ -7145,39 +7142,12 @@ type DirectIntentShadowCandidate =
     this.approvalState.clearApprovalFollowUp(approvalId);
   }
 
-  private getAutomationApprovalContinuation(
-    userKey: string,
-    nowMs: number = Date.now(),
-  ) {
-    return this.approvalState.getAutomationApprovalContinuation(userKey, nowMs);
-  }
-
-  private setAutomationApprovalContinuation(
-    userKey: string,
-    originalMessage: UserMessage,
-    ctx: AgentContext,
-    pendingApprovalIds: string[],
-    expiresAt: number = Date.now() + PENDING_APPROVAL_TTL_MS,
-  ): void {
-    this.approvalState.setAutomationApprovalContinuation(
-      userKey,
-      originalMessage,
-      ctx,
-      pendingApprovalIds,
-      expiresAt,
-    );
-  }
-
-  private clearAutomationApprovalContinuation(userKey: string): void {
-    this.approvalState.clearAutomationApprovalContinuation(userKey);
-  }
-
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null {
     return this.approvalState.takeApprovalFollowUp(approvalId, decision);
   }
 
   hasAutomationApprovalContinuation(approvalId: string): boolean {
-    return this.approvalState.hasAutomationApprovalContinuation(approvalId);
+    return this.automationApprovalContinuations.hasApprovalId(approvalId);
   }
 
   syncPendingApprovalsFromExecutorForScope(args: {
@@ -7204,7 +7174,7 @@ type DirectIntentShadowCandidate =
     for (const approvalId of approvalIds) {
       this.clearApprovalFollowUp(approvalId);
     }
-    this.clearAutomationApprovalContinuation(`${args.userId}:${args.channel}`);
+    this.automationApprovalContinuations.clear(`${args.userId}:${args.channel}`);
   }
 
   async continueDirectRouteAfterApproval(
@@ -7234,21 +7204,17 @@ type DirectIntentShadowCandidate =
     approvalId: string,
     decision: 'approved' | 'denied',
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const match = this.approvalState.findAutomationApprovalContinuation(approvalId);
-    if (!match) return null;
-    const { userKey, continuation } = match;
-    if (decision !== 'approved') {
-      this.clearAutomationApprovalContinuation(userKey);
-      return null;
-    }
-    const stillPending = continuation.pendingApprovalIds.filter((id) => id !== approvalId.trim());
-    if (stillPending.length > 0) {
-      this.setAutomationApprovalContinuation(userKey, continuation.originalMessage, continuation.ctx, stillPending, continuation.expiresAt);
-      return null;
-    }
-    this.clearAutomationApprovalContinuation(userKey);
-    return this.tryDirectAutomationAuthoring(continuation.originalMessage, continuation.ctx, userKey, undefined, {
-      assumeAuthoring: true,
+    return continueAutomationAfterApprovalHelper({
+      approvalId,
+      decision,
+      continuations: this.automationApprovalContinuations,
+      runAutomationAuthoring: (message, ctx, userKey, options) => this.tryDirectAutomationAuthoring(
+        message,
+        ctx,
+        userKey,
+        undefined,
+        options,
+      ),
     });
   }
 
@@ -7521,6 +7487,32 @@ type DirectIntentShadowCandidate =
       : `I drafted a Gmail message to ${to} with subject "${subject}".`;
   }
 
+  private buildDirectAutomationDeps(): DirectAutomationDeps {
+    return {
+      agentId: this.id,
+      tools: this.tools,
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      automationContinuations: this.automationApprovalContinuations,
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
+      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+      ),
+      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
+        nextUserKey,
+        surfaceId,
+        action,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    };
+  }
+
   private async tryDirectAutomationAuthoring(
     message: UserMessage,
     ctx: AgentContext,
@@ -7538,35 +7530,7 @@ type DirectIntentShadowCandidate =
       userKey,
       codeContext,
       options,
-    }, {
-      agentId: this.id,
-      tools: this.tools,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
-      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
-        nextUserKey,
-        originalMessage,
-        nextCtx,
-        pendingApprovalIds,
-      ),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
-      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
-        userId,
-        channel,
-        surfaceId,
-        action,
-      ),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
+    }, this.buildDirectAutomationDeps());
   }
 
   private async tryDirectAutomationControl(
@@ -7582,35 +7546,7 @@ type DirectIntentShadowCandidate =
       userKey,
       intentDecision,
       continuityThread,
-    }, {
-      agentId: this.id,
-      tools: this.tools,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
-      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
-        nextUserKey,
-        originalMessage,
-        nextCtx,
-        pendingApprovalIds,
-      ),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
-      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
-        userId,
-        channel,
-        surfaceId,
-        action,
-      ),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
+    }, this.buildDirectAutomationDeps());
   }
 
   private async tryDirectAutomationOutput(
@@ -7622,35 +7558,7 @@ type DirectIntentShadowCandidate =
       message,
       ctx,
       intentDecision,
-    }, {
-      agentId: this.id,
-      tools: this.tools,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
-      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
-        nextUserKey,
-        originalMessage,
-        nextCtx,
-        pendingApprovalIds,
-      ),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
-      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
-        userId,
-        channel,
-        surfaceId,
-        action,
-      ),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
+    }, this.buildDirectAutomationDeps());
   }
 
   private async tryDirectBrowserAutomation(
@@ -7668,35 +7576,7 @@ type DirectIntentShadowCandidate =
       codeContext,
       intentDecision,
       continuityThread,
-    }, {
-      agentId: this.id,
-      tools: this.tools,
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      clearAutomationApprovalContinuation: (nextUserKey) => this.clearAutomationApprovalContinuation(nextUserKey),
-      setAutomationApprovalContinuation: (nextUserKey, originalMessage, nextCtx, pendingApprovalIds) => this.setAutomationApprovalContinuation(
-        nextUserKey,
-        originalMessage,
-        nextCtx,
-        pendingApprovalIds,
-      ),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      parsePendingActionUserKey: (nextUserKey) => this.parsePendingActionUserKey(nextUserKey),
-      setClarificationPendingAction: (userId, channel, surfaceId, action) => this.setClarificationPendingAction(
-        userId,
-        channel,
-        surfaceId,
-        action,
-      ),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
+    }, this.buildDirectAutomationDeps());
   }
 
   private async tryRepairGenericIntentGatewayPlanWithFrontier(input: {

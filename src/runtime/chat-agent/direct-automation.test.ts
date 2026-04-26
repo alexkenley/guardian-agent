@@ -84,8 +84,10 @@ function makeDeps(overrides: Partial<DirectAutomationDeps> = {}): DirectAutomati
       getApprovalSummaries: () => new Map(),
     } as DirectAutomationDeps['tools'],
     setApprovalFollowUp: () => undefined,
-    clearAutomationApprovalContinuation: () => undefined,
-    setAutomationApprovalContinuation: () => undefined,
+    automationContinuations: {
+      clear: () => undefined,
+      set: () => undefined,
+    },
     formatPendingApprovalPrompt: (ids) => `Approve: ${ids.join(', ')}`,
     parsePendingActionUserKey: () => ({ userId: 'user-1', channel: 'web' }),
     setClarificationPendingAction: () => ({ action: makePendingAction('Which automation?') }),
@@ -197,7 +199,10 @@ describe('direct-automation', () => {
           content: 'Approval required.',
           metadata: { pendingAction: { id: 'pending-1' } },
         }),
-        setAutomationApprovalContinuation,
+        automationContinuations: {
+          clear: () => undefined,
+          set: setAutomationApprovalContinuation,
+        },
       }),
     );
 

@@ -9,9 +9,12 @@ import {
   APPROVAL_COMMAND_PATTERN,
   APPROVAL_CONFIRM_PATTERN,
   APPROVAL_DENY_PATTERN,
-  type AutomationApprovalContinuation,
 } from './approval-state.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
+import {
+  resolveAutomationApprovalDecisionContinuation,
+  type AutomationApprovalContinuationStore,
+} from './automation-approval-continuation.js';
 
 export interface ApprovalOrchestrationResponse {
   content: string;
@@ -179,15 +182,7 @@ export async function handleApprovalMessage(input: {
   completePendingAction: (actionId: string, nowMs?: number) => void;
   takeApprovalFollowUp: (approvalId: string, decision: 'approved' | 'denied') => string | null;
   clearApprovalFollowUp: (approvalId: string) => void;
-  getAutomationApprovalContinuation: (userKey: string, nowMs?: number) => AutomationApprovalContinuation | null;
-  setAutomationApprovalContinuation: (
-    userKey: string,
-    originalMessage: UserMessage,
-    ctx: AgentContext,
-    pendingApprovalIds: string[],
-    expiresAt?: number,
-  ) => void;
-  clearAutomationApprovalContinuation: (userKey: string) => void;
+  automationContinuations: AutomationApprovalContinuationStore;
   tryDirectAutomationAuthoring: (
     message: UserMessage,
     ctx: AgentContext,
@@ -314,81 +309,36 @@ export async function handleApprovalMessage(input: {
     }
   }
 
-  const continuation = input.getAutomationApprovalContinuation(userKey);
-  if (continuation) {
-    const affected = targetIds.filter((id) => continuation.pendingApprovalIds.includes(id));
-    if (decision === 'approved' && affected.length > 0) {
-      const stillPending = continuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
-      if (stillPending.length === 0) {
-        input.clearAutomationApprovalContinuation(userKey);
-        const retry = await input.tryDirectAutomationAuthoring(continuation.originalMessage, input.ctx, userKey, undefined, {
-          assumeAuthoring: true,
-        });
-        if (retry) {
-          results.push('');
-          results.push(retry.content);
-          return {
-            content: results.join('\n'),
-            metadata: input.withCurrentPendingActionMetadata(
-              retry.metadata,
-              input.message.userId,
-              input.message.channel,
-              input.message.surfaceId,
-            ),
-          };
-        }
-      } else {
-        input.setAutomationApprovalContinuation(
-          userKey,
-          continuation.originalMessage,
-          continuation.ctx,
-          stillPending,
-          continuation.expiresAt,
-        );
-      }
-    } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
-      input.clearAutomationApprovalContinuation(userKey);
-    }
-  }
-
-  const fallbackContinuation = input.getAutomationApprovalContinuation(userKey);
-  if (decision === 'approved' && fallbackContinuation && approvedIds.size > 0) {
-    const livePendingIds = new Set(input.tools.listPendingApprovalIdsForUser(
-      input.message.userId,
-      input.message.channel,
-      {
-        includeUnscoped: input.message.channel === 'web',
-        principalId: input.message.principalId ?? input.message.userId,
-      },
-    ));
-    const stillPending = fallbackContinuation.pendingApprovalIds.filter((id) => livePendingIds.has(id));
-    if (stillPending.length === 0) {
-      input.clearAutomationApprovalContinuation(userKey);
-      const retry = await input.tryDirectAutomationAuthoring(fallbackContinuation.originalMessage, input.ctx, userKey, undefined, {
-        assumeAuthoring: true,
-      });
-      if (retry) {
-        results.push('');
-        results.push(retry.content);
-        return {
-          content: results.join('\n'),
-          metadata: input.withCurrentPendingActionMetadata(
-            retry.metadata,
-            input.message.userId,
-            input.message.channel,
-            input.message.surfaceId,
-          ),
-        };
-      }
-    } else if (stillPending.length !== fallbackContinuation.pendingApprovalIds.length) {
-      input.setAutomationApprovalContinuation(
-        userKey,
-        fallbackContinuation.originalMessage,
-        fallbackContinuation.ctx,
-        stillPending,
-        fallbackContinuation.expiresAt,
-      );
-    }
+  const automationContinuation = await resolveAutomationApprovalDecisionContinuation({
+    userKey,
+    message: input.message,
+    ctx: input.ctx,
+    decision,
+    targetIds,
+    approvedIds,
+    failedIds,
+    continuations: input.automationContinuations,
+    tools: input.tools,
+    runAutomationAuthoring: (automationMessage, automationCtx, automationUserKey, options) => input.tryDirectAutomationAuthoring(
+      automationMessage,
+      automationCtx,
+      automationUserKey,
+      undefined,
+      options,
+    ),
+  });
+  if (automationContinuation) {
+    results.push('');
+    results.push(automationContinuation.content);
+    return {
+      content: results.join('\n'),
+      metadata: input.withCurrentPendingActionMetadata(
+        automationContinuation.metadata,
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+      ),
+    };
   }
 
   if (remaining.length > 0) {

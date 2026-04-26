@@ -1,4 +1,3 @@
-import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import {
   describePendingApproval,
@@ -17,20 +16,12 @@ export interface ApprovalFollowUpCopy {
   denied?: string;
 }
 
-export interface AutomationApprovalContinuation {
-  originalMessage: UserMessage;
-  ctx: AgentContext;
-  pendingApprovalIds: string[];
-  expiresAt: number;
-}
-
 export interface ChatAgentApprovalStateDeps {
   tools?: Pick<ToolExecutor, 'getApprovalSummaries'> | null;
 }
 
 export class ChatAgentApprovalState {
   private readonly approvalFollowUps = new Map<string, ApprovalFollowUpCopy>();
-  private readonly automationApprovalContinuations = new Map<string, AutomationApprovalContinuation>();
   private readonly tools?: Pick<ToolExecutor, 'getApprovalSummaries'> | null;
 
   constructor(deps: ChatAgentApprovalStateDeps) {
@@ -56,65 +47,6 @@ export class ChatAgentApprovalState {
     return decision === 'approved'
       ? (copy.approved ?? null)
       : (copy.denied ?? null);
-  }
-
-  getAutomationApprovalContinuation(
-    userKey: string,
-    nowMs: number = Date.now(),
-  ): AutomationApprovalContinuation | null {
-    const state = this.automationApprovalContinuations.get(userKey);
-    if (!state) return null;
-    if (state.expiresAt <= nowMs) {
-      this.automationApprovalContinuations.delete(userKey);
-      return null;
-    }
-    return state;
-  }
-
-  setAutomationApprovalContinuation(
-    userKey: string,
-    originalMessage: UserMessage,
-    ctx: AgentContext,
-    pendingApprovalIds: string[],
-    expiresAt: number = Date.now() + PENDING_APPROVAL_TTL_MS,
-  ): void {
-    const uniqueIds = [...new Set(pendingApprovalIds.filter((id) => id.trim().length > 0))];
-    if (uniqueIds.length === 0) {
-      this.automationApprovalContinuations.delete(userKey);
-      return;
-    }
-    this.automationApprovalContinuations.set(userKey, {
-      originalMessage,
-      ctx,
-      pendingApprovalIds: uniqueIds,
-      expiresAt,
-    });
-  }
-
-  clearAutomationApprovalContinuation(userKey: string): void {
-    this.automationApprovalContinuations.delete(userKey);
-  }
-
-  hasAutomationApprovalContinuation(approvalId: string): boolean {
-    const normalizedId = approvalId.trim();
-    if (!normalizedId) return false;
-    for (const continuation of this.automationApprovalContinuations.values()) {
-      if (continuation.pendingApprovalIds.includes(normalizedId)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  findAutomationApprovalContinuation(approvalId: string) {
-    const normalizedId = approvalId.trim();
-    if (!normalizedId) return null;
-    for (const [userKey, continuation] of this.automationApprovalContinuations.entries()) {
-      if (continuation.pendingApprovalIds.includes(normalizedId)) {
-        return { userKey, continuation };
-      }
-    }
-    return null;
   }
 
   resolveApprovalTargets(

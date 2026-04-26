@@ -138,6 +138,13 @@ Checkpoint after the first approval/resume debt-burn slice:
 - CLI and Telegram no longer synthesize a replay turn when the approval decision API already returns an explicit continuation directive. Direct continuation responses and pending-action resume metadata are authoritative for those flows.
 - Remaining approval/resume overlap after this slice: chat automation approval continuations, worker-manager direct automation continuations, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
 
+Checkpoint after the automation-continuation modularization slice:
+
+- Chat automation approval continuation state moved out of `ChatAgentApprovalState` into `automation-approval-continuation.ts`, with focused store/resume tests.
+- `approval-orchestration.ts` now delegates automation retry/partial-approval bookkeeping to that module instead of owning the continuation algorithm inline.
+- `direct-automation.ts` depends on a continuation store interface rather than bespoke `set`/`clear` callbacks, and `ChatAgent` now has one direct-automation dependency boundary instead of repeated callback blocks.
+- This is a modularization step, not the final architecture. The continuation store is still in-memory; the next debt-burn step is to replace its backing state with graph interrupt / pending-action resume metadata, then delete the in-memory implementation.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
