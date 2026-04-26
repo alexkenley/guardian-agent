@@ -26,9 +26,8 @@ import type { SecondBrainService } from '../second-brain/second-brain-service.js
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 import {
-  buildToolLoopResumePayload,
+  buildToolLoopPendingApprovalResume,
   readToolLoopResumePayload,
-  type StoredToolLoopPendingTool,
 } from './tool-loop-resume.js';
 import {
   executeToolsConflictAware,
@@ -426,20 +425,25 @@ export async function resumeStoredToolLoopPendingAction(input: {
       if (allBlocked) {
         llmMessages.splice(-toolResults.length, toolResults.length);
         pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
-        const pendingTools: StoredToolLoopPendingTool[] = toolResults
-          .filter((settled): settled is PromiseFulfilledResult<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }> =>
-            settled.status === 'fulfilled' && (settled.value.result as Record<string, unknown>).status === 'pending_approval')
-          .map((settled) => ({
-            approvalId: String(settled.value.result.approvalId),
-            toolCallId: settled.value.toolCall.id,
-            jobId: String(settled.value.result.jobId),
-            name: settled.value.toolCall.name,
-          }));
         const originalMessage: UserMessage = {
           ...resume.originalMessage,
           ...(resume.originalMessage.metadata ? { metadata: { ...resume.originalMessage.metadata } } : {}),
         };
         const summaries = input.tools.getApprovalSummaries(pendingIds);
+        const nextResume = buildToolLoopPendingApprovalResume({
+          toolResults,
+          llmMessages,
+          originalMessage,
+          requestText: resume.requestText,
+          referenceTime: resume.referenceTime,
+          allowModelMemoryMutation: resume.allowModelMemoryMutation,
+          activeSkillIds: resume.activeSkillIds,
+          contentTrustLevel: currentContextTrustLevel,
+          taintReasons: [...currentTaintReasons],
+          intentDecision: resume.intentDecision,
+          codeContext: resume.codeContext,
+          selectedExecutionProfile: resume.selectedExecutionProfile,
+        });
         const pendingActionResult = input.setPendingApprovalAction(
           input.pendingAction.scope.userId,
           input.pendingAction.scope.channel,
@@ -456,23 +460,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
             resolution: input.pendingAction.intent.resolution,
             missingFields: input.pendingAction.intent.missingFields,
             entities: input.pendingAction.intent.entities,
-            resume: {
-              kind: 'tool_loop',
-              payload: buildToolLoopResumePayload({
-                llmMessages,
-                pendingTools,
-                originalMessage,
-                requestText: resume.requestText,
-                referenceTime: resume.referenceTime,
-                allowModelMemoryMutation: resume.allowModelMemoryMutation,
-                activeSkillIds: resume.activeSkillIds,
-                contentTrustLevel: currentContextTrustLevel,
-                taintReasons: [...currentTaintReasons],
-                intentDecision: resume.intentDecision,
-                codeContext: resume.codeContext,
-                selectedExecutionProfile: resume.selectedExecutionProfile,
-              }),
-            },
+            ...(nextResume ? { resume: nextResume } : {}),
             codeSessionId: input.pendingAction.codeSessionId ?? resume.codeContext?.sessionId,
           },
         );

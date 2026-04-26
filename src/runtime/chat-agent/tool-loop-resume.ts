@@ -1,6 +1,7 @@
 import type { UserMessage } from '../../agent/types.js';
 import { isRecord, toNumber, toString } from '../../chat-agent-helpers.js';
 import type { ChatMessage } from '../../llm/types.js';
+import type { PendingActionResume } from '../pending-actions.js';
 import {
   EXECUTION_PROFILE_METADATA_KEY,
   readSelectedExecutionProfileMetadata,
@@ -28,6 +29,15 @@ export interface StoredToolLoopPendingTool {
   toolCallId: string;
   jobId: string;
   name: string;
+}
+
+export interface ToolLoopPendingApprovalToolResult {
+  toolCall: {
+    id: string;
+    name: string;
+    arguments?: string;
+  };
+  result: Record<string, unknown>;
 }
 
 export interface ToolLoopResumePayload {
@@ -119,6 +129,56 @@ export function buildToolLoopResumePayload(input: {
           },
         }
       : {}),
+  };
+}
+
+export function collectToolLoopPendingApprovalTools(
+  toolResults: readonly PromiseSettledResult<ToolLoopPendingApprovalToolResult>[],
+): StoredToolLoopPendingTool[] {
+  return toolResults
+    .filter((settled): settled is PromiseFulfilledResult<ToolLoopPendingApprovalToolResult> =>
+      settled.status === 'fulfilled' && settled.value.result.status === 'pending_approval')
+    .map((settled) => ({
+      approvalId: toString(settled.value.result.approvalId).trim(),
+      toolCallId: settled.value.toolCall.id,
+      jobId: toString(settled.value.result.jobId).trim(),
+      name: settled.value.toolCall.name,
+    }))
+    .filter((tool) => tool.approvalId && tool.toolCallId && tool.jobId && tool.name);
+}
+
+export function buildToolLoopPendingApprovalResume(input: {
+  toolResults: readonly PromiseSettledResult<ToolLoopPendingApprovalToolResult>[];
+  llmMessages: ChatMessage[];
+  originalMessage: UserMessage;
+  requestText: string;
+  referenceTime: number;
+  allowModelMemoryMutation: boolean;
+  activeSkillIds: string[];
+  contentTrustLevel: ContentTrustLevel;
+  taintReasons: string[];
+  intentDecision?: IntentGatewayDecision;
+  codeContext?: { workspaceRoot: string; sessionId?: string };
+  selectedExecutionProfile?: SelectedExecutionProfile | null;
+}): PendingActionResume | null {
+  const pendingTools = collectToolLoopPendingApprovalTools(input.toolResults);
+  if (pendingTools.length === 0) return null;
+  return {
+    kind: 'tool_loop',
+    payload: buildToolLoopResumePayload({
+      llmMessages: input.llmMessages,
+      pendingTools,
+      originalMessage: input.originalMessage,
+      requestText: input.requestText,
+      referenceTime: input.referenceTime,
+      allowModelMemoryMutation: input.allowModelMemoryMutation,
+      activeSkillIds: input.activeSkillIds,
+      contentTrustLevel: input.contentTrustLevel,
+      taintReasons: input.taintReasons,
+      intentDecision: input.intentDecision,
+      codeContext: input.codeContext,
+      selectedExecutionProfile: input.selectedExecutionProfile,
+    }),
   };
 }
 

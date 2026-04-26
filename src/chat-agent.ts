@@ -61,8 +61,7 @@ import {
 } from './runtime/coding-workflows.js';
 import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
 import {
-  buildToolLoopResumePayload,
-  type StoredToolLoopPendingTool,
+  buildToolLoopPendingApprovalResume,
 } from './runtime/chat-agent/tool-loop-resume.js';
 import {
   dispatchDirectIntentCandidates,
@@ -3115,39 +3114,24 @@ type DirectIntentShadowCandidate =
             llmMessages.splice(-toolResults.length, toolResults.length);
             pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
 
-            const pendingTools: StoredToolLoopPendingTool[] = toolResults
-              .filter((s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval')
-              .map((s) => {
-                const result = (s as any).value.result as Record<string, unknown>;
-                const toolCall = (s as any).value.toolCall;
-                return {
-                  approvalId: String(result.approvalId),
-                  toolCallId: toolCall.id,
-                  jobId: String(result.jobId),
-                  name: toolCall.name,
-                };
-              });
-            toolLoopPendingResume = {
-              kind: 'tool_loop',
-              payload: this.buildToolLoopResumePayload({
-                llmMessages,
-                pendingTools,
-                originalMessage: routedScopedMessage,
-                requestText: stripLeadingContextPrefix(routedScopedMessage.content),
-                referenceTime: message.timestamp,
-                allowModelMemoryMutation,
-                activeSkillIds: activeSkills.map((skill) => skill.id),
-                contentTrustLevel: currentContextTrustLevel,
-                taintReasons: [...currentTaintReasons],
-                intentDecision: directIntent?.decision ?? undefined,
-                codeContext: effectiveCodeContext,
-                selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
-                  ctx,
-                  selectedExecutionProfile,
-                  directIntent?.decision,
-                ),
-              }),
-            };
+            toolLoopPendingResume = buildToolLoopPendingApprovalResume({
+              toolResults,
+              llmMessages,
+              originalMessage: routedScopedMessage,
+              requestText: stripLeadingContextPrefix(routedScopedMessage.content),
+              referenceTime: message.timestamp,
+              allowModelMemoryMutation,
+              activeSkillIds: activeSkills.map((skill) => skill.id),
+              contentTrustLevel: currentContextTrustLevel,
+              taintReasons: [...currentTaintReasons],
+              intentDecision: directIntent?.decision ?? undefined,
+              codeContext: effectiveCodeContext,
+              selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
+                ctx,
+                selectedExecutionProfile,
+                directIntent?.decision,
+              ),
+            }) ?? undefined;
             break;
           }
         }
@@ -3361,36 +3345,24 @@ type DirectIntentShadowCandidate =
               );
               if (allPending) {
                 fbMessages.splice(-fbToolResults.length, fbToolResults.length);
-                const pendingTools: StoredToolLoopPendingTool[] = fbToolResults
-                  .filter((s): s is PromiseFulfilledResult<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }> =>
-                    s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval')
-                  .map((s) => ({
-                    approvalId: String(s.value.result.approvalId),
-                    toolCallId: s.value.toolCall.id,
-                    jobId: String(s.value.result.jobId),
-                    name: s.value.toolCall.name,
-                  }));
-                toolLoopPendingResume = {
-                  kind: 'tool_loop',
-                  payload: this.buildToolLoopResumePayload({
-                    llmMessages: fbMessages,
-                    pendingTools,
-                    originalMessage: routedScopedMessage,
-                    requestText: stripLeadingContextPrefix(routedScopedMessage.content),
-                    referenceTime: message.timestamp,
-                    allowModelMemoryMutation,
-                    activeSkillIds: activeSkills.map((skill) => skill.id),
-                    contentTrustLevel: currentContextTrustLevel,
-                    taintReasons: [...currentTaintReasons],
-                    intentDecision: directIntent?.decision ?? undefined,
-                    codeContext: effectiveCodeContext,
-                    selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
-                      ctx,
-                      selectedExecutionProfile,
-                      directIntent?.decision,
-                    ),
-                  }),
-                };
+                toolLoopPendingResume = buildToolLoopPendingApprovalResume({
+                  toolResults: fbToolResults,
+                  llmMessages: fbMessages,
+                  originalMessage: routedScopedMessage,
+                  requestText: stripLeadingContextPrefix(routedScopedMessage.content),
+                  referenceTime: message.timestamp,
+                  allowModelMemoryMutation,
+                  activeSkillIds: activeSkills.map((skill) => skill.id),
+                  contentTrustLevel: currentContextTrustLevel,
+                  taintReasons: [...currentTaintReasons],
+                  intentDecision: directIntent?.decision ?? undefined,
+                  codeContext: effectiveCodeContext,
+                  selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
+                    ctx,
+                    selectedExecutionProfile,
+                    directIntent?.decision,
+                  ),
+                }) ?? undefined;
               } else {
                 const finalFbStartedAt = Date.now();
                 const finalFb = fallbackProviderOrder
@@ -7294,12 +7266,6 @@ type DirectIntentShadowCandidate =
         nextSurfaceId,
       ),
     });
-  }
-
-  private buildToolLoopResumePayload(
-    input: Parameters<typeof buildToolLoopResumePayload>[0],
-  ): Record<string, unknown> {
-    return buildToolLoopResumePayload(input);
   }
 
   private resolveStoredToolLoopExecutionProfile(

@@ -178,6 +178,12 @@ Checkpoint after the brokered worker pending-action resume slice:
 - The remaining in-memory worker suspended-approval map is now a live-worker cache rather than the only resume owner. The next debt-burn step is to replace this cache with graph interrupt ownership for worker approval pauses, including worker/process restart recovery instead of only live-worker continuation.
 - Remaining approval/resume overlap after this slice: direct-route and tool-loop resume payloads still need graph interrupt equivalents before deletion, and brokered worker approval resume still needs the graph controller to own worker restart/replay semantics.
 
+Checkpoint after the tool-loop resume helper extraction:
+
+- Tool-loop pending approval resume construction now lives in `src/runtime/chat-agent/tool-loop-resume.ts` beside the serializer/reader instead of being duplicated inside `src/chat-agent.ts` and `tool-loop-runtime.ts`.
+- `src/chat-agent.ts` still owns the live tool-loop orchestration path, but it no longer hand-builds `tool_loop` pending-action payloads. Future graph-interrupt migration can replace one helper contract instead of two partial builders.
+- Remaining tool-loop debt after this slice: `tool_loop` pending actions are still replay resumes rather than execution-graph interrupts, and the live tool execution loop still needs further extraction out of the monolithic chat agent.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
