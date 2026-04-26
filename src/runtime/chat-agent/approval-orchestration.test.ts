@@ -77,6 +77,7 @@ describe('approval-orchestration', () => {
       resumeStoredDirectRoutePendingAction: vi.fn(async () => ({
         content: 'Note created: Smoke Test Note',
       })),
+      resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve it'),
@@ -173,6 +174,7 @@ describe('approval-orchestration', () => {
       tryDirectAutomationAuthoring: vi.fn(async () => null),
       resumeStoredToolLoopPendingAction: vi.fn(async () => null),
       resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve the remaining action'),
@@ -237,6 +239,9 @@ describe('approval-orchestration', () => {
       content: 'Graph mutation resumed and verified.',
       metadata: { graphId: 'graph-1' },
     }));
+    const resumeStoredToolLoopPendingAction = vi.fn(async () => null);
+    const resumeStoredDirectRoutePendingAction = vi.fn(async () => null);
+    const completePendingAction = vi.fn();
 
     const result = await handleApprovalMessage({
       message: {
@@ -264,15 +269,15 @@ describe('approval-orchestration', () => {
       getPendingApprovalAction: vi.fn(() => pendingAction as never),
       setPendingApprovals: vi.fn(),
       setPendingApprovalAction: vi.fn(() => ({ action: pendingAction })),
-      completePendingAction: vi.fn(),
+      completePendingAction,
       takeApprovalFollowUp: vi.fn(() => null),
       clearApprovalFollowUp: vi.fn(),
       getAutomationApprovalContinuation: vi.fn(() => null),
       setAutomationApprovalContinuation: vi.fn(),
       clearAutomationApprovalContinuation: vi.fn(),
       tryDirectAutomationAuthoring: vi.fn(async () => null),
-      resumeStoredToolLoopPendingAction: vi.fn(async () => null),
-      resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      resumeStoredToolLoopPendingAction,
+      resumeStoredDirectRoutePendingAction,
       resumeStoredExecutionGraphPendingAction,
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
@@ -288,5 +293,105 @@ describe('approval-orchestration', () => {
       pendingAction,
       expect.objectContaining({ approvalId: 'approval-graph-1' }),
     );
+    expect(resumeStoredToolLoopPendingAction).not.toHaveBeenCalled();
+    expect(resumeStoredDirectRoutePendingAction).not.toHaveBeenCalled();
+    expect(completePendingAction).not.toHaveBeenCalled();
+  });
+
+  it('completes graph pending actions when the graph resume handler is unavailable', async () => {
+    const pendingAction = {
+      id: 'pending-graph-missing-handler',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve graph write',
+        approvalIds: ['approval-graph-missing-handler'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Write the redacted scan output.',
+      },
+      resume: {
+        kind: 'execution_graph',
+        payload: {
+          graphId: 'graph-missing-handler',
+          nodeId: 'node-mutate',
+          resumeToken: 'resume-missing-handler',
+          artifactIds: ['write-spec-1'],
+        },
+      },
+      graphInterrupt: {
+        graphId: 'graph-missing-handler',
+        nodeId: 'node-mutate',
+        nodeKind: 'mutate',
+        resumeToken: 'resume-missing-handler',
+        artifactRefs: [],
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    } as const;
+    const completePendingAction = vi.fn();
+
+    const result = await handleApprovalMessage({
+      message: {
+        id: 'msg-graph-missing-handler',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+        content: 'approve',
+        timestamp: Date.now(),
+      },
+      ctx: {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
+      },
+      tools: {
+        decideApproval: vi.fn(async () => ({
+          success: true,
+          approved: true,
+          message: "Tool 'fs_write' completed.",
+        })),
+        getApprovalSummaries: vi.fn(() => new Map()),
+        listPendingApprovalIdsForUser: vi.fn(() => []),
+      },
+      getPendingApprovalAction: vi.fn(() => pendingAction as never),
+      setPendingApprovals: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: pendingAction })),
+      completePendingAction,
+      takeApprovalFollowUp: vi.fn(() => null),
+      clearApprovalFollowUp: vi.fn(),
+      getAutomationApprovalContinuation: vi.fn(() => null),
+      setAutomationApprovalContinuation: vi.fn(),
+      clearAutomationApprovalContinuation: vi.fn(),
+      tryDirectAutomationAuthoring: vi.fn(async () => null),
+      resumeStoredToolLoopPendingAction: vi.fn(async () => null),
+      resumeStoredDirectRoutePendingAction: vi.fn(async () => null),
+      resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
+      normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
+      withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatPendingApprovalPrompt: vi.fn(() => 'Approve graph write'),
+      resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-graph-missing-handler'], errors: [] })),
+    });
+
+    expect(result?.content).toContain('persisted execution graph could not be resumed');
+    expect(result?.metadata).toEqual({
+      executionGraph: {
+        graphId: 'graph-missing-handler',
+        status: 'failed',
+        reason: 'execution_graph_resume_unavailable',
+      },
+    });
+    expect(completePendingAction).toHaveBeenCalledWith('pending-graph-missing-handler');
   });
 });

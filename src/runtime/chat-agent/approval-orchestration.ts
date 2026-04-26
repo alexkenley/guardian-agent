@@ -59,7 +59,9 @@ export async function continueDirectRouteAfterApproval(input: {
   const remainingApprovalIds = (input.pendingAction.blocker.approvalIds ?? [])
     .filter((id) => id !== input.approvalId.trim());
   if (remainingApprovalIds.length > 0) return null;
-  const response = input.pendingAction.resume?.kind === 'tool_loop'
+  const resumeKind = input.pendingAction.resume?.kind;
+  if (resumeKind !== 'direct_route' && resumeKind !== 'tool_loop') return null;
+  const response = resumeKind === 'tool_loop'
     ? await input.resumeStoredToolLoopPendingAction(
       input.pendingAction,
       {
@@ -212,7 +214,7 @@ export async function handleApprovalMessage(input: {
       approvalResult?: ToolApprovalDecisionResult;
     },
   ) => Promise<ApprovalOrchestrationResponse | null>;
-  resumeStoredExecutionGraphPendingAction?: (
+  resumeStoredExecutionGraphPendingAction: (
     pendingAction: PendingActionRecord,
     options?: {
       approvalId?: string;
@@ -434,19 +436,16 @@ export async function handleApprovalMessage(input: {
     };
   }
 
-  if (decision === 'approved' && (pendingAction?.resume?.kind === 'direct_route' || pendingAction?.resume?.kind === 'tool_loop')) {
+  if (pendingAction?.resume?.kind === 'execution_graph') {
     const approvalResult = targetIds.length === 1
       ? approvalDecisionResults.get(targetIds[0])
       : undefined;
-    const resumedResponse = pendingAction.resume.kind === 'tool_loop'
-      ? await input.resumeStoredToolLoopPendingAction(
+    const resumedResponse = approvalResult?.success
+      ? await input.resumeStoredExecutionGraphPendingAction(
         pendingAction,
-        { approvalId: targetIds[0], approvalResult, ctx: input.ctx },
+        { approvalId: targetIds[0], approvalResult },
       )
-      : await input.resumeStoredDirectRoutePendingAction(
-        pendingAction,
-        { approvalResult },
-      );
+      : null;
     if (resumedResponse) {
       const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
         resumedResponse,
@@ -463,16 +462,42 @@ export async function handleApprovalMessage(input: {
         metadata: normalizedResponse.metadata,
       };
     }
+    const payload = pendingAction.resume.payload as { graphId?: unknown } | undefined;
+    const graphId = typeof payload?.graphId === 'string' ? payload.graphId : undefined;
+    input.completePendingAction(pendingAction.id);
+    return {
+      content: [
+        results.join('\n'),
+        'Execution graph approval was resolved, but the persisted execution graph could not be resumed. Please retry the request.',
+      ].filter(Boolean).join('\n\n'),
+      metadata: input.withCurrentPendingActionMetadata(
+        {
+          executionGraph: {
+            ...(graphId ? { graphId } : {}),
+            status: 'failed',
+            reason: 'execution_graph_resume_unavailable',
+          },
+        },
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+      ),
+    };
   }
 
-  if (decision === 'approved' && pendingAction?.resume?.kind === 'execution_graph' && input.resumeStoredExecutionGraphPendingAction) {
+  if (decision === 'approved' && (pendingAction?.resume?.kind === 'direct_route' || pendingAction?.resume?.kind === 'tool_loop')) {
     const approvalResult = targetIds.length === 1
       ? approvalDecisionResults.get(targetIds[0])
       : undefined;
-    const resumedResponse = await input.resumeStoredExecutionGraphPendingAction(
-      pendingAction,
-      { approvalId: targetIds[0], approvalResult },
-    );
+    const resumedResponse = pendingAction.resume.kind === 'tool_loop'
+      ? await input.resumeStoredToolLoopPendingAction(
+        pendingAction,
+        { approvalId: targetIds[0], approvalResult, ctx: input.ctx },
+      )
+      : await input.resumeStoredDirectRoutePendingAction(
+        pendingAction,
+        { approvalResult },
+      );
     if (resumedResponse) {
       const normalizedResponse = input.normalizeDirectRouteContinuationResponse(
         resumedResponse,

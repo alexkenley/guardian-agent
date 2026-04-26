@@ -41,6 +41,11 @@ If a proposed fix would bypass the documented design, stop and reconsider. Examp
 
 If the right fix is to change the architecture, make that an explicit architectural change and update the relevant docs/specs in the same change rather than sneaking in a workaround. For tool-loading changes, read `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`. For module boundaries and ownership, read `docs/architecture/FORWARD-ARCHITECTURE.md`.
 
+## Strategic Architecture Pause (CRITICAL)
+When a fix starts adding layers of adapters, compatibility shims, prompt rules, duplicated state, or per-channel/per-tool exceptions, pause before continuing. Re-read the owning design docs and current implementation, then decide whether the better move is an architecture uplift instead of another local patch.
+
+Use this pause when the same symptom appears across multiple channels or subsystems, when two or more fixes compensate for each other, when the true owner of state or policy is unclear, or when a regression suggests the current module boundary is wrong. The expected output is a concise architecture note before implementation: the current shape, the root design flaw, the proposed target shape, migration steps, tests/harnesses to update, and any obsolete layers to remove. Prefer a small coherent redesign over accumulating defensive code.
+
 ## Routing Trace (CRITICAL)
 When troubleshooting intent classification, smart routing, pending actions, approvals, direct tool dispatch, or cross-channel continuation behavior, inspect the intent routing trace before guessing from transcripts alone. The canonical log is `~/.guardianagent/routing/intent-routing.jsonl` on the host running Guardian (for Windows installs this is typically `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`). Use it to confirm gateway classification, tier selection, direct-candidate evaluation, tool start/completion, pending-action creation, and approval propagation. For web-specific failures, combine the trace with server/channel inspection and `web/public/js/chat-panel.js`, because the routing trace will not show frontend rendering or input-lock bugs by itself.
 

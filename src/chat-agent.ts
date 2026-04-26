@@ -2889,7 +2889,7 @@ type DirectIntentShadowCandidate =
 
     // Approval continuation is a control-plane path and must not go back through
     // normal intent classification or worker dispatch.
-    const approvalResult = await this.tryHandleApproval(message, ctx);
+    const approvalResult = await this.tryHandleApproval(message, ctx, workerManager);
     if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
@@ -6912,6 +6912,7 @@ type DirectIntentShadowCandidate =
   private async tryHandleApproval(
     message: UserMessage,
     ctx: AgentContext,
+    workerManager?: WorkerManager,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     return handleApprovalMessage({
@@ -6947,6 +6948,18 @@ type DirectIntentShadowCandidate =
       ),
       resumeStoredToolLoopPendingAction: (pendingAction, options) => this.resumeStoredToolLoopPendingAction(pendingAction, options),
       resumeStoredDirectRoutePendingAction: (pendingAction, options) => this.resumeStoredDirectRoutePendingAction(pendingAction, options),
+      resumeStoredExecutionGraphPendingAction: (pendingAction, options) => {
+        if (!workerManager || !options?.approvalId || !options.approvalResult) {
+          return Promise.resolve(null);
+        }
+        return workerManager.resumeExecutionGraphPendingAction(
+          pendingAction,
+          {
+            approvalId: options.approvalId,
+            approvalResult: options.approvalResult,
+          },
+        );
+      },
       normalizeDirectRouteContinuationResponse: (response, userId, channel, surfaceId) => this.normalizeDirectRouteContinuationResponse(
         response,
         userId,

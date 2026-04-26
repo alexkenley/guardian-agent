@@ -333,7 +333,7 @@ export interface WorkerDelegationMetadata {
 export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
-  pendingActionStore?: Pick<PendingActionStore, 'replaceActive'>;
+  pendingActionStore?: Pick<PendingActionStore, 'replaceActive' | 'complete' | 'update'>;
   executionGraphStore?: Pick<ExecutionGraphStore, 'createGraph' | 'appendEvent' | 'writeArtifact' | 'getSnapshot' | 'getArtifact' | 'listArtifacts'>;
   now?: () => number;
 }
@@ -462,7 +462,7 @@ const DELEGATED_EVIDENCE_PATH_PATTERN = /[A-Za-z]:(?:\\\\|\\|\/)[^"',\]\s}]+|(?:
 
 type DelegatedTaskPlanStep = DelegatedResultEnvelope['taskContract']['plan']['steps'][number];
 
-interface GraphControlledExecutionSuspension {
+interface ExecutionGraphResumeContext {
   graphId: string;
   nodeId: string;
   resumeToken: string;
@@ -577,7 +577,6 @@ export class WorkerManager {
   private readonly directAutomationContinuations = new Map<string, DirectAutomationContinuation>();
   private readonly workerSuspendedApprovalsBySession = new Map<string, WorkerSuspendedApprovalState>();
   private readonly workerSuspendedApprovalToSession = new Map<string, string>();
-  private readonly executionGraphSuspensions = new Map<string, GraphControlledExecutionSuspension>();
   private readonly delegatedFollowUpPayloads = new Map<string, {
     content: string;
     agentId: string;
@@ -1148,22 +1147,6 @@ export class WorkerManager {
         if (!approvalEvent || !approvalId) {
           return failGraph('Mutation node requested approval without a resumable approval id.', mutationNodeId, 'mutate');
         }
-        const resumeToken = `${approvalEvent.graphId}:${approvalEvent.nodeId ?? mutationNodeId}:${approvalEvent.sequence}`;
-        this.executionGraphSuspensions.set(resumeToken, {
-          graphId,
-          nodeId: mutationNodeId,
-          resumeToken,
-          approvalId,
-          writeSpec,
-          mutationContext: {
-            ...mutationContext,
-            sequenceStart: sequence,
-          },
-          toolRequest,
-          artifactIds,
-          expiresAt: now() + PENDING_APPROVAL_TTL_MS,
-        });
-        this.executionGraphSuspensions.set(approvalId, this.executionGraphSuspensions.get(resumeToken)!);
         const approvalSummary = {
           id: approvalId,
           toolName: 'fs_write',
@@ -1255,32 +1238,30 @@ export class WorkerManager {
     if (!payload) {
       return null;
     }
-    const suspension = this.executionGraphSuspensions.get(payload.resumeToken)
-      ?? this.executionGraphSuspensions.get(options.approvalId)
-      ?? this.reconstructExecutionGraphSuspension(pendingAction, payload, options.approvalId);
+    const now = this.observability.now ?? Date.now;
+    const suspension = this.reconstructExecutionGraphSuspension(pendingAction, payload, options.approvalId);
     if (!suspension) {
+      this.markExecutionGraphPendingActionFailed(pendingAction, now());
       return {
-        content: 'Execution graph approval was resolved, but the suspended graph state is no longer available. Please retry the request.',
+        content: 'Execution graph approval was resolved, but the persisted graph resume state is no longer available. Please retry the request.',
         metadata: {
           executionGraph: {
             graphId: payload.graphId,
             status: 'failed',
-            reason: 'suspended_graph_state_missing',
+            reason: 'persisted_graph_resume_state_missing',
           },
         },
       };
     }
-    const now = this.observability.now ?? Date.now;
     if (suspension.expiresAt <= now()) {
-      this.executionGraphSuspensions.delete(suspension.resumeToken);
-      this.executionGraphSuspensions.delete(suspension.approvalId);
+      this.markExecutionGraphPendingActionFailed(pendingAction, now());
       return {
-        content: 'Execution graph approval was resolved, but the suspended graph state expired. Please retry the request.',
+        content: 'Execution graph approval was resolved, but the persisted graph resume state expired. Please retry the request.',
         metadata: {
           executionGraph: {
             graphId: suspension.graphId,
             status: 'failed',
-            reason: 'suspended_graph_state_expired',
+            reason: 'persisted_graph_resume_state_expired',
           },
         },
       };
@@ -1337,8 +1318,7 @@ export class WorkerManager {
       emitGraphEvent('graph_failed', {
         reason: options.approvalResult.message || 'Approval denied.',
       }, 'graph-denied');
-      this.executionGraphSuspensions.delete(suspension.resumeToken);
-      this.executionGraphSuspensions.delete(suspension.approvalId);
+      this.completeExecutionGraphPendingAction(pendingAction, now());
       return {
         content: options.approvalResult.message || 'Approval denied. I did not make the requested change.',
         metadata: {
@@ -1369,8 +1349,6 @@ export class WorkerManager {
       approvalId: options.approvalId,
     });
     sequence = Math.max(sequence, ...mutationResult.events.map((event) => event.sequence));
-    this.executionGraphSuspensions.delete(suspension.resumeToken);
-    this.executionGraphSuspensions.delete(suspension.approvalId);
     const artifactIds = [
       ...suspension.artifactIds,
       ...(mutationResult.receiptArtifact ? [mutationResult.receiptArtifact.artifactId] : []),
@@ -1387,6 +1365,7 @@ export class WorkerManager {
         reason: 'Mutation verification failed after approval.',
         artifactIds,
       }, 'graph-failed-after-approval');
+      this.completeExecutionGraphPendingAction(pendingAction, now());
       return {
         content: 'Approval was applied, but execution graph verification failed after the write.',
         metadata: {
@@ -1405,6 +1384,7 @@ export class WorkerManager {
       receiptArtifactId: mutationResult.receiptArtifact?.artifactId,
       verificationArtifactId: mutationResult.verificationArtifact.artifactId,
     }, 'graph-completed-after-approval');
+    this.completeExecutionGraphPendingAction(pendingAction, now());
     return {
       content: `Wrote ${suspension.writeSpec.content.path} and verified the contents.`,
       metadata: {
@@ -1420,11 +1400,25 @@ export class WorkerManager {
     };
   }
 
+  private completeExecutionGraphPendingAction(
+    pendingAction: PendingActionRecord,
+    nowMs: number,
+  ): void {
+    this.observability.pendingActionStore?.complete(pendingAction.id, nowMs);
+  }
+
+  private markExecutionGraphPendingActionFailed(
+    pendingAction: PendingActionRecord,
+    nowMs: number,
+  ): void {
+    this.observability.pendingActionStore?.update(pendingAction.id, { status: 'failed' }, nowMs);
+  }
+
   private reconstructExecutionGraphSuspension(
     pendingAction: PendingActionRecord,
     payload: ReturnType<typeof readExecutionGraphResumePayload>,
     approvalId: string,
-  ): GraphControlledExecutionSuspension | null {
+  ): ExecutionGraphResumeContext | null {
     if (!payload) return null;
     const graphStore = this.observability.executionGraphStore;
     if (!graphStore) return null;
