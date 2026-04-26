@@ -34,7 +34,6 @@ export type PendingActionBlockerKind =
 export type PendingActionResumeKind =
   | 'direct_route'
   | 'tool_loop'
-  | 'playbook_run'
   | 'execution_graph';
 
 export type PendingActionTransferPolicy =
@@ -256,7 +255,6 @@ function normalizeResumeKind(value: unknown): PendingActionResumeKind | undefine
   switch (value) {
     case 'direct_route':
     case 'tool_loop':
-    case 'playbook_run':
     case 'execution_graph':
       return value;
     default:
