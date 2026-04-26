@@ -76,6 +76,9 @@ import {
   runDirectRouteOrchestration,
 } from './runtime/chat-agent/direct-route-orchestration.js';
 import {
+  buildChatDirectRouteHandlers,
+} from './runtime/chat-agent/direct-route-handlers.js';
+import {
   attachPreRoutedIntentGatewayMetadata,
   detachPreRoutedIntentGatewayMetadata,
   enrichIntentGatewayRecordWithContentPlan,
@@ -143,18 +146,6 @@ import {
   type DirectSecondBrainMutationToolName,
 } from './runtime/chat-agent/direct-second-brain-mutation.js';
 import {
-  tryDirectAutomationAuthoring as tryDirectAutomationAuthoringHelper,
-  tryDirectAutomationControl as tryDirectAutomationControlHelper,
-  tryDirectAutomationOutput as tryDirectAutomationOutputHelper,
-  tryDirectBrowserAutomation as tryDirectBrowserAutomationHelper,
-} from './runtime/chat-agent/direct-automation.js';
-import {
-  tryDirectScheduledEmailAutomation as tryDirectScheduledEmailAutomationHelper,
-} from './runtime/chat-agent/direct-scheduled-email-automation.js';
-import {
-  buildDirectAutomationDeps,
-  buildDirectMailboxDeps,
-  buildDirectScheduledEmailAutomationDeps,
   type DirectRuntimeDepsInput,
 } from './runtime/chat-agent/direct-runtime-deps.js';
 import {
@@ -186,12 +177,6 @@ import {
 import {
   tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
 } from './runtime/chat-agent/direct-route-runtime.js';
-import {
-  tryDirectProviderRead as tryDirectProviderReadHelper,
-} from './runtime/chat-agent/direct-provider-read.js';
-import {
-  tryDirectWebSearch as tryDirectWebSearchHelper,
-} from './runtime/chat-agent/direct-web-search.js';
 import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
@@ -338,10 +323,6 @@ import {
   summarizeRoutineTimingForUser,
   type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
-import {
-  tryDirectGoogleWorkspaceRead as tryDirectGoogleWorkspaceReadHelper,
-  tryDirectGoogleWorkspaceWrite as tryDirectGoogleWorkspaceWriteHelper,
-} from './runtime/chat-agent/direct-mailbox-runtime.js';
 
 export interface ChatAgentClassDeps {
   log: Logger;
@@ -1809,19 +1790,34 @@ interface DegradedDirectIntentResponseInput {
         fallbackContent,
       ),
     };
-    const directMailboxDeps = buildDirectMailboxDeps(directRuntimeDeps);
-    const directAutomationDeps = buildDirectAutomationDeps(directRuntimeDeps);
-    const directScheduledEmailAutomationDeps = buildDirectScheduledEmailAutomationDeps(directRuntimeDeps);
-    const directIntentResponse = await runDirectRouteOrchestration({
-      skipDirectTools,
-      gateway: directIntent,
+    const directRouteHandlers = buildChatDirectRouteHandlers({
+      agentId: this.id,
+      tools: this.tools,
+      runtimeDeps: directRuntimeDeps,
       message,
-      activeSkills,
-      resolvedCodeSession,
+      routedMessage: routedScopedMessage,
+      ctx,
+      userKey: pendingActionUserKey,
+      stateAgentId,
+      decision: directIntent?.decision,
       codeContext: effectiveCodeContext,
-      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
-      handlers: {
-        personal_assistant: async () => (
+      continuityThread,
+      llmMessages,
+      fallbackProviderOrder,
+      defaultToolResultProviderKind,
+      sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
+        toolName,
+        result,
+        providerKind,
+      ),
+      chatWithFallback: (nextCtx, messages, options, providerOrder) => this.chatWithFallback(
+        nextCtx,
+        messages,
+        options,
+        providerOrder,
+      ),
+      callbacks: {
+        personalAssistant: async () => (
           await this.tryDirectSecondBrainWrite(
             routedScopedMessage,
             ctx,
@@ -1834,19 +1830,12 @@ interface DegradedDirectIntentResponseInput {
           directIntent?.decision,
           continuityThread,
         ),
-        provider_read: () => tryDirectProviderReadHelper({
-          agentId: this.id,
-          tools: this.tools,
-          message: routedScopedMessage,
-          ctx,
-          decision: directIntent?.decision,
-        }),
-        coding_session_control: () => this.tryDirectCodeSessionControlFromGateway(
+        codingSessionControl: () => this.tryDirectCodeSessionControlFromGateway(
           message,
           ctx,
           directIntent?.decision,
         ),
-        coding_backend: () => this.tryDirectCodingBackendDelegation(
+        codingBackend: () => this.tryDirectCodingBackendDelegation(
           routedScopedMessage,
           ctx,
           pendingActionUserKey,
@@ -1862,89 +1851,30 @@ interface DegradedDirectIntentResponseInput {
           message.content,
           directIntent?.decision,
         ),
-        memory_write: () => this.tryDirectMemorySave(
+        memoryWrite: () => this.tryDirectMemorySave(
           routedScopedMessage,
           ctx,
           pendingActionUserKey,
           effectiveCodeContext,
           message.content,
         ),
-        memory_read: () => this.tryDirectMemoryRead(
+        memoryRead: () => this.tryDirectMemoryRead(
           routedScopedMessage,
           ctx,
           effectiveCodeContext,
           message.content,
         ),
-        scheduled_email_automation: () => tryDirectScheduledEmailAutomationHelper({
-          message: routedScopedMessage,
-          ctx,
-          userKey: pendingActionUserKey,
-          stateAgentId,
-        }, directScheduledEmailAutomationDeps),
-        automation: ({ gatewayDirected }) => tryDirectAutomationAuthoringHelper({
-          message: routedScopedMessage,
-          ctx,
-          userKey: pendingActionUserKey,
-          codeContext: effectiveCodeContext,
-          options: {
-            intentDecision: directIntent?.decision,
-            assumeAuthoring: gatewayDirected,
-          },
-        }, directAutomationDeps),
-        automation_control: () => tryDirectAutomationControlHelper({
-          message: routedScopedMessage,
-          ctx,
-          userKey: pendingActionUserKey,
-          intentDecision: directIntent?.decision,
-          continuityThread,
-        }, directAutomationDeps),
-        automation_output: () => tryDirectAutomationOutputHelper({
-          message: routedScopedMessage,
-          ctx,
-          intentDecision: directIntent?.decision,
-        }, directAutomationDeps),
-        workspace_write: () => tryDirectGoogleWorkspaceWriteHelper({
-          message: routedScopedMessage,
-          ctx,
-          userKey: pendingActionUserKey,
-          decision: directIntent?.decision,
-        }, directMailboxDeps),
-        workspace_read: () => tryDirectGoogleWorkspaceReadHelper({
-          message: routedScopedMessage,
-          ctx,
-          userKey: pendingActionUserKey,
-          decision: directIntent?.decision,
-          continuityThread,
-        }, directMailboxDeps),
-        browser: () => tryDirectBrowserAutomationHelper({
-          message: routedScopedMessage,
-          ctx,
-          userKey: pendingActionUserKey,
-          codeContext: effectiveCodeContext,
-          intentDecision: directIntent?.decision,
-          continuityThread,
-        }, directAutomationDeps),
-        web_search: () => tryDirectWebSearchHelper({
-          agentId: this.id,
-          tools: this.tools,
-          message: routedScopedMessage,
-          ctx,
-          llmMessages,
-          fallbackProviderOrder,
-          defaultToolResultProviderKind,
-          sanitizeToolResultForLlm: (toolName, result, providerKind) => this.sanitizeToolResultForLlm(
-            toolName,
-            result,
-            providerKind,
-          ),
-          chatWithFallback: (nextCtx, messages, options, providerOrder) => this.chatWithFallback(
-            nextCtx,
-            messages,
-            options,
-            providerOrder,
-          ),
-        }),
       },
+    });
+    const directIntentResponse = await runDirectRouteOrchestration({
+      skipDirectTools,
+      gateway: directIntent,
+      message,
+      activeSkills,
+      resolvedCodeSession,
+      codeContext: effectiveCodeContext,
+      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+      handlers: directRouteHandlers,
       onHandled: (candidate, result) => buildScopedDirectIntentResponse({
         candidate,
         result,
