@@ -1,6 +1,6 @@
 # Integration Test Harness
 
-Automated black-box testing against a running GuardianAgent instance via its REST API.
+This guide covers deterministic harnesses, isolated real-model harnesses, and production-like validation against an already-running GuardianAgent app via its REST API.
 
 ## Always-On Debug Traces
 
@@ -15,6 +15,69 @@ Before assuming a harness failure needs more verbose runtime logging, inspect Gu
 - The web `System > Runtime Execution` view should also show matching live handoff entries such as `Delegated to …`, `… is working`, and the final blocked/completed status for the same run.
 - These traces are always-on runtime artifacts and are more useful for agent debugging than the normal console log level.
 - This is distinct from harness temp logs such as `guardian.log` and `guardian.log.err`, and distinct from `runtime.logLevel`, which may still be set to `warn` on Windows-oriented dev flows.
+
+## Production-Like Running-App API Validation
+
+Use this lane when you need to prove the real GuardianAgent app works the way an operator will use it. This is distinct from the isolated Node harnesses: do not create a temporary harness config, do not embed a fake provider, and do not start a separate harness-owned backend. Use the actual app process on the normal dev port, the current operator config/state, and one of the configured managed-cloud providers such as OpenRouter, NVIDIA, or Ollama Cloud.
+
+This lane is the right next step after focused unit tests and deterministic harnesses pass, and before handing off for manual UI testing. It is also the preferred answer to "test the actual app API" because it sends CLI HTTP requests directly to the running app's real endpoints.
+
+1. Start Guardian only if it is not already running:
+
+```powershell
+.\scripts\start-dev-windows.ps1 -StartOnly
+```
+
+2. Confirm the app and provider configuration from the real process:
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:3000/health' -Method Get -TimeoutSec 10
+Invoke-RestMethod -Uri 'http://localhost:3000/api/agents' -Method Get -TimeoutSec 10
+```
+
+Inspect the default agent/provider fields before testing. Acceptable managed-cloud signals include OpenRouter, NVIDIA, or Ollama provider names/types, `providerLocality` set to `external`, or response metadata that reports `providerTier` as `managed_cloud`. Do not hard-code one provider unless you are reproducing a provider-specific issue.
+
+3. Send direct CLI requests to the real message API. Use `/api/message` for simple request/response validation, and `/api/message/stream` when you need SSE/frontend parity:
+
+```powershell
+$requestId = 'prod-cli-' + [guid]::NewGuid().ToString('N')
+$body = @{
+  content = 'Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything.'
+  agentId = 'default'
+  userId = 'prod-cli-smoke'
+  channel = 'web'
+  surfaceId = 'prod-cli-api'
+  requestId = $requestId
+  metadata = @{
+    codeContext = @{
+      workspaceRoot = 'S:\Development\GuardianAgent'
+    }
+  }
+} | ConvertTo-Json -Depth 10
+
+$response = Invoke-RestMethod `
+  -Uri 'http://localhost:3000/api/message' `
+  -Method Post `
+  -ContentType 'application/json' `
+  -Body $body `
+  -TimeoutSec 420
+
+$response.content
+$response.metadata.responseSource | ConvertTo-Json -Depth 8
+$response.metadata.executionGraph | ConvertTo-Json -Depth 8
+```
+
+If auth is enabled, include the bearer token from the running app's startup/config path in the HTTP request. Never paste tokens into committed docs, logs, issue comments, or chat output.
+
+4. Use a small production validation ladder:
+
+- Simple exact-reply prompt, to prove the live provider path is responding.
+- Read-only repo inspection with `metadata.codeContext.workspaceRoot`, to prove routing, brokered reads, evidence hydration, synthesis, and provider metadata.
+- Safe write under a scratch path such as `tmp/manual-cli` or `tmp/manual-web`, then verify and clean it up.
+- Approval-gated action when the touched surface should require approval.
+- Denied-path or adversarial security prompt, to prove guardrails still fail closed.
+
+After each request, inspect the routing trace by `requestId`. A passing production-like API run should have a non-empty answer, expected repo grounding, no stale pending action or cross-session bleed, response metadata showing the external managed provider that actually answered, a completed execution graph for non-trivial delegated/repo requests, and routing trace rows that match the same `requestId`.
 
 ## Codex Web Preview + CLI Iteration Loop
 
@@ -96,6 +159,8 @@ npm run build
 
 Most general chat harnesses send messages through the Web channel's `POST /api/message` endpoint. Code-session harnesses use the dedicated `/api/code/sessions/:id/*` routes. Together they validate functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).
 
+The sections below primarily describe automated harnesses. Many of them intentionally isolate runtime state, temporary config, ports, and providers so regressions are deterministic. Use the production-like running-app lane above when the requirement is to validate the actual app process, real operator config, and configured managed-cloud providers.
+
 Core harness scripts include:
 
 | Script | Purpose | Assertions |
@@ -135,7 +200,7 @@ Core harness scripts include:
 | **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
 | **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
 
-Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
+Unlike unit tests (vitest), these exercise the HTTP stack, config loading, Guardian pipeline, provider adapter, tool execution, and response formatting. For exact operator-path coverage, pair them with the production-like running-app API validation lane.
 
 ## Quick Start
 
