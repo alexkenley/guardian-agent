@@ -11,13 +11,11 @@ import {
   buildCodeSessionWorkspaceAwarenessQuery,
   compactMessagesIfOverBudget,
   compactQuarantinedToolResult,
-  formatDirectCodeSessionLine,
   formatToolThreatWarnings,
   formatToolResultForLLM,
   getCodeSessionPromptRelativePath,
   isAffirmativeContinuation,
   isRecord,
-  normalizeCodingBackendSelection,
   normalizeScheduledEmailBody,
   readCodeRequestMetadata,
   sameCodeWorkspaceWorkingSet,
@@ -62,9 +60,11 @@ import {
   dispatchDirectIntentCandidates,
 } from './runtime/chat-agent/direct-intent-dispatch.js';
 import {
-  buildCodingBackendRunResumePayload,
   executeStoredCodingBackendRun,
 } from './runtime/chat-agent/coding-backend-resume.js';
+import {
+  tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
+} from './runtime/chat-agent/direct-coding-backend.js';
 import {
   executeToolsConflictAware,
   isDeferredRemoteSandboxToolResult,
@@ -320,7 +320,6 @@ import {
 } from './runtime/model-routing-ux.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from './util/structured-json.js';
 import {
-  buildCodingBackendResponseSource,
   buildDirectHandlerResponseSource,
   buildRoutineSemanticHints,
   buildSecondBrainFocusMetadata,
@@ -368,7 +367,6 @@ import {
   routineDueWithinHours,
   routineIncludeOverdue,
   routineTopicQuery,
-  selectCodingBackendDelegatedTask,
   summarizeRoutineTimingForUser,
   type SecondBrainFocusContinuationPayload,
 } from './runtime/chat-agent/direct-intent-helpers.js';
@@ -4562,299 +4560,46 @@ type DirectIntentShadowCandidate =
     decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
     codeContext?: { sessionId?: string; workspaceRoot: string },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    if (!decision || decision.route !== 'coding_task') return null;
-    const { userId: pendingUserId, channel: pendingChannel } = this.parsePendingActionUserKey(userKey);
-    const backendId = normalizeCodingBackendSelection(decision.entities.codingBackend);
-    const isCodingRunStatusCheck = decision.entities.codingRunStatusCheck === true;
-    let effectiveCodeContext = codeContext ? { ...codeContext } : undefined;
-    let currentSessionRecord = effectiveCodeContext?.sessionId
-      ? this.codeSessionStore?.getSession(effectiveCodeContext.sessionId, message.userId?.trim())
-        ?? this.codeSessionStore?.getSession(effectiveCodeContext.sessionId)
-      : null;
-    let switchResponsePrefix = '';
-    let switchResponseMetadata: Record<string, unknown> | undefined;
-    const explicitWorkspaceTarget = await this.ensureExplicitCodingTaskWorkspaceTarget({
-      message,
-      ctx,
-      decision,
-      currentSession: currentSessionRecord,
-      codeContext: effectiveCodeContext,
-    });
-    if (explicitWorkspaceTarget.status === 'blocked') {
-      return explicitWorkspaceTarget.response;
-    }
-    if (explicitWorkspaceTarget.status === 'switched') {
-      currentSessionRecord = explicitWorkspaceTarget.currentSession;
-      effectiveCodeContext = explicitWorkspaceTarget.codeContext;
-      switchResponsePrefix = explicitWorkspaceTarget.switchResponse.content;
-      switchResponseMetadata = explicitWorkspaceTarget.switchResponse.metadata;
-    }
-    if (!backendId && !isCodingRunStatusCheck) return null;
-    if (decision.operation === 'inspect' && isCodingRunStatusCheck) {
-      if (!effectiveCodeContext?.sessionId) {
-        return { content: `I can only check recent ${backendId || 'coding backend'} runs from an active coding workspace.` };
-      }
-
-      this.recordIntentRoutingTrace('direct_tool_call_started', {
-        message,
-        details: {
-          toolName: 'coding_backend_status',
-          ...(backendId ? { backendId } : {}),
-          codeSessionId: effectiveCodeContext.sessionId,
-          workspaceRoot: effectiveCodeContext.workspaceRoot,
-        },
-      });
-      const statusResult = await this.tools.executeModelTool(
-        'coding_backend_status',
-        {},
-        {
-          origin: 'assistant',
-          agentId: this.id,
-          userId: message.userId,
-          surfaceId: message.surfaceId,
-          principalId: message.principalId ?? message.userId,
-          principalRole: message.principalRole,
-          channel: message.channel,
-          requestId: message.id,
-          agentContext: { checkAction: ctx.checkAction },
-          codeContext: effectiveCodeContext,
-        },
-      );
-      this.recordIntentRoutingTrace('direct_tool_call_completed', {
-        message,
-        details: {
-          toolName: 'coding_backend_status',
-          ...(backendId ? { backendId } : {}),
-          status: statusResult.status,
-          success: toBoolean(statusResult.success),
-          message: toString(statusResult.message),
-        },
-      });
-      if (!toBoolean(statusResult.success)) {
-        const failure = toString(statusResult.message) || toString(statusResult.error) || `I could not inspect recent ${backendId || 'coding backend'} runs.`;
-        return {
-          content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${failure}` : failure,
-          metadata: switchResponseMetadata,
-        };
-      }
-
-      const sessions = (isRecord(statusResult.output) && Array.isArray(statusResult.output.sessions)
-        ? statusResult.output.sessions
-        : []) as Array<Record<string, unknown>>;
-      const matches = sessions
-        .filter((session) => !backendId || toString(session.backendId) === backendId)
-        .sort((a, b) => {
-          const aTime = toNumber(a.completedAt) || toNumber(a.startedAt) || 0;
-          const bTime = toNumber(b.completedAt) || toNumber(b.startedAt) || 0;
-          return bTime - aTime;
-        });
-      if (matches.length === 0) {
-        const content = `I couldn't find any recent ${backendId || 'coding backend'} runs for this coding workspace.`;
-        return {
-          content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
-          metadata: switchResponseMetadata,
-        };
-      }
-
-      const latest = matches[0];
-      const backendName = toString(latest.backendName) || backendId;
-      const status = toString(latest.status) || 'unknown';
-      const task = toString(latest.task);
-      const durationMs = toNumber(latest.durationMs);
-      const exitCode = toNumber(latest.exitCode);
-      const statusLabel = status === 'running'
-        ? 'is still running'
-        : status === 'succeeded'
-          ? 'completed successfully'
-          : status === 'timed_out'
-            ? 'timed out'
-            : 'failed';
-      const lines = [`The most recent ${backendName} run ${statusLabel}.`];
-      if (task) lines.push(`Task: ${task}`);
-      if (durationMs !== null) lines.push(`Duration: ${durationMs}ms`);
-      if (exitCode !== null) lines.push(`Exit code: ${exitCode}`);
-      if (status === 'succeeded') {
-        lines.push('If you want, I can also inspect the repo diff or recent changes from that run.');
-      }
-      const content = lines.join('\n');
-      return {
-        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
-        metadata: switchResponseMetadata,
-      };
-    }
-
-    const currentTask = stripLeadingContextPrefix(message.content).trim();
-    const resolvedTask = stripLeadingContextPrefix(decision.resolvedContent?.trim() || '').trim();
-    const delegatedTask = selectCodingBackendDelegatedTask({
-      currentTask,
-      resolvedTask,
-      backendId,
-    });
-    if (!delegatedTask) {
-      const content = 'I need the coding task details before I can run that coding backend request.';
-      return {
-        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
-        metadata: switchResponseMetadata,
-      };
-    }
-    this.recordIntentRoutingTrace('direct_tool_call_started', {
-      message,
-      contentPreview: delegatedTask,
-      details: {
-        toolName: 'coding_backend_run',
-        backendId,
-        codeSessionId: effectiveCodeContext?.sessionId,
-        workspaceRoot: effectiveCodeContext?.workspaceRoot,
-      },
-    });
-    const result = await this.tools.executeModelTool(
-      'coding_backend_run',
+    return tryDirectCodingBackendDelegationHelper(
       {
-        task: delegatedTask,
-        backend: backendId,
+        message,
+        ctx,
+        userKey,
+        decision,
+        codeContext,
       },
       {
-        origin: 'assistant',
         agentId: this.id,
-        userId: message.userId,
-        surfaceId: message.surfaceId,
-        principalId: message.principalId ?? message.userId,
-        principalRole: message.principalRole,
-        channel: message.channel,
-        requestId: message.id,
-        agentContext: { checkAction: ctx.checkAction },
-        ...(effectiveCodeContext ? { codeContext: effectiveCodeContext } : {}),
+        tools: this.tools,
+        codeSessionStore: this.codeSessionStore,
+        parsePendingActionUserKey: (key) => this.parsePendingActionUserKey(key),
+        ensureExplicitCodingTaskWorkspaceTarget: (nextInput) => this.ensureExplicitCodingTaskWorkspaceTarget(nextInput),
+        recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+        getPendingApprovalIds: (userId, channel, surfaceId) => this.getPendingApprovalIds(userId, channel, surfaceId),
+        setPendingApprovals: (key, ids, surfaceId, nowMs) => this.setPendingApprovals(key, ids, surfaceId, nowMs),
+        syncPendingApprovalsFromExecutor: (
+          sourceUserId,
+          sourceChannel,
+          targetUserId,
+          targetChannel,
+          surfaceId,
+          originalUserContent,
+        ) => this.syncPendingApprovalsFromExecutor(
+          sourceUserId,
+          sourceChannel,
+          targetUserId,
+          targetChannel,
+          surfaceId,
+          originalUserContent,
+        ),
+        setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => this.setPendingApprovalAction(
+          userId,
+          channel,
+          surfaceId,
+          actionInput,
+        ),
       },
     );
-
-    this.recordIntentRoutingTrace('direct_tool_call_completed', {
-      message,
-      details: {
-        toolName: 'coding_backend_run',
-        backendId,
-        status: result.status,
-        success: toBoolean(result.success),
-        message: toString(result.message),
-      },
-      contentPreview: toString(
-        result.output && isRecord(result.output)
-          ? result.output.assistantResponse ?? result.output.output
-          : undefined,
-      ),
-    });
-
-    if (result.status === 'pending_approval') {
-      const approvalId = toString(result.approvalId);
-      let pendingIds: string[] = [];
-      if (approvalId) {
-        const existingIds = this.getPendingApprovalIds(pendingUserId, pendingChannel, message.surfaceId);
-        pendingIds = [...new Set([...existingIds, approvalId])];
-        this.setPendingApprovals(userKey, pendingIds, message.surfaceId);
-      } else {
-        this.syncPendingApprovalsFromExecutor(
-          message.userId,
-          message.channel,
-          pendingUserId,
-          pendingChannel,
-          message.surfaceId,
-          message.content,
-        );
-        pendingIds = this.getPendingApprovalIds(pendingUserId, pendingChannel, message.surfaceId);
-      }
-      const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-      const prompt = [
-        `I need approval to run ${backendId} for this coding task.`,
-        'Once approved, I\'ll launch it in:',
-        currentSessionRecord
-          ? formatDirectCodeSessionLine(currentSessionRecord, true)
-          : `- CURRENT: ${effectiveCodeContext?.workspaceRoot ?? '(unknown workspace)'}`,
-      ].join('\n');
-      const pendingActionResult = this.setPendingApprovalAction(
-        pendingUserId,
-        pendingChannel,
-        message.surfaceId,
-        {
-          prompt,
-          approvalIds: pendingIds,
-          approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-          originalUserContent: delegatedTask,
-          route: decision.route,
-          operation: decision.operation,
-          summary: decision.summary,
-          turnRelation: decision.turnRelation,
-          resolution: decision.resolution,
-          missingFields: decision.missingFields,
-          provenance: decision.provenance,
-          entities: toPendingActionEntities(decision.entities),
-          codeSessionId: effectiveCodeContext?.sessionId,
-          resume: buildCodingBackendRunResumePayload({
-            task: delegatedTask,
-            backendId,
-            codeSessionId: effectiveCodeContext?.sessionId,
-            workspaceRoot: effectiveCodeContext?.workspaceRoot,
-          }),
-        },
-      );
-      this.recordIntentRoutingTrace('direct_intent_response', {
-        message,
-        contentPreview: 'pending_action_stored',
-        details: {
-          candidate: 'coding_backend_diagnostic',
-          toolApprovalId: approvalId || null,
-          pendingIds,
-          pendingActionId: pendingActionResult.action?.id || null,
-          pendingActionApprovalIds: pendingActionResult.action?.blocker?.approvalIds ?? null,
-          pendingActionResumeKind: pendingActionResult.action?.resume?.kind ?? null,
-          pendingActionResumePayloadType: (pendingActionResult.action?.resume?.payload as { type?: string } | undefined)?.type ?? null,
-          pendingActionScope: pendingActionResult.action?.scope ?? null,
-          collision: !!pendingActionResult.collisionPrompt,
-        },
-      });
-      const content = pendingActionResult.collisionPrompt ?? prompt;
-      return {
-        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
-        metadata: {
-          ...(switchResponseMetadata ?? {}),
-          ...(effectiveCodeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: effectiveCodeContext.sessionId } : {}),
-          ...(toPendingActionClientMetadata(pendingActionResult.action) ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
-        },
-      };
-    }
-
-    const runResult = isRecord(result.output) ? result.output : null;
-    const backendName = toString(runResult?.backendName) || backendId;
-    const assistantResponse = toString(runResult?.assistantResponse)?.trim();
-    const backendOutput = toString(runResult?.output)?.trim();
-    const sessionId = effectiveCodeContext?.sessionId || toString(runResult?.codeSessionId);
-
-    const metadata: Record<string, unknown> = {
-      codingBackendDelegated: true,
-      codingBackendId: backendId,
-      responseSource: buildCodingBackendResponseSource({
-        backendId,
-        backendName,
-        durationMs: toNumber(runResult?.durationMs) ?? undefined,
-      }),
-      ...(switchResponseMetadata ?? {}),
-      ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
-    };
-
-    const content = assistantResponse || backendOutput || `${backendName} completed successfully.`;
-    if (toBoolean(result.success)) {
-      return {
-        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
-        metadata,
-      };
-    }
-
-    const failureMessage = backendOutput
-      || toString(result.message)
-      || `${backendName} could not complete the requested task.`;
-    return {
-      content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${failureMessage}` : failureMessage,
-      metadata,
-    };
   }
 
   private async ensureExplicitCodingTaskWorkspaceTarget(input: {
