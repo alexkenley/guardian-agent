@@ -152,6 +152,12 @@ Checkpoint after the worker-manager direct automation debt-burn slice:
 - WorkerManager records direct automation pending actions under the resolved shared state agent id when the runtime provides a state-id resolver, so dashboard direct-route resume stays aligned with ChatAgent state ownership.
 - Remaining approval/resume overlap after this slice: `BrokeredWorkerSession.automationContinuation`, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
 
+Checkpoint after the chat-agent direct-intent helper extraction:
+
+- The pure direct-intent helper block for Second Brain focus continuation, routine parsing/deduplication, direct response-source metadata, and coding-backend task selection moved from `src/chat-agent.ts` into `src/runtime/chat-agent/direct-intent-helpers.ts`.
+- `src/chat-agent.ts` is still the turn-orchestration entrypoint, but it no longer owns those parsing/formatting details inline. Future slices should keep extracting cohesive runtime modules before changing behavior.
+- Focused coverage now exists at `src/runtime/chat-agent/direct-intent-helpers.test.ts`, so these helpers can be refactored independently while the graph-owned orchestration work continues.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
