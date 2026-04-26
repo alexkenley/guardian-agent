@@ -60,6 +60,9 @@ import {
   dispatchDirectIntentCandidates,
 } from './runtime/chat-agent/direct-intent-dispatch.js';
 import {
+  formatCodingBackendApprovalResult,
+} from './runtime/chat-agent/coding-backend-approval-result.js';
+import {
   tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
 } from './runtime/chat-agent/direct-coding-backend.js';
 import {
@@ -174,12 +177,12 @@ import {
 } from './runtime/chat-agent/recent-tool-report.js';
 import {
   normalizeFilesystemResumePrincipalRole,
-  type SecondBrainMutationResumePayload,
 } from './runtime/chat-agent/direct-route-resume.js';
 import {
   buildDirectSecondBrainClarificationResponse as buildDirectSecondBrainClarificationResponseHelper,
   buildDirectSecondBrainMutationSuccessResponse as buildDirectSecondBrainMutationSuccessResponseHelper,
   executeDirectSecondBrainMutation as executeDirectSecondBrainMutationHelper,
+  readSecondBrainMutationApprovalDescriptor,
   type DirectSecondBrainMutationAction,
   type DirectSecondBrainMutationItemType,
   type DirectSecondBrainMutationToolName,
@@ -224,9 +227,6 @@ import {
 import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
-import {
-  executeStoredSecondBrainMutation as executeStoredSecondBrainMutationHelper,
-} from './runtime/chat-agent/second-brain-resume.js';
 import {
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
   recoverDirectAnswerAfterTools as recoverDirectAnswerAfterToolsHelper,
@@ -4875,6 +4875,10 @@ type DirectIntentShadowCandidate =
         channel,
         surfaceId,
       ),
+      formatResolvedApprovalResultResponse: (pendingAction, approvalResult) => this.formatResolvedApprovalResultResponse(
+        pendingAction,
+        approvalResult,
+      ),
       formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
       resolveApprovalTargets: (content, pendingIds) => this.resolveApprovalTargets(content, pendingIds),
     });
@@ -5223,6 +5227,35 @@ type DirectIntentShadowCandidate =
     summaries?: Map<string, { toolName: string; argsPreview: string }>,
   ): string {
     return this.approvalState.formatPendingApprovalPrompt(ids, summaries);
+  }
+
+  private formatResolvedApprovalResultResponse(
+    pendingAction: PendingActionRecord,
+    approvalResult?: ToolApprovalDecisionResult,
+  ): { content: string; metadata?: Record<string, unknown> } | null {
+    const codingBackendResult = formatCodingBackendApprovalResult(approvalResult);
+    if (codingBackendResult) return codingBackendResult;
+
+    const secondBrainDescriptor = readSecondBrainMutationApprovalDescriptor(pendingAction.intent.entities);
+    if (!secondBrainDescriptor || !approvalResult?.job?.toolName?.startsWith('second_brain_')) {
+      return null;
+    }
+    if (!approvalResult.success || approvalResult.executionSucceeded === false || approvalResult.result?.success === false) {
+      const errorMessage = toString(approvalResult.result?.error)
+        || toString(approvalResult.result?.message)
+        || toString(approvalResult.message)
+        || 'Second Brain update failed.';
+      return { content: `I couldn't complete the local Second Brain update: ${errorMessage}` };
+    }
+
+    const focusState = readSecondBrainFocusContinuationState(
+      this.getContinuityThread(pendingAction.scope.userId),
+    );
+    return this.buildDirectSecondBrainMutationSuccessResponse(
+      secondBrainDescriptor,
+      approvalResult.result?.output,
+      focusState,
+    );
   }
 
   private async tryDirectWebSearch(
@@ -6774,11 +6807,6 @@ type DirectIntentShadowCandidate =
       options,
       completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
       executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      executeStoredSecondBrainMutation: (nextPendingAction, resume, approvalResult) => this.executeStoredSecondBrainMutation(
-        nextPendingAction,
-        resume,
-        approvalResult,
-      ),
       executeStoredAutomationAuthoring: (nextPendingAction, resume, approvalResult) => this.executeStoredAutomationAuthoring(
         nextPendingAction,
         resume,
@@ -6958,27 +6986,6 @@ type DirectIntentShadowCandidate =
       buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
         result,
         fallbackContent,
-      ),
-    });
-  }
-
-  private async executeStoredSecondBrainMutation(
-    pendingAction: PendingActionRecord,
-    resume: SecondBrainMutationResumePayload,
-    approvalResult?: ToolApprovalDecisionResult,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
-    return executeStoredSecondBrainMutationHelper({
-      pendingAction,
-      resume,
-      approvalResult,
-      agentId: this.id,
-      tools: this.tools,
-      getContinuityThread: (userId, nowMs) => this.getContinuityThread(userId, nowMs),
-      readSecondBrainFocusContinuationState,
-      buildDirectSecondBrainMutationSuccessResponse: (descriptor, output, focusState) => this.buildDirectSecondBrainMutationSuccessResponse(
-        descriptor,
-        output,
-        focusState as SecondBrainFocusContinuationPayload | null | undefined,
       ),
     });
   }

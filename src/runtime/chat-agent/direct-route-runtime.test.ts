@@ -156,7 +156,6 @@ describe('direct route resume runtime', () => {
       },
       completePendingAction,
       executeStoredFilesystemSave: vi.fn(),
-      executeStoredSecondBrainMutation: vi.fn(),
       executeStoredAutomationAuthoring,
     });
 

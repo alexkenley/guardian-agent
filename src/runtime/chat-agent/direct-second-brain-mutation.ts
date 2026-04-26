@@ -4,7 +4,6 @@ import type { ToolExecutor } from '../../tools/executor.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
-import { DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION } from './direct-route-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export type DirectSecondBrainMutationItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief' | 'routine';
@@ -33,6 +32,62 @@ export interface DirectSecondBrainSuccessDescriptor {
   action: DirectSecondBrainMutationAction;
   fallbackId?: string;
   fallbackLabel?: string;
+}
+
+export const SECOND_BRAIN_MUTATION_APPROVAL_DESCRIPTOR_ENTITY = 'secondBrainMutationApproval';
+
+export function buildSecondBrainMutationApprovalEntities(
+  entities: Record<string, unknown> | IntentGatewayDecision['entities'],
+  descriptor: DirectSecondBrainSuccessDescriptor,
+): Record<string, unknown> {
+  return {
+    ...entities,
+    [SECOND_BRAIN_MUTATION_APPROVAL_DESCRIPTOR_ENTITY]: {
+      itemType: descriptor.itemType,
+      action: descriptor.action,
+      ...(toString(descriptor.fallbackId).trim()
+        ? { fallbackId: toString(descriptor.fallbackId).trim() }
+        : {}),
+      ...(toString(descriptor.fallbackLabel).trim()
+        ? { fallbackLabel: toString(descriptor.fallbackLabel).trim() }
+        : {}),
+    },
+  };
+}
+
+export function readSecondBrainMutationApprovalDescriptor(
+  entities: Record<string, unknown> | undefined,
+): DirectSecondBrainSuccessDescriptor | null {
+  const raw = entities?.[SECOND_BRAIN_MUTATION_APPROVAL_DESCRIPTOR_ENTITY];
+  if (!isRecord(raw)) return null;
+  const itemType = toString(raw.itemType).trim();
+  const action = toString(raw.action).trim();
+  if (!isSecondBrainMutationItemType(itemType) || !isSecondBrainMutationAction(action)) {
+    return null;
+  }
+  return {
+    itemType,
+    action,
+    ...(toString(raw.fallbackId).trim() ? { fallbackId: toString(raw.fallbackId).trim() } : {}),
+    ...(toString(raw.fallbackLabel).trim() ? { fallbackLabel: toString(raw.fallbackLabel).trim() } : {}),
+  };
+}
+
+function isSecondBrainMutationItemType(value: string): value is DirectSecondBrainMutationItemType {
+  return value === 'note'
+    || value === 'task'
+    || value === 'calendar'
+    || value === 'person'
+    || value === 'library'
+    || value === 'brief'
+    || value === 'routine';
+}
+
+function isSecondBrainMutationAction(value: string): value is DirectSecondBrainMutationAction {
+  return value === 'create'
+    || value === 'update'
+    || value === 'delete'
+    || value === 'complete';
 }
 
 function defaultSecondBrainItemLabel(itemType: DirectSecondBrainMutationItemType): string {
@@ -352,24 +407,10 @@ export async function executeDirectSecondBrainMutation<TFocusState>(input: {
         turnRelation: input.decision.turnRelation,
         resolution: input.decision.resolution,
         provenance: input.decision.provenance,
-        entities: input.toPendingActionEntities(input.decision.entities),
-        resume: {
-          kind: 'direct_route',
-          payload: {
-            type: DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION,
-            toolName: input.toolName,
-            args: { ...input.args },
-            originalUserContent: input.message.content,
-            itemType: input.successDescriptor.itemType,
-            action: input.successDescriptor.action,
-            ...(toString(input.successDescriptor.fallbackId).trim()
-              ? { fallbackId: toString(input.successDescriptor.fallbackId).trim() }
-              : {}),
-            ...(toString(input.successDescriptor.fallbackLabel).trim()
-              ? { fallbackLabel: toString(input.successDescriptor.fallbackLabel).trim() }
-              : {}),
-          },
-        },
+        entities: input.toPendingActionEntities(buildSecondBrainMutationApprovalEntities(
+          input.decision.entities,
+          input.successDescriptor,
+        )),
       },
     );
     return input.buildPendingApprovalBlockedResponse(pendingActionResult, [

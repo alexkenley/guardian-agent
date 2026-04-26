@@ -6028,7 +6028,7 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect((result as { content: string }).content).toBe('Task completed: Second Brain task smoke test');
   });
 
-  it('stores the renamed title in pending approval payloads for focused task updates', async () => {
+  it('stores a Second Brain mutation descriptor instead of replay args for focused task approvals', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
         debug: vi.fn(),
@@ -6125,13 +6125,12 @@ describe('LLMChatAgent direct intent metadata', () => {
       channel: 'web',
       surfaceId: 'owner',
     });
-    expect(pending?.resume?.payload).toMatchObject({
-      type: 'second_brain_mutation',
-      toolName: 'second_brain_task_upsert',
-      args: expect.objectContaining({
-        id: 'task-1',
-        title: 'Send Harbor launch review deck and notes',
-      }),
+    expect(pending?.resume).toBeUndefined();
+    expect(pending?.intent.entities).toMatchObject({
+      secondBrainMutationApproval: {
+        itemType: 'task',
+        action: 'update',
+      },
     });
   });
 
@@ -6666,6 +6665,11 @@ describe('LLMChatAgent direct intent metadata', () => {
         error: vi.fn(),
       } as never,
     });
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-second-brain-approval.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
     const continuityThreadStore = new ContinuityThreadStore({
       enabled: false,
       sqlitePath: '/tmp/guardianagent-chat-agent-second-brain-focus.test.sqlite',
@@ -6675,19 +6679,69 @@ describe('LLMChatAgent direct intent metadata', () => {
     const tools = {
       isEnabled: vi.fn(() => true),
       executeModelTool: vi.fn(),
+      decideApproval: vi.fn(async () => ({
+        success: true,
+        approved: true,
+        executionSucceeded: true,
+        message: "Tool 'second_brain_note_upsert' completed.",
+        job: {
+          id: 'job-second-brain-1',
+          toolName: 'second_brain_note_upsert',
+          risk: 'mutating',
+          origin: 'assistant',
+          argsPreview: '{"title":"Smoke Test Note"}',
+          status: 'succeeded',
+          createdAt: 1,
+          requiresApproval: true,
+        },
+        result: {
+          success: true,
+          status: 'succeeded',
+          message: "Tool 'second_brain_note_upsert' completed.",
+          output: {
+            id: 'note-2',
+            title: 'Smoke Test Note',
+          },
+        },
+      })),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      listPendingApprovalIdsForUser: vi.fn(() => ['approval-1']),
     };
-    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
-    (agent as any).continuityThreadStore = continuityThreadStore;
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      pendingActionStore,
+      continuityThreadStore,
+    );
     const updateDirectContinuationState = vi.spyOn(agent as any, 'updateDirectContinuationState');
 
-    const pendingAction: PendingActionRecord = {
-      id: 'pending-1',
-      scope: {
-        agentId: 'chat',
-        userId: 'owner',
-        channel: 'web',
-        surfaceId: 'owner',
-      },
+    pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+    }, {
       status: 'pending',
       transferPolicy: 'origin_surface_only',
       blocker: {
@@ -6699,41 +6753,30 @@ describe('LLMChatAgent direct intent metadata', () => {
         route: 'personal_assistant_task',
         operation: 'create',
         originalUserContent: 'Create a note that says: "Second Brain write smoke test note."',
-      },
-      resume: {
-        kind: 'direct_route',
-        payload: {
-          type: 'second_brain_mutation',
-          toolName: 'second_brain_note_upsert',
-          args: { content: 'Second Brain write smoke test note.' },
-          originalUserContent: 'Create a note that says: "Second Brain write smoke test note."',
-          itemType: 'note',
-          action: 'create',
-        },
-      },
-      createdAt: 1,
-      updatedAt: 1,
-      expiresAt: 2,
-    };
-
-    const result = await (agent as any).continueDirectRouteAfterApproval(
-      pendingAction,
-      'approval-1',
-      'approved',
-      {
-        success: true,
-        approved: true,
-        executionSucceeded: true,
-        message: "Tool 'second_brain_note_upsert' completed.",
-        result: {
-          success: true,
-          status: 'succeeded',
-          message: "Tool 'second_brain_note_upsert' completed.",
-          output: {
-            id: 'note-2',
-            title: 'Smoke Test Note',
+        entities: {
+          secondBrainMutationApproval: {
+            itemType: 'note',
+            action: 'create',
           },
         },
+      },
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const result = await (agent as any).tryHandleApproval(
+      {
+        id: 'msg-approve-second-brain-1',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+        content: 'yes',
+        timestamp: Date.now(),
+      },
+      {
+        agentId: 'chat',
+        emit: vi.fn(async () => {}),
+        checkAction: vi.fn(),
+        capabilities: [],
       },
     );
 

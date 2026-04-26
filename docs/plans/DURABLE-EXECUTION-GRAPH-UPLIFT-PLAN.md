@@ -196,14 +196,21 @@ Checkpoint after the coding-backend direct-route resume deletion:
 - `coding_backend_run` approvals no longer store a `direct_route` resume payload. The approval decision result already carries the backend execution output, so shared approval orchestration now renders that result directly.
 - `src/runtime/chat-agent/coding-backend-approval-result.ts` owns coding-backend approval-result response metadata without reconstructing a replay request.
 - The deleted `coding-backend-resume.ts` bridge removes one direct-route payload type from `direct-route-resume.ts` and `direct-route-runtime.ts`.
-- Remaining direct-route debt after this slice: filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
+- Remaining direct-route debt after this slice: filesystem save and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
 
 Checkpoint after the direct coding-backend runtime extraction:
 
 - Direct coding-backend status checks, direct backend run dispatch, pending-approval storage, and routing trace emission moved from `src/chat-agent.ts` into `src/runtime/chat-agent/direct-coding-backend.ts`.
 - `src/chat-agent.ts` now only wires dependencies for that path, which gives the future graph-interrupt migration one direct coding-backend owner instead of another inline monolith branch.
 - Focused coverage at `src/runtime/chat-agent/direct-coding-backend.test.ts` verifies successful direct runs, recent-run status formatting, and the current shared pending-action resume contract.
-- Remaining direct-route debt after this slice: filesystem save, second-brain mutation, and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
+- Remaining direct-route debt after this slice: filesystem save and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
+
+Checkpoint after the Second Brain direct-route resume deletion:
+
+- Direct Second Brain mutation approvals no longer persist tool names, arguments, and original content as a `direct_route` replay payload.
+- Pending actions now carry only the user-facing mutation descriptor in intent entities, while shared approval orchestration asks `ChatAgent` to format approved tool results through the capability-specific result formatter.
+- `second-brain-resume.ts`, the Second Brain direct-route payload type, and the direct-route runtime branch for Second Brain replay have been deleted.
+- Remaining direct-route debt after this slice: filesystem save and automation-authoring direct-route resumes are still replay payloads. They need graph interrupt equivalents before the direct-route resume channel can be removed.
 
 Checkpoint after the pending-approval status helper extraction:
 

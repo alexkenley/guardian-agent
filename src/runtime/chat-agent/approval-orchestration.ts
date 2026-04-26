@@ -10,7 +10,6 @@ import {
   APPROVAL_CONFIRM_PATTERN,
   APPROVAL_DENY_PATTERN,
 } from './approval-state.js';
-import { formatCodingBackendApprovalResult } from './coding-backend-approval-result.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 export interface ApprovalOrchestrationResponse {
@@ -214,6 +213,10 @@ export async function handleApprovalMessage(input: {
     channel: string,
     surfaceId?: string,
   ) => Record<string, unknown> | undefined;
+  formatResolvedApprovalResultResponse: (
+    pendingAction: PendingActionRecord,
+    approvalResult?: ToolApprovalDecisionResult,
+  ) => ApprovalOrchestrationResponse | null;
   formatPendingApprovalPrompt: (
     ids: string[],
     summaries?: Map<string, { toolName: string; argsPreview: string; actionLabel?: string }>,
@@ -419,7 +422,7 @@ export async function handleApprovalMessage(input: {
     const approvalResult = targetIds.length === 1
       ? approvalDecisionResults.get(targetIds[0])
       : undefined;
-    const approvalResultResponse = formatCodingBackendApprovalResult(approvalResult);
+    const approvalResultResponse = input.formatResolvedApprovalResultResponse(pendingAction, approvalResult);
     if (approvalResultResponse) {
       input.completePendingAction(pendingAction.id);
       const normalizedResponse = input.normalizeDirectRouteContinuationResponse(

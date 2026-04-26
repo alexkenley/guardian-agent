@@ -28,7 +28,7 @@ describe('approval-orchestration', () => {
       resume: {
         kind: 'direct_route',
         payload: {
-          type: 'second_brain_mutation',
+          type: 'filesystem_save_output',
         },
       },
       createdAt: 1,
@@ -76,6 +76,7 @@ describe('approval-orchestration', () => {
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve it'),
       resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-1'], errors: [] })),
     });
@@ -169,6 +170,7 @@ describe('approval-orchestration', () => {
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve the remaining action'),
       resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-1'], errors: [] })),
     });
@@ -269,6 +271,7 @@ describe('approval-orchestration', () => {
       resumeStoredExecutionGraphPendingAction,
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve graph write'),
       resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-graph-1'], errors: [] })),
     });
@@ -364,6 +367,7 @@ describe('approval-orchestration', () => {
       resumeStoredExecutionGraphPendingAction: vi.fn(async () => null),
       normalizeDirectRouteContinuationResponse: vi.fn((response) => response),
       withCurrentPendingActionMetadata: vi.fn((metadata) => metadata),
+      formatResolvedApprovalResultResponse: vi.fn(() => null),
       formatPendingApprovalPrompt: vi.fn(() => 'Approve graph write'),
       resolveApprovalTargets: vi.fn(() => ({ ids: ['approval-graph-missing-handler'], errors: [] })),
     });

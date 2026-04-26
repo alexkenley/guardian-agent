@@ -24,9 +24,7 @@ import {
 import {
   normalizeFilesystemResumePrincipalRole,
   readFilesystemSaveOutputResumePayload,
-  readSecondBrainMutationResumePayload,
   readAutomationAuthoringResumePayload,
-  type SecondBrainMutationResumePayload,
   type AutomationAuthoringResumePayload,
 } from './direct-route-resume.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
@@ -273,11 +271,6 @@ export async function resumeStoredDirectRoutePendingAction(input: {
   executeStoredFilesystemSave: (
     input: StoredFilesystemSaveInput,
   ) => Promise<string | DirectRouteRuntimeResponse>;
-  executeStoredSecondBrainMutation: (
-    pendingAction: PendingActionRecord,
-    resume: SecondBrainMutationResumePayload,
-    approvalResult?: ToolApprovalDecisionResult,
-  ) => Promise<DirectRouteRuntimeResponse>;
   executeStoredAutomationAuthoring?: (
     pendingAction: PendingActionRecord,
     resume: AutomationAuthoringResumePayload,
@@ -314,15 +307,6 @@ export async function resumeStoredDirectRoutePendingAction(input: {
       allowPathRemediation: filesystemResume.allowPathRemediation,
     });
     return typeof result === 'string' ? { content: result } : result;
-  }
-
-  const secondBrainResume = readSecondBrainMutationResumePayload(input.pendingAction.resume?.payload);
-  if (secondBrainResume) {
-    return input.executeStoredSecondBrainMutation(
-      input.pendingAction,
-      secondBrainResume,
-      input.options?.approvalResult,
-    );
   }
 
   return null;
