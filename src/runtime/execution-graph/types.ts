@@ -40,7 +40,8 @@ export type ExecutionArtifactType =
   | 'WriteSpec'
   | 'MutationReceipt'
   | 'VerificationResult'
-  | 'RecoveryProposal';
+  | 'RecoveryProposal'
+  | 'WorkerSuspension';
 
 export interface ExecutionSecurityContext {
   agentId?: string;

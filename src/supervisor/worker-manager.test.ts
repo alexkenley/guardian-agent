@@ -26,6 +26,10 @@ import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-
 import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
 import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
 import { PendingActionStore, type PendingActionRecord } from '../runtime/pending-actions.js';
+import {
+  attachWorkerSuspensionMetadata,
+  WORKER_SUSPENSION_SCHEMA_VERSION,
+} from '../runtime/worker-suspension.js';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
 let workerMessageHandler:
@@ -2386,6 +2390,204 @@ describe('WorkerManager', () => {
     expect(sawContinuation).toBe(true);
 
     manager.shutdown();
+  });
+
+  it('resumes delegated worker approvals from graph-owned worker suspension artifacts', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    let sawContinuation = false;
+    workerMessageHandler = (params) => {
+      const message = (params.message ?? {}) as {
+        id?: string;
+        userId?: string;
+        channel?: string;
+        content?: string;
+        metadata?: Record<string, unknown>;
+        timestamp?: number;
+      };
+      const continuation = message.metadata?.[APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY] as
+        | { type?: string; approvalId?: string; decision?: string; resultMessage?: string }
+        | undefined;
+      if (continuation?.approvalId === 'approval-graph-worker-1') {
+        sawContinuation = true;
+        expect(message.metadata?.workerSuspension).toBeTruthy();
+        return {
+          content: 'The delegated worker resumed from graph suspension state.',
+          metadata: {
+            workerExecution: {
+              lifecycle: 'completed',
+              source: 'tool_loop',
+              completionReason: 'completed',
+              responseQuality: 'final',
+              toolCallCount: 1,
+              toolResultCount: 1,
+              successfulToolResultCount: 1,
+            },
+          },
+        };
+      }
+      const baseMetadata = {
+        continueConversationAfterApproval: true,
+        ...approvalPendingActionMetadata([
+          {
+            id: 'approval-graph-worker-1',
+            toolName: 'outlook_draft',
+            argsPreview: '{"to":"alex@example.com"}',
+          },
+        ]),
+      };
+      return {
+        content: 'Waiting for approval to create the delegated draft.',
+        metadata: attachWorkerSuspensionMetadata(baseMetadata, {
+          version: WORKER_SUSPENSION_SCHEMA_VERSION,
+          kind: 'tool_loop',
+          llmMessages: [
+            {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-graph-worker-1', name: 'outlook_draft', args: '{"to":"alex@example.com"}' }],
+            },
+          ],
+          pendingTools: [{
+            approvalId: 'approval-graph-worker-1',
+            toolCallId: 'call-graph-worker-1',
+            jobId: 'job-graph-worker-1',
+            name: 'outlook_draft',
+          }],
+          originalMessage: {
+            id: message.id ?? 'm-graph-worker',
+            userId: message.userId ?? 'tester',
+            principalId: 'tester',
+            principalRole: 'owner',
+            channel: message.channel ?? 'web',
+            content: message.content ?? 'Draft an Outlook email.',
+            metadata: message.metadata,
+            timestamp: message.timestamp ?? 1,
+          },
+          createdAt: 1,
+          expiresAt: 30_001,
+        }),
+      };
+    };
+
+    const pendingActionStore = createMemoryPendingActionStore(() => 1);
+    const executionGraphStore = new ExecutionGraphStore({ now: () => 1 });
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listApprovals: vi.fn(() => []),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        pendingActionStore,
+        executionGraphStore,
+        now: () => 1,
+      },
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-graph-worker',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        surfaceId: 'surface-1',
+        content: 'Draft an Outlook email to alex@example.com.',
+        metadata: repoGroundedCodingMetadata(),
+        timestamp: 1,
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-graph-worker',
+        executionId: 'exec-graph-worker',
+        rootExecutionId: 'root-graph-worker',
+        originChannel: 'web',
+        originSurfaceId: 'surface-1',
+        continuityKey: 'tester:web',
+      },
+    });
+
+    const pending = pendingActionStore.findActiveByApprovalId('approval-graph-worker-1');
+    expect(pending?.resume).toMatchObject({
+      kind: 'execution_graph',
+      payload: {
+        graphId: expect.stringContaining('delegated-worker'),
+        nodeKind: 'delegated_worker',
+      },
+    });
+    expect(pending?.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactType)).toContain('WorkerSuspension');
+    expect(executionGraphStore.listArtifacts(pending?.resume?.payload.graphId as string).map((artifact) => artifact.artifactType)).toContain('WorkerSuspension');
+
+    manager.shutdown();
+
+    const resumeManager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listApprovals: vi.fn(() => []),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        pendingActionStore,
+        executionGraphStore,
+        now: () => 2,
+      },
+    );
+
+    const resumed = await resumeManager.resumeExecutionGraphPendingAction(
+      pending!,
+      {
+        approvalId: 'approval-graph-worker-1',
+        approvalResult: {
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: 'Draft approved.',
+        },
+      },
+    );
+
+    expect(resumed?.content).toBe('The delegated worker resumed from graph suspension state.');
+    expect(resumed?.metadata?.executionGraph).toMatchObject({
+      graphId: pending?.resume?.payload.graphId,
+      status: 'succeeded',
+    });
+    expect(sawContinuation).toBe(true);
+
+    resumeManager.shutdown();
   });
 
   it('marks delegated workers as failed when the worker loop reports a non-terminal execution state', async () => {

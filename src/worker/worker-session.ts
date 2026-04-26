@@ -61,6 +61,12 @@ import {
   type WorkerExecutionTerminationReason,
 } from '../runtime/worker-execution-metadata.js';
 import {
+  attachWorkerSuspensionMetadata,
+  readWorkerSuspensionMetadata,
+  WORKER_SUSPENSION_SCHEMA_VERSION,
+  type SerializedWorkerSuspensionSession,
+} from '../runtime/worker-suspension.js';
+import {
   buildDelegatedExecutionMetadata,
   readDelegatedResultEnvelope,
 } from '../runtime/execution/metadata.js';
@@ -1775,6 +1781,87 @@ export class BrokeredWorkerSession {
     this.client = client;
   }
 
+  private serializeSuspendedSession(
+    suspended: SuspendedSession | null,
+    expiresAt: number = Date.now() + PENDING_APPROVAL_TTL_MS,
+  ): SerializedWorkerSuspensionSession | null {
+    if (!suspended) return null;
+    const createdAt = Date.now();
+    if (suspended.kind === 'tool_loop') {
+      return {
+        version: WORKER_SUSPENSION_SCHEMA_VERSION,
+        kind: 'tool_loop',
+        llmMessages: structuredClone(suspended.llmMessages),
+        pendingTools: suspended.pendingTools.map((pending) => ({ ...pending })),
+        originalMessage: structuredClone(suspended.originalMessage),
+        ...(suspended.taskContract ? { taskContract: structuredClone(suspended.taskContract) } : {}),
+        ...(suspended.executionProfile ? { executionProfile: structuredClone(suspended.executionProfile) } : {}),
+        createdAt,
+        expiresAt,
+      };
+    }
+    return {
+      version: WORKER_SUSPENSION_SCHEMA_VERSION,
+      kind: 'planner',
+      plan: structuredClone(suspended.plan),
+      pendingNodes: suspended.pendingNodes.map((pending) => ({ ...pending })),
+      originalMessage: structuredClone(suspended.originalMessage),
+      trustState: {
+        contentTrustLevel: suspended.trustState.contentTrustLevel,
+        taintReasons: [...suspended.trustState.taintReasons],
+      },
+      ...(suspended.executionProfile ? { executionProfile: structuredClone(suspended.executionProfile) } : {}),
+      createdAt,
+      expiresAt,
+    };
+  }
+
+  private restoreSuspendedSession(
+    suspension: SerializedWorkerSuspensionSession,
+    nowMs: number = Date.now(),
+  ): boolean {
+    if (suspension.expiresAt <= nowMs) return false;
+    if (suspension.kind === 'tool_loop') {
+      this.suspendedSession = {
+        kind: 'tool_loop',
+        llmMessages: structuredClone(suspension.llmMessages),
+        pendingTools: suspension.pendingTools.map((pending) => ({ ...pending })),
+        originalMessage: structuredClone(suspension.originalMessage),
+        ...(suspension.taskContract ? { taskContract: structuredClone(suspension.taskContract) } : {}),
+        ...(suspension.executionProfile ? { executionProfile: structuredClone(suspension.executionProfile) } : {}),
+      };
+      this.pendingApprovals = {
+        ids: suspension.pendingTools.map((pending) => pending.approvalId),
+        expiresAt: suspension.expiresAt,
+      };
+      return true;
+    }
+    this.suspendedSession = {
+      kind: 'planner',
+      plan: structuredClone(suspension.plan),
+      pendingNodes: suspension.pendingNodes.map((pending) => ({ ...pending })),
+      originalMessage: structuredClone(suspension.originalMessage),
+      trustState: {
+        contentTrustLevel: suspension.trustState.contentTrustLevel,
+        taintReasons: [...suspension.trustState.taintReasons],
+      },
+      ...(suspension.executionProfile ? { executionProfile: structuredClone(suspension.executionProfile) } : {}),
+    };
+    this.pendingApprovals = {
+      ids: suspension.pendingNodes.map((pending) => pending.approvalId),
+      expiresAt: suspension.expiresAt,
+    };
+    return true;
+  }
+
+  private attachCurrentWorkerSuspension(
+    metadata: Record<string, unknown>,
+    expiresAt: number,
+  ): Record<string, unknown> {
+    const suspension = this.serializeSuspendedSession(this.suspendedSession, expiresAt);
+    return suspension ? attachWorkerSuspensionMetadata(metadata, suspension) : metadata;
+  }
+
   private rememberToolReportScope(
     message: UserMessage,
     codeContext: { workspaceRoot: string; sessionId?: string } | undefined,
@@ -1921,6 +2008,11 @@ export class BrokeredWorkerSession {
 
     if (params.recoveryAdvisor) {
       return this.handleRecoveryAdvisorMessage(params.recoveryAdvisor, chatFn, selectedExecutionProfile);
+    }
+
+    const storedSuspension = readWorkerSuspensionMetadata(params.message.metadata);
+    if (!this.suspendedSession && storedSuspension) {
+      this.restoreSuspendedSession(storedSuspension);
     }
 
     if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
@@ -2216,9 +2308,10 @@ export class BrokeredWorkerSession {
 
     if (execution.outcome.status === 'paused') {
       const ids = execution.pendingNodes.map((pending) => pending.approvalId);
+      const expiresAt = Date.now() + PENDING_APPROVAL_TTL_MS;
       this.pendingApprovals = {
         ids,
-        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        expiresAt,
       };
       this.suspendedSession = {
         kind: 'planner',
@@ -2237,7 +2330,10 @@ export class BrokeredWorkerSession {
         content: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
-        metadata: buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource, 'planner'),
+        metadata: this.attachCurrentWorkerSuspension(
+          buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource, 'planner'),
+          expiresAt,
+        ),
       };
     }
 
@@ -2755,9 +2851,10 @@ export class BrokeredWorkerSession {
 
     if (execution.outcome.status === 'paused') {
       const ids = execution.pendingNodes.map((pending) => pending.approvalId);
+      const expiresAt = Date.now() + PENDING_APPROVAL_TTL_MS;
       this.pendingApprovals = {
         ids,
-        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        expiresAt,
       };
       this.suspendedSession = {
         kind: 'planner',
@@ -2772,7 +2869,10 @@ export class BrokeredWorkerSession {
         content: pendingApprovalMeta.length > 0
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
-        metadata: buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource, 'planner'),
+        metadata: this.attachCurrentWorkerSuspension(
+          buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource, 'planner'),
+          expiresAt,
+        ),
       };
     }
 
@@ -3118,9 +3218,10 @@ export class BrokeredWorkerSession {
     if (pendingTools.length > 0) {
       this.rememberToolReportScope(message, codeContext, toolExecutor);
       const ids = pendingTools.map((pending) => pending.approvalId);
+      const expiresAt = Date.now() + PENDING_APPROVAL_TTL_MS;
       this.pendingApprovals = {
         ids,
-        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        expiresAt,
       };
       this.suspendedSession = {
         kind: 'tool_loop',
@@ -3174,10 +3275,13 @@ export class BrokeredWorkerSession {
       });
       return {
         content: pendingContent,
-        metadata: {
-          ...buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource),
-          ...buildDelegatedExecutionMetadata(envelope),
-        },
+        metadata: this.attachCurrentWorkerSuspension(
+          {
+            ...buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource),
+            ...buildDelegatedExecutionMetadata(envelope),
+          },
+          expiresAt,
+        ),
       };
     }
 

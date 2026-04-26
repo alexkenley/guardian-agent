@@ -74,6 +74,10 @@ import {
   type DelegatedWorkerGraphContext,
 } from '../runtime/execution-graph/delegated-worker-node.js';
 import {
+  buildWorkerSuspensionArtifact,
+  readWorkerSuspensionArtifact,
+} from '../runtime/execution-graph/worker-suspension-artifact.js';
+import {
   buildGraphWriteSpecSynthesisMessages,
   buildGroundedSynthesisLedgerArtifact,
   completeGraphWriteSpecSynthesisNode,
@@ -155,6 +159,13 @@ import {
   buildWorkerApprovalResumePayload,
   readWorkerApprovalResumePayload,
 } from './worker-approval-resume.js';
+import {
+  attachWorkerSuspensionMetadata,
+  buildWorkerSuspensionEnvelope,
+  readWorkerSuspensionMetadata,
+  type SerializedWorkerSuspensionSession,
+  type WorkerSuspensionResumeContext,
+} from '../runtime/worker-suspension.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -429,6 +440,27 @@ interface ExecutionGraphResumeContext {
   expiresAt: number;
 }
 
+interface WorkerSuspensionGraphResumeContext {
+  graphId: string;
+  executionId: string;
+  rootExecutionId: string;
+  parentExecutionId?: string;
+  requestId: string;
+  runId?: string;
+  nodeId: string;
+  resumeToken: string;
+  approvalId: string;
+  channel?: string;
+  agentId?: string;
+  userId?: string;
+  codeSessionId?: string;
+  resume: WorkerSuspensionResumeContext;
+  session: SerializedWorkerSuspensionSession;
+  artifactIds: string[];
+  sequenceStart: number;
+  expiresAt: number;
+}
+
 interface DelegatedWorkerGraphRun {
   context: DelegatedWorkerGraphContext;
   sequence: number;
@@ -446,6 +478,12 @@ interface DelegatedWorkerGraphCompletionMetadata extends DelegatedWorkerGraphJob
   status: 'completed' | 'blocked' | 'awaiting_approval' | 'failed';
   lifecycle: 'completed' | 'blocked' | 'failed';
   verificationArtifactId: string;
+}
+
+interface DelegatedWorkerGraphCompletion {
+  metadata: DelegatedWorkerGraphCompletionMetadata;
+  interruptEvent?: ExecutionGraphEvent;
+  verificationArtifactRef?: ReturnType<typeof artifactRefFromArtifact>;
 }
 
 interface RecoveryAdvisorGraphResult {
@@ -1031,6 +1069,14 @@ export class WorkerManager {
       return null;
     }
     const now = this.observability.now ?? Date.now;
+    const workerSuspension = this.reconstructWorkerSuspensionGraphResume(pendingAction, payload, options.approvalId);
+    if (workerSuspension) {
+      return this.resumeWorkerSuspensionGraphPendingAction(
+        pendingAction,
+        workerSuspension,
+        options,
+      );
+    }
     const suspension = this.reconstructExecutionGraphSuspension(pendingAction, payload, options.approvalId);
     if (!suspension) {
       this.markExecutionGraphPendingActionFailed(pendingAction, now());
@@ -1192,6 +1238,270 @@ export class WorkerManager {
     };
   }
 
+  private async resumeWorkerSuspensionGraphPendingAction(
+    pendingAction: PendingActionRecord,
+    suspension: WorkerSuspensionGraphResumeContext,
+    options: {
+      approvalId: string;
+      approvalResult: ToolApprovalDecisionResult;
+    },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const now = this.observability.now ?? Date.now;
+    if (suspension.expiresAt <= now()) {
+      this.markExecutionGraphPendingActionFailed(pendingAction, now());
+      return {
+        content: 'Execution graph approval was resolved, but the delegated worker suspension expired. Please retry the request.',
+        metadata: {
+          executionGraph: {
+            graphId: suspension.graphId,
+            status: 'failed',
+            reason: 'worker_suspension_expired',
+          },
+        },
+      };
+    }
+
+    this.emitWorkerSuspensionGraphEvent(suspension, 'interruption_resolved', {
+      approvalId: options.approvalId,
+      resultStatus: options.approvalResult.approved ? 'approved' : 'denied',
+      resumeToken: suspension.resumeToken,
+    }, 'approval-resolved');
+
+    if (!options.approvalResult.approved) {
+      this.emitWorkerSuspensionGraphEvent(suspension, 'node_failed', {
+        reason: options.approvalResult.message || 'Approval denied.',
+      }, 'node-denied');
+      this.emitWorkerSuspensionGraphEvent(suspension, 'graph_failed', {
+        reason: options.approvalResult.message || 'Approval denied.',
+      }, 'graph-denied', { nodeScoped: false });
+      this.completeExecutionGraphPendingAction(pendingAction, now());
+      return {
+        content: options.approvalResult.message || 'Approval denied. I did not continue the delegated worker action.',
+        metadata: {
+          executionGraph: {
+            graphId: suspension.graphId,
+            status: 'failed',
+            reason: 'approval_denied',
+          },
+        },
+      };
+    }
+
+    const worker = await this.getOrSpawnWorker(
+      suspension.resume.sessionId,
+      suspension.resume.agentId,
+      suspension.resume.userId,
+      suspension.resume.channel,
+      [],
+    );
+    const continuationMetadata = attachWorkerSuspensionMetadata(
+      buildApprovalOutcomeContinuationMetadata({
+        approvalId: options.approvalId,
+        decision: 'approved',
+        resultMessage: options.approvalResult.message,
+      }),
+      suspension.session,
+    );
+    const resumeMetadata = suspension.resume.automationResume
+      ? attachWorkerAutomationAuthoringResumeMetadata(continuationMetadata, suspension.resume.automationResume)
+      : continuationMetadata;
+
+    const continuationResult = await this.dispatchToWorker(worker, {
+      message: {
+        id: randomUUID(),
+        userId: suspension.resume.userId,
+        principalId: suspension.resume.principalId,
+        principalRole: suspension.resume.principalRole,
+        channel: suspension.resume.channel,
+        ...(suspension.resume.surfaceId ? { surfaceId: suspension.resume.surfaceId } : {}),
+        content: '',
+        metadata: resumeMetadata,
+        timestamp: now(),
+      },
+      systemPrompt: '',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      additionalSections: [],
+      toolContext: '',
+      runtimeNotices: [],
+      hasFallbackProvider: !!this.runtime.getFallbackProviderConfig?.(worker.agentId),
+    });
+
+    const state = this.workerSuspensionResumeContextToLegacyState(suspension.resume, worker);
+    this.recordWorkerApprovalContinuationExecutionArtifacts(
+      state,
+      options.approvalId,
+      continuationResult.metadata,
+    );
+    const pendingRecord = this.recordWorkerSuspensionGraphContinuationPendingAction({
+      suspension,
+      worker,
+      result: continuationResult,
+      previousPendingAction: pendingAction,
+    });
+    if (pendingRecord) {
+      return {
+        content: continuationResult.content,
+        metadata: {
+          ...(continuationResult.metadata ?? {}),
+          pendingAction: toPendingActionClientMetadata(pendingRecord),
+          continueConversationAfterApproval: true,
+        },
+      };
+    }
+
+    this.emitWorkerSuspensionGraphEvent(suspension, 'node_completed', {
+      status: 'succeeded',
+      artifactIds: suspension.artifactIds,
+    }, 'node-completed-after-approval');
+    this.emitWorkerSuspensionGraphEvent(suspension, 'graph_completed', {
+      status: 'succeeded',
+      artifactIds: suspension.artifactIds,
+    }, 'graph-completed-after-approval', { nodeScoped: false });
+    this.completeExecutionGraphPendingAction(pendingAction, now());
+    return {
+      content: continuationResult.content,
+      metadata: {
+        ...(continuationResult.metadata ?? {}),
+        executionGraph: {
+          graphId: suspension.graphId,
+          status: 'succeeded',
+          artifactIds: suspension.artifactIds,
+        },
+      },
+    };
+  }
+
+  private recordWorkerSuspensionGraphContinuationPendingAction(input: {
+    suspension: WorkerSuspensionGraphResumeContext;
+    worker: WorkerProcess;
+    result: { content: string; metadata?: Record<string, unknown> };
+    previousPendingAction: PendingActionRecord;
+  }): PendingActionRecord | null {
+    const store = this.observability.pendingActionStore;
+    const graphStore = this.observability.executionGraphStore;
+    const approvalMetadata = readDelegatedPendingApprovalMetadata(input.result.metadata);
+    const workerSuspension = readWorkerSuspensionMetadata(input.result.metadata);
+    if (!store || !graphStore || !approvalMetadata || !workerSuspension) {
+      return null;
+    }
+    const nowMs = this.observability.now?.() ?? Date.now();
+    const event = this.emitWorkerSuspensionGraphEvent(input.suspension, 'interruption_requested', {
+      kind: 'approval',
+      prompt: approvalMetadata.prompt,
+      approvalIds: approvalMetadata.approvalIds,
+      approvalSummaries: approvalMetadata.approvalSummaries.map((summary) => ({ ...summary })),
+      resumeToken: `${input.suspension.graphId}:${input.suspension.nodeId}:approval:${approvalMetadata.approvalIds.join(',')}`,
+    }, 'approval-continuation');
+    const resume = {
+      ...input.suspension.resume,
+      workerId: input.worker.id,
+      workerSessionKey: input.worker.workerSessionKey,
+      approvalIds: approvalMetadata.approvalIds,
+      pendingActionId: input.previousPendingAction.id,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    };
+    const artifact = buildWorkerSuspensionArtifact({
+      graphId: input.suspension.graphId,
+      nodeId: input.suspension.nodeId,
+      envelope: buildWorkerSuspensionEnvelope({
+        resume,
+        session: workerSuspension,
+      }),
+      createdAt: nowMs,
+    });
+    graphStore.writeArtifact(artifact);
+    return recordGraphPendingActionInterrupt({
+      store,
+      scope: input.previousPendingAction.scope,
+      event,
+      originalUserContent: input.previousPendingAction.intent.originalUserContent,
+      intent: input.previousPendingAction.intent,
+      artifactRefs: [artifactRefFromArtifact(artifact)],
+      approvalSummaries: approvalMetadata.approvalSummaries,
+      nowMs,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    });
+  }
+
+  private emitWorkerSuspensionGraphEvent(
+    suspension: WorkerSuspensionGraphResumeContext,
+    kind: ExecutionGraphEvent['kind'],
+    payloadDetails: Record<string, unknown>,
+    eventKey: string,
+    options: {
+      nodeScoped?: boolean;
+    } = {},
+  ): ExecutionGraphEvent {
+    const nodeScoped = options.nodeScoped ?? true;
+    const sequence = this.nextGraphSequence(suspension.graphId, suspension.sequenceStart);
+    const event = createExecutionGraphEvent({
+      eventId: `${suspension.graphId}:worker-resume:${eventKey}:${sequence}`,
+      graphId: suspension.graphId,
+      executionId: suspension.executionId,
+      rootExecutionId: suspension.rootExecutionId,
+      ...(suspension.parentExecutionId ? { parentExecutionId: suspension.parentExecutionId } : {}),
+      requestId: suspension.requestId,
+      ...(suspension.runId ? { runId: suspension.runId } : {}),
+      ...(nodeScoped ? { nodeId: suspension.nodeId, nodeKind: 'delegated_worker' } : {}),
+      kind,
+      timestamp: this.observability.now?.() ?? Date.now(),
+      sequence,
+      producer: 'supervisor',
+      ...(suspension.channel ? { channel: suspension.channel } : {}),
+      ...(suspension.agentId ? { agentId: suspension.agentId } : {}),
+      ...(suspension.userId ? { userId: suspension.userId } : {}),
+      ...(suspension.codeSessionId ? { codeSessionId: suspension.codeSessionId } : {}),
+      payload: payloadDetails,
+    });
+    this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+    this.observability.executionGraphStore?.appendEvent(event);
+    return event;
+  }
+
+  private nextGraphSequence(graphId: string, fallback: number): number {
+    const snapshot = this.observability.executionGraphStore?.getSnapshot(graphId);
+    if (!snapshot) return fallback + 1;
+    return snapshot.events.reduce((highest, event) => Math.max(highest, event.sequence), fallback) + 1;
+  }
+
+  private workerSuspensionResumeContextToLegacyState(
+    resume: WorkerSuspensionResumeContext,
+    worker: WorkerProcess,
+  ): WorkerSuspendedApprovalState {
+    return {
+      workerId: worker.id,
+      workerSessionKey: worker.workerSessionKey,
+      sessionId: resume.sessionId,
+      agentId: resume.agentId,
+      userId: resume.userId,
+      ...(resume.surfaceId ? { surfaceId: resume.surfaceId } : {}),
+      ...(resume.originalUserContent ? { originalUserContent: resume.originalUserContent } : {}),
+      ...(resume.requestId ? { requestId: resume.requestId } : {}),
+      ...(resume.messageId ? { messageId: resume.messageId } : {}),
+      ...(resume.executionId ? { executionId: resume.executionId } : {}),
+      ...(resume.rootExecutionId ? { rootExecutionId: resume.rootExecutionId } : {}),
+      ...(resume.originChannel ? { originChannel: resume.originChannel } : {}),
+      ...(resume.originSurfaceId ? { originSurfaceId: resume.originSurfaceId } : {}),
+      ...(resume.continuityKey ? { continuityKey: resume.continuityKey } : {}),
+      ...(resume.activeExecutionRefs?.length ? { activeExecutionRefs: [...resume.activeExecutionRefs] } : {}),
+      ...(resume.pendingActionId ? { pendingActionId: resume.pendingActionId } : {}),
+      ...(resume.codeSessionId ? { codeSessionId: resume.codeSessionId } : {}),
+      ...(resume.runClass ? { runClass: resume.runClass } : {}),
+      ...(resume.taskRunId ? { taskRunId: resume.taskRunId } : {}),
+      ...(resume.agentName ? { agentName: resume.agentName } : {}),
+      ...(resume.orchestration ? { orchestration: cloneOrchestrationRoleDescriptor(resume.orchestration) } : {}),
+      ...(resume.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(resume.executionProfile) } : {}),
+      ...(resume.automationResume ? { automationResume: resume.automationResume } : {}),
+      principalId: resume.principalId,
+      principalRole: resume.principalRole,
+      channel: resume.channel,
+      approvalIds: [...resume.approvalIds],
+      expiresAt: resume.expiresAt,
+    };
+  }
+
   private completeExecutionGraphPendingAction(
     pendingAction: PendingActionRecord,
     nowMs: number,
@@ -1204,6 +1514,57 @@ export class WorkerManager {
     nowMs: number,
   ): void {
     this.observability.pendingActionStore?.update(pendingAction.id, { status: 'failed' }, nowMs);
+  }
+
+  private reconstructWorkerSuspensionGraphResume(
+    pendingAction: PendingActionRecord,
+    payload: ReturnType<typeof readExecutionGraphResumePayload>,
+    approvalId: string,
+  ): WorkerSuspensionGraphResumeContext | null {
+    if (!payload) return null;
+    const graphStore = this.observability.executionGraphStore;
+    if (!graphStore) return null;
+    const snapshot = graphStore.getSnapshot(payload.graphId);
+    if (!snapshot) return null;
+    const artifactIds = uniqueStrings([
+      ...payload.artifactIds,
+      ...(pendingAction.graphInterrupt?.artifactRefs.map((artifact) => artifact.artifactId) ?? []),
+    ]);
+    const artifact = artifactIds
+      .map((artifactId) => graphStore.getArtifact(payload.graphId, artifactId))
+      .find((candidate) => candidate?.artifactType === 'WorkerSuspension');
+    const envelope = readWorkerSuspensionArtifact(artifact);
+    if (!envelope || !envelope.resume.approvalIds.includes(approvalId)) {
+      return null;
+    }
+    const graph = snapshot.graph;
+    const sequenceStart = snapshot.events.reduce(
+      (highest, event) => Math.max(highest, event.sequence),
+      0,
+    );
+    return {
+      graphId: graph.graphId,
+      executionId: graph.executionId,
+      rootExecutionId: graph.rootExecutionId,
+      ...(graph.parentExecutionId ? { parentExecutionId: graph.parentExecutionId } : {}),
+      requestId: graph.requestId,
+      ...(graph.runId ? { runId: graph.runId } : {}),
+      nodeId: payload.nodeId,
+      resumeToken: payload.resumeToken,
+      approvalId,
+      ...(graph.securityContext.channel ? { channel: graph.securityContext.channel } : {}),
+      ...(graph.securityContext.agentId ? { agentId: graph.securityContext.agentId } : {}),
+      ...(graph.securityContext.userId ? { userId: graph.securityContext.userId } : {}),
+      ...(graph.securityContext.codeSessionId ? { codeSessionId: graph.securityContext.codeSessionId } : {}),
+      resume: envelope.resume,
+      session: envelope.session,
+      artifactIds: uniqueStrings([
+        ...graph.artifacts.map((artifactRef) => artifactRef.artifactId),
+        ...artifactIds,
+      ]),
+      sequenceStart,
+      expiresAt: Math.min(pendingAction.expiresAt, envelope.resume.expiresAt, envelope.session.expiresAt),
+    };
   }
 
   private reconstructExecutionGraphSuspension(
@@ -1729,8 +2090,13 @@ export class WorkerManager {
       taskContract: DelegatedResultEnvelope['taskContract'];
       verification: VerificationDecision;
       workerId?: string;
+      approvalMetadata?: {
+        approvalIds: string[];
+        approvalSummaries: PendingActionApprovalSummary[];
+        prompt: string;
+      };
     },
-  ): DelegatedWorkerGraphCompletionMetadata | undefined {
+  ): DelegatedWorkerGraphCompletion | undefined {
     if (!run) return undefined;
     const sharedPayload = {
       lifecycle: options.lifecycle,
@@ -1742,6 +2108,12 @@ export class WorkerManager {
       ...(options.handoff.reportingMode ? { reportingMode: options.handoff.reportingMode } : {}),
       ...(options.handoff.runClass ? { runClass: options.handoff.runClass } : {}),
       ...(options.workerId ? { workerId: options.workerId } : {}),
+      ...(options.approvalMetadata?.approvalIds.length
+        ? { approvalIds: [...options.approvalMetadata.approvalIds] }
+        : {}),
+      ...(options.approvalMetadata?.approvalSummaries.length
+        ? { approvalSummaries: options.approvalMetadata.approvalSummaries.map((summary) => ({ ...summary })) }
+        : {}),
       ...buildDelegatedTaskContractTraceMetadata(options.taskContract),
     };
     const projection = buildDelegatedWorkerTerminalProjection({
@@ -1756,16 +2128,24 @@ export class WorkerManager {
     });
     run.sequence = projection.sequence;
     this.observability.executionGraphStore?.writeArtifact(projection.verificationArtifact);
+    let interruptEvent: ExecutionGraphEvent | undefined;
     for (const event of projection.events) {
+      if (event.kind === 'interruption_requested') {
+        interruptEvent = event;
+      }
       this.observability.runTimeline?.ingestExecutionGraphEvent(event);
       this.observability.executionGraphStore?.appendEvent(event);
     }
     return {
-      graphId: run.context.graphId,
-      nodeId: run.context.nodeId,
-      status: mapDelegatedWorkerGraphMetadataStatus(options.lifecycle, options.handoff.unresolvedBlockerKind),
-      lifecycle: options.lifecycle,
-      verificationArtifactId: projection.verificationArtifact.artifactId,
+      metadata: {
+        graphId: run.context.graphId,
+        nodeId: run.context.nodeId,
+        status: mapDelegatedWorkerGraphMetadataStatus(options.lifecycle, options.handoff.unresolvedBlockerKind),
+        lifecycle: options.lifecycle,
+        verificationArtifactId: projection.verificationArtifact.artifactId,
+      },
+      ...(interruptEvent ? { interruptEvent } : {}),
+      verificationArtifactRef: artifactRefFromArtifact(projection.verificationArtifact),
     };
   }
 
@@ -2291,13 +2671,16 @@ export class WorkerManager {
             },
           }
         : applyDelegatedFollowUpPolicy(verifiedResultPayload, handoff, verifiedResult.decision);
-      const executionGraphMetadata = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
+      const delegatedPendingApprovalMetadata = readDelegatedPendingApprovalMetadata(normalizedResult.metadata);
+      const executionGraphCompletion = this.completeDelegatedWorkerGraph(delegatedGraphRun, {
         lifecycle,
         handoff,
         taskContract: effectiveTaskContract,
         verification: verifiedResult.decision,
         workerId: worker.id,
+        ...(delegatedPendingApprovalMetadata ? { approvalMetadata: delegatedPendingApprovalMetadata } : {}),
       });
+      const executionGraphMetadata = executionGraphCompletion?.metadata;
       if (executionGraphMetadata) {
         normalizedResult.metadata = {
           ...(normalizedResult.metadata ?? {}),
@@ -2311,6 +2694,7 @@ export class WorkerManager {
         target: delegatedTarget,
         taskRunId: delegatedTaskRunId,
         intentDecision: effectiveIntentDecision ?? undefined,
+        graphCompletion: executionGraphCompletion,
       });
       if (lifecycle === 'blocked' && handoff.unresolvedBlockerKind === 'approval') {
         this.enrichWorkerSuspendedApprovalContext({
@@ -3617,6 +4001,10 @@ export class WorkerManager {
     message: UserMessage,
     metadata: Record<string, unknown> | undefined,
   ): void {
+    if (readWorkerSuspensionMetadata(metadata)) {
+      this.clearWorkerSuspendedApprovals(worker.workerSessionKey);
+      return;
+    }
     const continueConversationAfterApproval = metadata?.continueConversationAfterApproval === true;
     const approvalIds = continueConversationAfterApproval
       ? extractPendingActionApprovalIds(metadata?.pendingAction)
@@ -3645,6 +4033,133 @@ export class WorkerManager {
     });
   }
 
+  private recordDelegatedGraphPendingApprovalAction(input: {
+    worker: WorkerProcess;
+    request: WorkerMessageRequest;
+    result: { metadata?: Record<string, unknown> };
+    target: ResolvedDelegatedTargetMetadata;
+    taskRunId: string;
+    intentDecision?: IntentGatewayDecision;
+    graphCompletion?: DelegatedWorkerGraphCompletion;
+    approvalMetadata: {
+      approvalIds: string[];
+      approvalSummaries: PendingActionApprovalSummary[];
+      prompt: string;
+    };
+  }): PendingActionRecord | null {
+    const store = this.observability.pendingActionStore;
+    const graphStore = this.observability.executionGraphStore;
+    const graphCompletion = input.graphCompletion;
+    const interruption = graphCompletion?.interruptEvent;
+    const workerSuspension = readWorkerSuspensionMetadata(input.result.metadata);
+    if (!store || !graphStore || !graphCompletion || !interruption || !workerSuspension) {
+      return null;
+    }
+    const surfaceId = input.request.message.surfaceId?.trim()
+      || input.request.delegation?.originSurfaceId?.trim()
+      || input.request.message.channel;
+    const nowMs = this.observability.now?.() ?? Date.now();
+    const resume = this.buildWorkerSuspensionResumeContext({
+      worker: input.worker,
+      request: input.request,
+      target: input.target,
+      taskRunId: input.taskRunId,
+      approvalIds: input.approvalMetadata.approvalIds,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    });
+    const suspensionArtifact = buildWorkerSuspensionArtifact({
+      graphId: interruption.graphId,
+      nodeId: interruption.nodeId ?? graphCompletion.metadata.nodeId,
+      envelope: buildWorkerSuspensionEnvelope({
+        resume,
+        session: workerSuspension,
+      }),
+      createdAt: nowMs,
+    });
+    graphStore.writeArtifact(suspensionArtifact);
+    const artifactRefs = [
+      ...(graphCompletion.verificationArtifactRef ? [graphCompletion.verificationArtifactRef] : []),
+      artifactRefFromArtifact(suspensionArtifact),
+    ];
+    return recordGraphPendingActionInterrupt({
+      store,
+      scope: {
+        agentId: input.request.agentId,
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        surfaceId,
+      },
+      event: interruption,
+      originalUserContent: input.request.message.content,
+      intent: {
+        ...(input.intentDecision?.route ? { route: input.intentDecision.route } : {}),
+        ...(input.intentDecision?.operation ? { operation: input.intentDecision.operation } : {}),
+        ...(input.intentDecision?.summary ? { summary: input.intentDecision.summary } : {}),
+        ...(input.intentDecision?.turnRelation ? { turnRelation: input.intentDecision.turnRelation } : {}),
+        ...(input.intentDecision?.resolution ? { resolution: input.intentDecision.resolution } : {}),
+        ...(input.intentDecision?.missingFields?.length ? { missingFields: input.intentDecision.missingFields } : {}),
+        ...(input.intentDecision?.resolvedContent ? { resolvedContent: input.intentDecision.resolvedContent } : {}),
+        ...(input.intentDecision?.provenance ? { provenance: input.intentDecision.provenance } : {}),
+        ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
+      },
+      artifactRefs,
+      approvalSummaries: input.approvalMetadata.approvalSummaries,
+      nowMs,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    });
+  }
+
+  private buildWorkerSuspensionResumeContext(input: {
+    worker: WorkerProcess;
+    request: WorkerMessageRequest;
+    target: ResolvedDelegatedTargetMetadata;
+    taskRunId: string;
+    approvalIds: string[];
+    expiresAt: number;
+  }): WorkerSuspensionResumeContext {
+    const delegation = input.request.delegation;
+    const requestId = delegation?.requestId?.trim() || input.request.message.id;
+    const originChannel = delegation?.originChannel?.trim() || input.request.message.channel;
+    const originSurfaceId = delegation?.originSurfaceId?.trim() || input.request.message.surfaceId?.trim();
+    const continuityKey = delegation?.continuityKey?.trim();
+    const pendingActionId = delegation?.pendingActionId?.trim();
+    const codeSessionId = delegation?.codeSessionId?.trim();
+    const activeExecutionRefs = delegation?.activeExecutionRefs?.length
+      ? [...delegation.activeExecutionRefs]
+      : undefined;
+    const agentName = input.target.agentName?.trim();
+    const orchestration = cloneOrchestrationRoleDescriptor(input.target.orchestration);
+    return {
+      workerId: input.worker.id,
+      workerSessionKey: input.worker.workerSessionKey,
+      sessionId: input.worker.sessionId,
+      agentId: input.worker.agentId,
+      userId: input.request.userId,
+      ...(input.request.message.surfaceId ? { surfaceId: input.request.message.surfaceId } : {}),
+      ...(input.request.message.content ? { originalUserContent: input.request.message.content } : {}),
+      requestId,
+      messageId: input.request.message.id,
+      ...(delegation?.executionId ? { executionId: delegation.executionId } : {}),
+      ...(delegation?.rootExecutionId ? { rootExecutionId: delegation.rootExecutionId } : {}),
+      originChannel,
+      ...(originSurfaceId ? { originSurfaceId } : {}),
+      ...(continuityKey ? { continuityKey } : {}),
+      ...(activeExecutionRefs ? { activeExecutionRefs } : {}),
+      ...(pendingActionId ? { pendingActionId } : {}),
+      ...(codeSessionId ? { codeSessionId } : {}),
+      ...(delegation?.runClass ? { runClass: delegation.runClass } : {}),
+      taskRunId: input.taskRunId,
+      ...(agentName ? { agentName } : {}),
+      ...(orchestration ? { orchestration } : {}),
+      ...(input.request.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(input.request.executionProfile) } : {}),
+      principalId: input.request.message.principalId ?? input.request.userId,
+      principalRole: input.request.message.principalRole ?? 'owner',
+      channel: input.request.message.channel,
+      approvalIds: [...new Set(input.approvalIds)],
+      expiresAt: input.expiresAt,
+    };
+  }
+
   private recordDelegatedPendingApprovalAction(input: {
     worker: WorkerProcess;
     request: WorkerMessageRequest;
@@ -3652,10 +4167,16 @@ export class WorkerManager {
     target: ResolvedDelegatedTargetMetadata;
     taskRunId: string;
     intentDecision?: IntentGatewayDecision;
+    graphCompletion?: DelegatedWorkerGraphCompletion;
   }): PendingActionRecord | null {
     if (!this.observability.pendingActionStore) return null;
     const approvalMetadata = readDelegatedPendingApprovalMetadata(input.result.metadata);
     if (!approvalMetadata) return null;
+    const graphBacked = this.recordDelegatedGraphPendingApprovalAction({
+      ...input,
+      approvalMetadata,
+    });
+    if (graphBacked) return graphBacked;
     const surfaceId = input.request.message.surfaceId?.trim()
       || input.request.delegation?.originSurfaceId?.trim()
       || input.request.message.channel;

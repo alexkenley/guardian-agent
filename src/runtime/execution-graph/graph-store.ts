@@ -732,6 +732,7 @@ function isExecutionArtifactType(value: string): value is ExecutionArtifact['art
     case 'MutationReceipt':
     case 'VerificationResult':
     case 'RecoveryProposal':
+    case 'WorkerSuspension':
       return true;
     default:
       return false;

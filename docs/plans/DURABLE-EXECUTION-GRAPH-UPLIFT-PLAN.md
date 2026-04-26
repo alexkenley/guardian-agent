@@ -178,6 +178,14 @@ Checkpoint after the brokered worker pending-action resume slice:
 - The remaining in-memory worker suspended-approval map is now a live-worker cache rather than the only resume owner. The next debt-burn step is to replace this cache with graph interrupt ownership for worker approval pauses, including worker/process restart recovery instead of only live-worker continuation.
 - Remaining approval/resume overlap after this slice: direct-route and tool-loop resume payloads still need graph interrupt equivalents before deletion, and brokered worker approval resume still needs the graph controller to own worker restart/replay semantics.
 
+Checkpoint after the brokered worker graph-suspension slice:
+
+- Brokered worker tool-loop/planner approval pauses now emit a serializable `workerSuspension` metadata snapshot containing the suspended loop/planner state, pending approval ids, original message, task contract, and selected execution profile.
+- Graph-backed delegated worker approval pending actions now store that snapshot as a durable `WorkerSuspension` execution-graph artifact and expose the shared `execution_graph` resume payload instead of a `worker_approval` payload when graph state is available.
+- `WorkerManager.resumeExecutionGraphPendingAction` can reconstruct delegated worker approval continuations from graph artifacts and spawn a fresh worker after the original worker/manager instance is gone, then send the suspension snapshot back as structured continuation metadata.
+- The legacy worker suspended-approval map remains only as fallback for non-graph brokered approval producers. The remaining debt is to migrate those producers or delete them, then remove the `worker_approval` pending-action resume kind and direct `continueAfterApproval` approval path.
+- Remaining approval/resume overlap after this slice: direct-route and chat-agent `tool_loop` resume payloads are still replay payloads rather than graph interrupts, and nested worker approval continuations now use graph artifacts but still share some legacy trace/continuation helper code.
+
 Checkpoint after the tool-loop resume helper extraction:
 
 - Tool-loop pending approval resume construction now lives in `src/runtime/chat-agent/tool-loop-resume.ts` beside the serializer/reader instead of being duplicated inside `src/chat-agent.ts` and `tool-loop-runtime.ts`.
@@ -683,7 +691,7 @@ Expected:
 
 Goal: approvals, clarification, auth, workspace switch, and policy blockers become durable graph interrupts.
 
-Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Approval resume can reconstruct from persisted graph artifacts if the worker-manager suspension map is missing after restart. Chat-agent tool-loop approvals no longer keep a parallel in-memory suspended-session cache; the pending-action resume payload is the only chat-level tool-loop resume source. Clarification graph interrupts now project into graph state, run timeline, and shared pending-action metadata using the existing `clarification` blocker contract. Generic graph interruption events can now carry `workspace_switch`, `auth`, `policy`, and `missing_context` blockers into shared pending-action metadata and mark the graph `blocked`; migrating every legacy producer to emit those graph events is still pending.
+Current status: first brokered write approval slice records the graph snapshot, typed artifacts, approval interrupt checkpoint, pending-action resume metadata, and approval resume path for supervisor-owned `WriteSpec` mutations. Brokered delegated worker approvals now persist `WorkerSuspension` graph artifacts and resume through `execution_graph` pending actions, including fresh-worker recovery after the original worker/manager instance is gone. Chat-agent tool-loop approvals no longer keep a parallel in-memory suspended-session cache; the pending-action resume payload is the only chat-level tool-loop resume source. Clarification graph interrupts now project into graph state, run timeline, and shared pending-action metadata using the existing `clarification` blocker contract. Generic graph interruption events can now carry `workspace_switch`, `auth`, `policy`, and `missing_context` blockers into shared pending-action metadata and mark the graph `blocked`; migrating every legacy producer to emit those graph events is still pending.
 
 Files:
 
