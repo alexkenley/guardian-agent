@@ -38,7 +38,8 @@ export const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay
 export const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
 const CONTINUITY_STATUS_CHECK_PATTERN = /^(?:did\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task))(?:\s+\w+){0,3}\s+work|what happened(?:\s+(?:with|to|about)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)))?)\??$/i;
 
-const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
+export const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
+export const PENDING_ACTION_SWITCH_CANDIDATE_METADATA_KEY = 'pendingActionSwitchCandidate';
 
 export interface PendingApprovalState {
   ids: string[];
@@ -67,6 +68,20 @@ export interface PendingActionSwitchCandidatePayload {
   type: typeof PENDING_ACTION_SWITCH_CANDIDATE_TYPE;
   previousResume?: PendingActionRecord['resume'];
   replacement: PendingActionReplacementInput;
+}
+
+export function clearPendingActionSwitchCandidateFromBlocker(
+  blocker: PendingActionBlocker,
+): PendingActionBlocker {
+  const { metadata, ...rest } = blocker;
+  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, PENDING_ACTION_SWITCH_CANDIDATE_METADATA_KEY)) {
+    return { ...blocker };
+  }
+  const nextMetadata = { ...metadata };
+  delete nextMetadata[PENDING_ACTION_SWITCH_CANDIDATE_METADATA_KEY];
+  return Object.keys(nextMetadata).length > 0
+    ? { ...rest, metadata: nextMetadata }
+    : { ...rest };
 }
 
 export interface ChatAgentOrchestrationStateDeps {
@@ -740,15 +755,24 @@ export class ChatAgentOrchestrationState {
   private buildPendingActionSwitchCandidatePayload(
     active: PendingActionRecord,
     replacement: PendingActionReplacementInput,
-  ): PendingActionRecord['resume'] {
-    const payload: PendingActionSwitchCandidatePayload = {
+  ): PendingActionSwitchCandidatePayload {
+    return {
       type: PENDING_ACTION_SWITCH_CANDIDATE_TYPE,
       replacement,
       ...(active.resume ? { previousResume: { kind: active.resume.kind, payload: { ...active.resume.payload } } } : {}),
     };
+  }
+
+  private buildPendingActionBlockerWithSwitchCandidate(
+    blocker: PendingActionBlocker,
+    candidate: PendingActionSwitchCandidatePayload,
+  ): PendingActionBlocker {
     return {
-      kind: 'direct_route',
-      payload: payload as unknown as Record<string, unknown>,
+      ...blocker,
+      metadata: {
+        ...(blocker.metadata ?? {}),
+        [PENDING_ACTION_SWITCH_CANDIDATE_METADATA_KEY]: candidate as unknown as Record<string, unknown>,
+      },
     };
   }
 
@@ -838,7 +862,7 @@ export class ChatAgentOrchestrationState {
   readPendingActionSwitchCandidatePayload(
     pendingAction: PendingActionRecord | null | undefined,
   ): PendingActionSwitchCandidatePayload | null {
-    const payload = pendingAction?.resume?.payload;
+    const payload = pendingAction?.blocker.metadata?.[PENDING_ACTION_SWITCH_CANDIDATE_METADATA_KEY];
     if (!isRecord(payload) || payload.type !== PENDING_ACTION_SWITCH_CANDIDATE_TYPE || !isRecord(payload.replacement)) {
       return null;
     }
@@ -882,7 +906,10 @@ export class ChatAgentOrchestrationState {
     }
 
     const updatedActive = this.updatePendingAction(active.id, {
-      resume: this.buildPendingActionSwitchCandidatePayload(active, replacement),
+      blocker: this.buildPendingActionBlockerWithSwitchCandidate(
+        active.blocker,
+        this.buildPendingActionSwitchCandidatePayload(active, replacement),
+      ),
     }, nowMs);
     return {
       action: updatedActive ?? active,

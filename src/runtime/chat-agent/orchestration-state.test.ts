@@ -219,6 +219,83 @@ describe('ChatAgentOrchestrationState', () => {
     expect(pendingAction?.resume?.kind).toBe('direct_route');
   });
 
+  it('stores pending-action switch candidates in blocker metadata instead of direct-route resume', () => {
+    const nowMs = 1_710_000_000_000;
+    const store = createStore(nowMs);
+    const previousResume = {
+      kind: 'direct_route' as const,
+      payload: {
+        type: 'filesystem_save_output',
+        targetPath: 'S:\\Development\\test5',
+      },
+    };
+    store.replaceActive(
+      {
+        agentId: 'assistant',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'origin_surface_only',
+        blocker: {
+          kind: 'approval',
+          prompt: 'Approve the pending path update.',
+          approvalIds: ['approval-1'],
+        },
+        intent: {
+          route: 'filesystem_task',
+          operation: 'save',
+          originalUserContent: 'Save the previous output.',
+        },
+        resume: previousResume,
+        expiresAt: nowMs + 30 * 60_000,
+      },
+    );
+
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      pendingActionStore: store,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const result = state.setClarificationPendingAction(
+      'user-1',
+      'web',
+      'web-guardian-chat',
+      {
+        blockerKind: 'clarification',
+        prompt: 'Which workspace should I use?',
+        originalUserContent: 'Use the other workspace.',
+        route: 'workspace_task',
+        operation: 'update',
+      },
+      nowMs + 1,
+    );
+
+    expect(result.collisionPrompt).toContain('You already have blocked work waiting');
+    expect(result.action?.resume).toEqual(previousResume);
+    const switchCandidate = state.readPendingActionSwitchCandidatePayload(result.action);
+    expect(switchCandidate).toMatchObject({
+      type: 'pending_action_switch_candidate',
+      previousResume,
+      replacement: {
+        blocker: {
+          kind: 'clarification',
+          prompt: 'Which workspace should I use?',
+        },
+        intent: {
+          route: 'workspace_task',
+          operation: 'update',
+          originalUserContent: 'Use the other workspace.',
+        },
+      },
+    });
+  });
+
   it('preserves a cross-scope approval pending action when scoped lookup misses it but the executor still reports it pending globally', () => {
     const nowMs = 1_710_000_000_000;
     const store = createStore(nowMs);

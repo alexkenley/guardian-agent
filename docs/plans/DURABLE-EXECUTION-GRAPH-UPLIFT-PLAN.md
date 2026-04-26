@@ -218,6 +218,12 @@ Checkpoint after the WorkerManager direct-approval cache deletion:
 - Direct approval messages now resolve the active approval blocker from the shared `PendingActionStore` for the current agent/user/channel/surface scope, then update that same pending-action record after approval or denial.
 - This removes the last WorkerManager-owned in-memory direct approval list. The remaining direct automation debt is the replay payload used after policy remediation approval; its next architectural move is a graph policy-interrupt resume that reruns automation authoring from durable graph state instead of a `direct_route` payload.
 
+Checkpoint after the pending-action switch metadata cleanup:
+
+- Pending-action collision/switch candidates no longer use `resume.kind = "direct_route"` as a storage slot for UI bookkeeping.
+- Switch candidates now live under blocker metadata while preserving the original pending action resume untouched, so the direct-route resume channel only represents actual legacy capability replay.
+- Declining a switch removes the switch-candidate metadata instead of rewriting the pending action's resume payload.
+
 Checkpoint after the pending-approval status helper extraction:
 
 - Pending-approval status query recognition and response construction moved from `src/chat-agent.ts` into `src/runtime/chat-agent/pending-approval-status.ts`.

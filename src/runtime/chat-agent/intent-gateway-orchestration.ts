@@ -26,6 +26,7 @@ import {
 import {
   PENDING_ACTION_SWITCH_CONFIRM_PATTERN,
   PENDING_ACTION_SWITCH_DENY_PATTERN,
+  clearPendingActionSwitchCandidateFromBlocker,
   type PendingActionSwitchCandidatePayload,
 } from './orchestration-state.js';
 
@@ -566,9 +567,13 @@ export async function tryHandlePendingActionSwitchDecision(input: {
   }
 
   if (PENDING_ACTION_SWITCH_DENY_PATTERN.test(trimmed)) {
-    const restored = input.updatePendingAction(input.pendingAction.id, {
-      resume: switchCandidate.previousResume ?? undefined,
-    });
+    const restored = input.updatePendingAction(
+      input.pendingAction.id,
+      {
+        blocker: clearPendingActionSwitchCandidateFromBlocker(input.pendingAction.blocker),
+        ...(switchCandidate.previousResume ? { resume: switchCandidate.previousResume } : {}),
+      },
+    );
     return {
       content: restored
         ? `Kept the current blocked request active.\n\n${sanitizePendingActionPrompt(
