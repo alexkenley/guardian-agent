@@ -334,6 +334,12 @@ Checkpoint after the direct provider/web-search runtime extraction:
 - Direct web-search execution, search-result formatting, sanitization, and optional LLM summarization now live in `src/runtime/chat-agent/direct-web-search.ts` with focused coverage; `src/chat-agent.ts` only wires the direct candidate handler.
 - Remaining direct-route debt: direct candidate dispatch is still assembled inside `src/chat-agent.ts`, and larger direct runtimes still depend on ChatAgent-owned dependency builders. The next cleanup should move direct-route orchestration/wiring behind a shared runtime boundary.
 
+Checkpoint after the direct-route orchestration extraction:
+
+- Direct capability candidate ordering, direct web-search suppression, direct-candidate trace emission, dispatch, and degraded memory fallback policy now live in `src/runtime/chat-agent/direct-route-orchestration.ts`.
+- The duplicate `DirectIntentShadowCandidate` type was removed; direct response/logging now uses the shared `DirectIntentRoutingCandidate` contract from the intent capability resolver path.
+- Remaining direct-route debt: `src/chat-agent.ts` still builds the capability handler map and owns several dependency-builder callbacks for mailbox, automation, browser, memory, and Second Brain runtimes. The next cleanup should move handler-map construction into composable direct-runtime dependency groups, then retire the remaining ChatAgent wrapper methods.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.
