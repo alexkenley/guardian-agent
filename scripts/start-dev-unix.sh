@@ -550,7 +550,7 @@ if curl -sf --max-time 3 http://localhost:11434/api/tags &>/dev/null; then
 else
   echo -e "  ${DIM}Ollama: Not running${RESET}"
   echo -e "  ${DIM}The CLI will start but LLM responses will fail without a provider.${RESET}"
-  echo -e "  ${DIM}To fix: Start Ollama and run 'ollama pull llama3.2'${RESET}"
+  echo -e "  ${DIM}To fix: Start Ollama and run 'ollama pull gpt-oss:120b'${RESET}"
   echo -e "  ${DIM}Or: Configure an API provider (Anthropic/OpenAI) via web Config Center or CLI /config${RESET}"
 fi
 
@@ -570,7 +570,7 @@ llm:
   ollama:
     provider: ollama
     baseUrl: http://127.0.0.1:11434
-    model: llama3.2
+    model: gpt-oss:120b
 
   # Uncomment to use Anthropic:
   # claude:

@@ -1,10 +1,12 @@
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../../llm/types.js';
+import type { ConversationKey, ConversationService } from '../conversation.js';
 import type { ContinuityThreadRecord } from '../continuity-threads.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import { tryDirectAutomationAuthoring, tryDirectAutomationControl, tryDirectAutomationOutput, tryDirectBrowserAutomation } from './direct-automation.js';
 import type { DirectIntentDispatchResult } from './direct-intent-dispatch.js';
 import { tryDirectGoogleWorkspaceRead, tryDirectGoogleWorkspaceWrite } from './direct-mailbox-runtime.js';
+import { tryDirectMemoryRead, tryDirectMemorySave } from './direct-memory.js';
 import { tryDirectProviderRead } from './direct-provider-read.js';
 import {
   buildDirectAutomationDeps,
@@ -14,7 +16,9 @@ import {
 } from './direct-runtime-deps.js';
 import { tryDirectScheduledEmailAutomation } from './direct-scheduled-email-automation.js';
 import type { DirectIntentHandlerMap } from './direct-route-orchestration.js';
+import { tryDirectFilesystemIntent } from './direct-route-runtime.js';
 import { tryDirectWebSearch } from './direct-web-search.js';
+import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { StoredToolLoopSanitizedResult } from './tool-loop-runtime.js';
 
 type DirectCodeContext = {
@@ -28,9 +32,6 @@ export interface ChatDirectRouteHandlerCallbacks {
   personalAssistant: DirectHandlerCallback;
   codingSessionControl: DirectHandlerCallback;
   codingBackend: DirectHandlerCallback;
-  filesystem: DirectHandlerCallback;
-  memoryWrite: DirectHandlerCallback;
-  memoryRead: DirectHandlerCallback;
 }
 
 export interface BuildChatDirectRouteHandlersInput {
@@ -41,6 +42,8 @@ export interface BuildChatDirectRouteHandlersInput {
   routedMessage: UserMessage;
   ctx: AgentContext;
   userKey: string;
+  conversationKey: ConversationKey;
+  conversationService?: Pick<ConversationService, 'getSessionHistory'> | null;
   stateAgentId: string;
   decision?: IntentGatewayDecision | null;
   codeContext?: DirectCodeContext;
@@ -59,6 +62,9 @@ export interface BuildChatDirectRouteHandlersInput {
     options?: ChatOptions,
     fallbackProviderOrder?: string[],
   ) => Promise<ChatResponse>;
+  executeStoredFilesystemSave: (
+    input: StoredFilesystemSaveInput,
+  ) => Promise<DirectIntentDispatchResult>;
   callbacks: ChatDirectRouteHandlerCallbacks;
 }
 
@@ -78,9 +84,46 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
     }),
     coding_session_control: input.callbacks.codingSessionControl,
     coding_backend: input.callbacks.codingBackend,
-    filesystem: input.callbacks.filesystem,
-    memory_write: input.callbacks.memoryWrite,
-    memory_read: input.callbacks.memoryRead,
+    filesystem: () => tryDirectFilesystemIntent({
+      message: input.routedMessage,
+      ctx: input.ctx,
+      userKey: input.userKey,
+      conversationKey: input.conversationKey,
+      codeContext: input.codeContext,
+      originalUserContent: input.message.content,
+      gatewayDecision: input.decision ?? undefined,
+      agentId: input.agentId,
+      tools: input.tools,
+      conversationService: input.conversationService,
+      executeStoredFilesystemSave: input.executeStoredFilesystemSave,
+      setApprovalFollowUp: input.runtimeDeps.setApprovalFollowUp,
+      getPendingApprovals: input.runtimeDeps.getPendingApprovals,
+      formatPendingApprovalPrompt: input.runtimeDeps.formatPendingApprovalPrompt,
+      setPendingApprovalActionForRequest: input.runtimeDeps.setPendingApprovalActionForRequest,
+      buildPendingApprovalBlockedResponse: input.runtimeDeps.buildPendingApprovalBlockedResponse,
+    }),
+    memory_write: () => tryDirectMemorySave({
+      tools: input.tools,
+      agentId: input.agentId,
+      message: input.routedMessage,
+      ctx: input.ctx,
+      userKey: input.userKey,
+      codeContext: input.codeContext,
+      originalUserContent: input.message.content,
+      getPendingApprovals: input.runtimeDeps.getPendingApprovals,
+      setApprovalFollowUp: input.runtimeDeps.setApprovalFollowUp,
+      formatPendingApprovalPrompt: input.runtimeDeps.formatPendingApprovalPrompt,
+      setPendingApprovalActionForRequest: input.runtimeDeps.setPendingApprovalActionForRequest,
+      buildPendingApprovalBlockedResponse: input.runtimeDeps.buildPendingApprovalBlockedResponse,
+    }),
+    memory_read: () => tryDirectMemoryRead({
+      tools: input.tools,
+      agentId: input.agentId,
+      message: input.routedMessage,
+      ctx: input.ctx,
+      codeContext: input.codeContext,
+      originalUserContent: input.message.content,
+    }),
     scheduled_email_automation: () => tryDirectScheduledEmailAutomation({
       message: input.routedMessage,
       ctx: input.ctx,

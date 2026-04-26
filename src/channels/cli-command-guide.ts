@@ -440,7 +440,7 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
     ],
     examples: [
       '/models ollama',
-      '/config set ollama model llama3.2',
+      '/config set ollama model gpt-oss:120b',
     ],
     notes: [
       'Selecting a model here updates Guardian config only. The provider still has to be able to load that model.',

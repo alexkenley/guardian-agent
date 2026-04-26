@@ -725,7 +725,7 @@ function createProviderPanel(config, providers, panel) {
               <div class="cfg-form-grid">
                 <div class="cfg-field"><label>Provider Name</label><input id="cfg-local-name" type="text" placeholder="ollama"></div>
                 <div class="cfg-field"><label>Provider Type</label><select id="cfg-local-type">${localProviderTypeOptions}</select></div>
-                <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
+                <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="gpt-oss:120b"></div>
                 <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
               </div>
               <details id="cfg-local-advanced-wrap" style="margin-top:1rem;">
@@ -868,7 +868,7 @@ function createProviderPanel(config, providers, panel) {
 
   function getDefaultModel(side, type, providerName = '') {
     const normalizedType = String(type || '').trim().toLowerCase();
-    if (normalizedType === 'ollama') return 'llama3.2';
+    if (normalizedType === 'ollama') return 'gpt-oss:120b';
     if (normalizedType === 'ollama_cloud') {
       const inferredRole = inferManagedCloudRoleFromProfileName(providerName);
       if (inferredRole === 'coding') return 'qwen3-coder:480b';

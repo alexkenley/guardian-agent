@@ -155,6 +155,50 @@ async function createMockLlmServer(port, scenarioLog) {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/chat') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const parsed = body ? JSON.parse(body) : {};
+      const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+      const tools = Array.isArray(parsed.tools)
+        ? parsed.tools
+          .map((tool) => String(tool?.function?.name ?? ''))
+          .filter(Boolean)
+        : [];
+      const latestUser = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
+
+      scenarioLog.requests.push({
+        prompt: String(latestUser),
+        tools: [...tools],
+      });
+
+      if (String(latestUser).includes(blockedHost)) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(tools.includes('update_tool_policy')
+          ? ollamaToolCallResponse('update_tool_policy', {
+            action: 'add_domain',
+            value: blockedHost,
+          })
+          : ollamaTextResponse('The update_tool_policy tool is not available in this environment, so you need to edit config manually.')));
+        return;
+      }
+
+      if (String(latestUser).includes('Test100') || String(latestUser).includes('S Drive Development')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(tools.includes('update_tool_policy')
+          ? ollamaToolCallResponse('update_tool_policy', {
+            action: 'add_path',
+            value: 'S:\\Development',
+          })
+          : ollamaTextResponse('The update_tool_policy tool is not available in this environment, so you need to edit config manually.')));
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(ollamaTextResponse('Harness response.')));
+      return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
   });
@@ -214,6 +258,44 @@ function toolCallResponse(toolName, args) {
   };
 }
 
+function ollamaTextResponse(content) {
+  return {
+    model: harnessModel,
+    created_at: new Date().toISOString(),
+    message: {
+      role: 'assistant',
+      content,
+    },
+    done: true,
+    done_reason: 'stop',
+    prompt_eval_count: 12,
+    eval_count: 8,
+  };
+}
+
+function ollamaToolCallResponse(toolName, args) {
+  return {
+    model: harnessModel,
+    created_at: new Date().toISOString(),
+    message: {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          function: {
+            name: toolName,
+            arguments: args,
+          },
+        },
+      ],
+    },
+    done: true,
+    done_reason: 'stop',
+    prompt_eval_count: 12,
+    eval_count: 8,
+  };
+}
+
 function writeConfig(configPath, options) {
   const {
     appPort,
@@ -235,6 +317,7 @@ function writeConfig(configPath, options) {
     '    enabled: false',
     '  web:',
     '    enabled: true',
+    '    host: 127.0.0.1',
     `    port: ${appPort}`,
     `    authToken: "${authToken}"`,
     'assistant:',
@@ -305,16 +388,24 @@ async function runScenario(mode) {
       XDG_CONFIG_HOME: tempRoot,
       XDG_DATA_HOME: tempRoot,
       XDG_CACHE_HOME: tempRoot,
-      PATH: path.join(tempRoot, 'no-bwrap-path'),
+      PATH: process.platform === 'win32'
+        ? process.env.PATH
+        : path.join(tempRoot, 'no-bwrap-path'),
     },
   });
   app.stdout.pipe(createWriteStream(stdoutLogPath, { flags: 'a' }));
   app.stderr.pipe(createWriteStream(stderrLogPath, { flags: 'a' }));
 
   const results = [];
+  let dumpLogs = false;
 
   try {
-    await waitForHealth(baseUrl, 30_000);
+    try {
+      await waitForHealth(baseUrl, 30_000);
+    } catch {
+      dumpLogs = true;
+      throw new Error(`Timed out waiting for ${baseUrl}/health; stdout=${stdoutLogPath}; stderr=${stderrLogPath}`);
+    }
 
     await runTest(results, `${mode}: strict degraded sandbox exposes update_tool_policy in tools API`, async () => {
       const response = await request(baseUrl, authToken, '/api/tools');
@@ -399,7 +490,7 @@ async function runScenario(mode) {
     app.kill('SIGTERM');
     await new Promise((resolve) => app.once('exit', () => resolve(undefined)));
     const failed = results.some((result) => !result.ok);
-    if (failed) {
+    if (failed || dumpLogs) {
       const stdout = existsSync(stdoutLogPath) ? readFileSync(stdoutLogPath, 'utf8') : '';
       const stderr = existsSync(stderrLogPath) ? readFileSync(stderrLogPath, 'utf8') : '';
       console.log(`\n--- ${mode} stdout ---\n${stdout}`);

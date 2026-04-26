@@ -61,7 +61,7 @@ Providers are sorted by `priority` field (lower = higher priority). The first av
 llm:
   ollama:
     provider: ollama
-    model: llama3.2
+    model: gpt-oss:120b
     priority: 1          # primary
   claude:
     provider: anthropic

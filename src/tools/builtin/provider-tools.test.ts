@@ -36,11 +36,11 @@ describe('provider tools', () => {
         {
           name: 'ollama',
           type: 'ollama',
-          model: 'llama3.2',
+          model: 'gpt-oss:120b',
           locality: 'local',
           tier: 'local',
           connected: true,
-          availableModels: ['llama3.2', 'gemma3:latest'],
+          availableModels: ['gpt-oss:120b', 'gemma3:latest'],
           isDefault: true,
           isPreferredLocal: true,
         },
@@ -96,14 +96,14 @@ describe('provider tools', () => {
       listProviders: async () => [{
         name: 'ollama',
         type: 'ollama',
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
         locality: 'local',
         tier: 'local',
         connected: true,
-        availableModels: ['llama3.2', 'gemma3:latest'],
+        availableModels: ['gpt-oss:120b', 'gemma3:latest'],
         isDefault: true,
       }],
-      listModelsForProvider: async () => ['llama3.2', 'gemma3:latest'],
+      listModelsForProvider: async () => ['gpt-oss:120b', 'gemma3:latest'],
       updateConfig,
     });
 

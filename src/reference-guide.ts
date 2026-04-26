@@ -609,11 +609,11 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Local Provider Setup',
                 items: [
                   'Install and run Ollama locally before configuring Guardian Agent.',
-                  'Pull at least one model first, for example `ollama pull llama3.2`.',
+                  'Pull at least one model first, for example `ollama pull gpt-oss:120b`.',
                   'In Configuration > AI Providers choose the local provider path, then set a profile name and model.',
                   'Use the checkbox beside a saved local profile when you want to keep it configured but temporarily remove it from live routing.',
                   'Set the local routed default if you want this profile to be the model Guardian uses whenever routing stays on the local tier.',
-                  'CLI equivalent: `/config add ollama ollama llama3.2`.',
+                  'CLI equivalent: `/config add ollama ollama gpt-oss:120b`.',
                   'With approval, Guardian can also inspect configured provider profiles and switch between already-available models for you.',
                 ],
               },

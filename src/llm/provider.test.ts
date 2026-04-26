@@ -7,7 +7,7 @@ import type { LLMConfig } from '../config/types.js';
 
 describe('createProvider', () => {
   it('should create OllamaProvider for ollama config', () => {
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
     expect(provider).toBeInstanceOf(OllamaProvider);
     expect(provider.name).toBe('ollama');
@@ -44,7 +44,7 @@ describe('createProvider', () => {
 describe('createProviders', () => {
   it('should create a map of providers from config', () => {
     const configs: Record<string, LLMConfig> = {
-      local: { provider: 'ollama', model: 'llama3.2' },
+      local: { provider: 'ollama', model: 'gpt-oss:120b' },
       cloud: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test' },
     };
 
@@ -56,7 +56,7 @@ describe('createProviders', () => {
 
   it('skips disabled provider profiles', () => {
     const configs: Record<string, LLMConfig> = {
-      local: { provider: 'ollama', model: 'llama3.2' },
+      local: { provider: 'ollama', model: 'gpt-oss:120b' },
       cloud: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test', enabled: false },
     };
 
@@ -70,7 +70,7 @@ describe('createProviders', () => {
 describe('createFailoverProvider', () => {
   it('skips disabled provider profiles in failover order', () => {
     const failover = createFailoverProvider({
-      local: { provider: 'ollama', model: 'llama3.2' },
+      local: { provider: 'ollama', model: 'gpt-oss:120b' },
       cloud: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test', enabled: false },
     });
 
@@ -91,7 +91,7 @@ describe('OllamaProvider', () => {
     ));
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
 
     await expect(
@@ -106,7 +106,7 @@ describe('OllamaProvider', () => {
   it('should parse successful chat response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
         created_at: new Date().toISOString(),
         message: { role: 'assistant', content: 'Hello!' },
         done: true,
@@ -125,12 +125,12 @@ describe('OllamaProvider', () => {
       }),
     ));
 
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
     const response = await provider.chat([{ role: 'user', content: 'hello' }]);
 
     expect(response.content).toBe('Hello!');
-    expect(response.model).toBe('llama3.2');
+    expect(response.model).toBe('gpt-oss:120b');
     expect(response.finishReason).toBe('stop');
     expect(response.usage?.totalTokens).toBe(15);
 
@@ -140,7 +140,7 @@ describe('OllamaProvider', () => {
   it('passes JSON response format hints through to Ollama-compatible providers', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
         created_at: new Date().toISOString(),
         message: { role: 'assistant', content: '{"ok":true}' },
         done: true,
@@ -160,7 +160,7 @@ describe('OllamaProvider', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
 
     await provider.chat([{ role: 'user', content: 'Return JSON.' }], {
@@ -176,7 +176,7 @@ describe('OllamaProvider', () => {
   it('should surface a helpful connectivity error when Ollama is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
 
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
 
     await expect(
@@ -190,7 +190,7 @@ describe('OllamaProvider', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
         models: [
-          { name: 'llama3.2', size: 1000 },
+          { name: 'gpt-oss:120b', size: 1000 },
           { name: 'mistral', size: 2000 },
         ],
       }), {
@@ -201,12 +201,12 @@ describe('OllamaProvider', () => {
       }),
     ));
 
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
     const models = await provider.listModels();
 
     expect(models).toHaveLength(2);
-    expect(models[0]).toMatchObject({ id: 'llama3.2', provider: 'ollama' });
+    expect(models[0]).toMatchObject({ id: 'gpt-oss:120b', provider: 'ollama' });
 
     vi.unstubAllGlobals();
   });
@@ -214,7 +214,7 @@ describe('OllamaProvider', () => {
   it('should return empty list on connection failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
 
-    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const config: LLMConfig = { provider: 'ollama', model: 'gpt-oss:120b' };
     const provider = createProvider(config);
     const models = await provider.listModels();
 

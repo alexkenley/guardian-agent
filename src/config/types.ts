@@ -1666,7 +1666,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     ollama: {
       provider: 'ollama',
       baseUrl: 'http://127.0.0.1:11434',
-      model: 'llama3.2',
+      model: 'gpt-oss:120b',
       maxTokens: 2048,
       temperature: 0.7,
       timeoutMs: 120_000,

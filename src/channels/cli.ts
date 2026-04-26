@@ -5368,7 +5368,7 @@ export class CLIChannel implements ChannelAdapter {
     } else {
       // Ollama (default)
       const baseUrl = (await this.askQuestion('  Ollama URL [http://127.0.0.1:11434]: ', 'http://127.0.0.1:11434')).trim();
-      const model = (await this.askQuestion('  Model [llama3.2]: ', 'llama3.2')).trim();
+      const model = (await this.askQuestion('  Model [gpt-oss:120b]: ', 'gpt-oss:120b')).trim();
       input = {
         llmMode: 'ollama',
         providerName: 'ollama',

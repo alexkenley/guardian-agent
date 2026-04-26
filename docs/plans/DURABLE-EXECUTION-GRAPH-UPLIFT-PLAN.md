@@ -349,8 +349,9 @@ Checkpoint after the direct-runtime dependency cleanup:
 Checkpoint after the direct-route handler factory extraction:
 
 - Direct-route handler map construction now lives in `src/runtime/chat-agent/direct-route-handlers.ts` with focused coverage in `src/runtime/chat-agent/direct-route-handlers.test.ts`.
-- `src/chat-agent.ts` no longer imports or wires provider-read, web-search, mailbox, automation, browser, or scheduled-email direct helper modules inline; it supplies only scoped request context plus explicit callbacks for the still-ChatAgent-owned Second Brain, coding, filesystem, and memory paths.
-- Remaining direct-route debt: retire those callback-backed private wrappers by giving Second Brain, coding, filesystem, and memory the same explicit runtime dependency groups, then collapse this direct-route runtime behind the broader graph controller boundary.
+- `src/chat-agent.ts` no longer imports or wires provider-read, web-search, mailbox, automation, browser, scheduled-email, memory, or filesystem direct helper modules inline; it supplies scoped request context plus explicit callbacks only for the still-ChatAgent-owned Second Brain and coding paths.
+- Memory approval continuity and filesystem stored-save continuation are covered at the route-handler boundary, preserving `ToolExecutor`/`checkAction`, shared pending actions, and stored filesystem-save orchestration while removing the private `ChatAgent` wrappers.
+- Remaining direct-route debt: retire the Second Brain and coding callback-backed private wrappers with explicit runtime dependency groups, then collapse this direct-route runtime behind the broader graph controller boundary.
 
 Exit criteria for this refinement phase:
 

@@ -44,9 +44,6 @@ function callbacks(): ChatDirectRouteHandlerCallbacks {
     personalAssistant: vi.fn(async () => 'personal'),
     codingSessionControl: vi.fn(async () => 'session-control'),
     codingBackend: vi.fn(async () => 'coding'),
-    filesystem: vi.fn(async () => 'filesystem'),
-    memoryWrite: vi.fn(async () => 'memory-write'),
-    memoryRead: vi.fn(async () => 'memory-read'),
   };
 }
 
@@ -80,11 +77,13 @@ describe('chat direct route handlers', () => {
       routedMessage,
       ctx,
       userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
       stateAgentId: 'chat',
       llmMessages: [],
       defaultToolResultProviderKind: 'local',
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
       callbacks: ownedCallbacks,
     });
 
@@ -98,21 +97,8 @@ describe('chat direct route handlers', () => {
       gatewayUnavailable: false,
       skipDirectWebSearch: false,
     })).resolves.toBe('coding');
-    await expect(handlers.filesystem?.({
-      gatewayDirected: true,
-      gatewayUnavailable: false,
-      skipDirectWebSearch: false,
-    })).resolves.toBe('filesystem');
-    await expect(handlers.memory_write?.({
-      gatewayDirected: true,
-      gatewayUnavailable: false,
-      skipDirectWebSearch: false,
-    })).resolves.toBe('memory-write');
-
     expect(ownedCallbacks.personalAssistant).toHaveBeenCalledOnce();
     expect(ownedCallbacks.codingBackend).toHaveBeenCalledOnce();
-    expect(ownedCallbacks.filesystem).toHaveBeenCalledOnce();
-    expect(ownedCallbacks.memoryWrite).toHaveBeenCalledOnce();
   });
 
   it('wires shared direct runtime routes without ChatAgent wrappers', async () => {
@@ -141,12 +127,14 @@ describe('chat direct route handlers', () => {
       routedMessage,
       ctx,
       userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
       stateAgentId: 'chat',
       decision: providerDecision(),
       llmMessages: [],
       defaultToolResultProviderKind: 'local',
       sanitizeToolResultForLlm: vi.fn(),
       chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
       callbacks: callbacks(),
     });
 
@@ -165,5 +153,124 @@ describe('chat direct route handlers', () => {
         requestId: 'routed-message',
       }),
     );
+  });
+
+  it('keeps direct memory approvals on the shared pending-action path', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: false,
+      status: 'pending_approval',
+      approvalId: 'approval-1',
+    }));
+    const getApprovalSummaries = vi.fn(() => new Map([
+      ['approval-1', { toolName: 'memory_save', argsPreview: '{"content":"launch code is 123"}' }],
+    ]));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+      getApprovalSummaries,
+    } as never;
+    const deps = runtimeDeps(tools);
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      runtimeDeps: deps,
+      message: { ...originalMessage, content: 'remember launch code is 123' },
+      routedMessage: { ...routedMessage, content: 'remember launch code is 123' },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      callbacks: callbacks(),
+    });
+
+    const result = await handlers.memory_write?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toEqual({ content: 'blocked' });
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'memory_save',
+      expect.objectContaining({
+        content: 'launch code is 123',
+        scope: 'global',
+      }),
+      expect.objectContaining({
+        agentId: 'chat',
+        agentContext: { checkAction: ctx.checkAction },
+        requestId: 'routed-message',
+      }),
+    );
+    expect(deps.setApprovalFollowUp).toHaveBeenCalledWith(
+      'approval-1',
+      expect.objectContaining({
+        approved: 'I saved that to global memory.',
+        denied: 'I did not save that to global memory.',
+      }),
+    );
+    expect(deps.setPendingApprovalActionForRequest).toHaveBeenCalledWith(
+      'owner:web',
+      undefined,
+      expect.objectContaining({
+        approvalIds: ['approval-1'],
+        route: 'memory_task',
+        operation: 'save',
+      }),
+    );
+    expect(deps.buildPendingApprovalBlockedResponse).toHaveBeenCalled();
+  });
+
+  it('keeps direct filesystem saves on stored-save orchestration instead of raw tools', async () => {
+    const executeModelTool = vi.fn();
+    const executeStoredFilesystemSave = vi.fn(async () => ({ content: 'stored' }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({})),
+    } as never;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      runtimeDeps: runtimeDeps(tools),
+      message: { ...originalMessage, content: 'save that as notes.txt' },
+      routedMessage: { ...routedMessage, content: 'save that as notes.txt' },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      conversationService: {
+        getSessionHistory: vi.fn(() => [{ role: 'assistant', content: 'draft content' }]),
+      },
+      stateAgentId: 'chat',
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave,
+      callbacks: callbacks(),
+    });
+
+    const result = await handlers.filesystem?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toEqual({ content: 'stored' });
+    expect(executeStoredFilesystemSave).toHaveBeenCalledWith(expect.objectContaining({
+      targetPath: expect.stringMatching(/S:[\\/]Development[\\/]GuardianAgent[\\/]notes\.txt$/),
+      content: 'draft content',
+      userKey: 'owner:web',
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      allowPathRemediation: true,
+    }));
+    expect(executeModelTool).not.toHaveBeenCalled();
   });
 });

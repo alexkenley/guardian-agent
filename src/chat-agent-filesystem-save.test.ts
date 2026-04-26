@@ -12,6 +12,7 @@ import { ExecutionGraphStore } from './runtime/execution-graph/graph-store.js';
 import { recordGraphPendingActionInterrupt } from './runtime/execution-graph/pending-action-adapter.js';
 import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
 import { CHAT_CONTINUATION_TYPE_FILESYSTEM_SAVE_OUTPUT } from './runtime/chat-agent/chat-continuation-payloads.js';
+import { tryDirectFilesystemIntent } from './runtime/chat-agent/direct-route-runtime.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
 
 const createdFiles: string[] = [];
@@ -221,45 +222,62 @@ describe('LLMChatAgent direct filesystem save', () => {
     const previousOutput = 'Top 3 risks:\n1. Replayable approval outcome.\n2. Policy bypass via broker.\n3. Stuck running lifecycle.';
     conversationService.recordTurn(conversationKey, 'Review the security files.', previousOutput);
 
-    const response = await (agent as any).tryDirectFilesystemIntent(
-      createMessage('Can you save that last output to a file called test5 in S:\\Development'),
-      createCtx(),
-      'owner:web',
-      conversationKey,
-      undefined,
-      undefined,
-      {
-        route: 'filesystem_task',
-        operation: 'save',
-        summary: 'Save the last output.',
-        confidence: 'high',
-        turnRelation: 'follow_up',
-        resolution: 'ready',
-        missingFields: [],
-        entities: { path: 'S:\\Development' },
-      },
-    );
+    try {
+      const response = await tryDirectFilesystemIntent({
+        message: createMessage('Can you save that last output to a file called test5 in S:\\Development'),
+        ctx: createCtx(),
+        userKey: 'owner:web',
+        conversationKey,
+        gatewayDecision: {
+          route: 'filesystem_task',
+          operation: 'save',
+          summary: 'Save the last output.',
+          confidence: 'high',
+          turnRelation: 'follow_up',
+          resolution: 'ready',
+          missingFields: [],
+          entities: { path: 'S:\\Development' },
+        } as never,
+        agentId: 'chat',
+        tools,
+        conversationService,
+        executeStoredFilesystemSave: (input) => (agent as any).executeStoredFilesystemSave(input),
+        setApprovalFollowUp: (approvalId, copy) => (agent as any).setApprovalFollowUp(approvalId, copy),
+        getPendingApprovals: (nextUserKey, surfaceId, nowMs) => (
+          agent as any
+        ).getPendingApprovals(nextUserKey, surfaceId, nowMs),
+        formatPendingApprovalPrompt: (ids, summaries) => (
+          agent as any
+        ).formatPendingApprovalPrompt(ids, summaries),
+        setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action, nowMs) => (
+          agent as any
+        ).setPendingApprovalActionForRequest(nextUserKey, surfaceId, action, nowMs),
+        buildPendingApprovalBlockedResponse: (result, fallbackContent) => (
+          agent as any
+        ).buildPendingApprovalBlockedResponse(result, fallbackContent),
+      });
 
-    expect(typeof response === 'string' ? response : response.content).toContain('add "S:\\Development" to the allowed paths');
-    const pendingAction = (agent as any).getActivePendingAction('owner', 'web', 'web-guardian-chat') as PendingActionRecord | null;
-    expect(pendingAction?.resume?.kind).toBe('execution_graph');
-    const artifactId = pendingAction?.graphInterrupt?.artifactRefs[0]?.artifactId;
-    expect(artifactId).toBeTruthy();
-    expect(executionGraphStore.getArtifact(pendingAction!.graphInterrupt!.graphId, artifactId!)).toMatchObject({
-      artifactType: 'ChatContinuation',
-      content: {
-        payload: {
-          type: 'filesystem_save_output',
-          targetPath: 'S:\\Development\\test5',
-          content: previousOutput,
-          originalUserContent: 'Can you save that last output to a file called test5 in S:\\Development',
-          allowPathRemediation: false,
+      expect(typeof response === 'string' ? response : response?.content).toContain('add "S:\\Development" to the allowed paths');
+      const pendingAction = (agent as any).getActivePendingAction('owner', 'web', 'web-guardian-chat') as PendingActionRecord | null;
+      expect(pendingAction?.resume?.kind).toBe('execution_graph');
+      const artifactId = pendingAction?.graphInterrupt?.artifactRefs[0]?.artifactId;
+      expect(artifactId).toBeTruthy();
+      expect(executionGraphStore.getArtifact(pendingAction!.graphInterrupt!.graphId, artifactId!)).toMatchObject({
+        artifactType: 'ChatContinuation',
+        content: {
+          payload: {
+            type: 'filesystem_save_output',
+            targetPath: 'S:\\Development\\test5',
+            content: previousOutput,
+            originalUserContent: 'Can you save that last output to a file called test5 in S:\\Development',
+            allowPathRemediation: false,
+          },
         },
-      },
-    });
-
-    conversationService.close();
-    pendingActionStore.close();
+      });
+    } finally {
+      conversationService.close();
+      pendingActionStore.close();
+    }
   });
 
   it('continues a stored capability save after path approval using the captured output snapshot', async () => {

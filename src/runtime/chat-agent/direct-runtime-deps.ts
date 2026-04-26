@@ -6,8 +6,15 @@ export interface DirectRuntimeDepsInput {
   agentId: string;
   tools?: DirectAutomationDeps['tools'];
   conversationService?: DirectScheduledEmailAutomationDeps['conversationService'];
-  setApprovalFollowUp: DirectAutomationDeps['setApprovalFollowUp'];
-  getPendingApprovals: DirectMailboxDeps['getPendingApprovals'];
+  setApprovalFollowUp: (
+    approvalId: string,
+    copy: { approved?: string; denied?: string },
+  ) => void;
+  getPendingApprovals: (
+    userKey: string,
+    surfaceId?: string,
+    nowMs?: number,
+  ) => { ids: string[]; createdAt: number; expiresAt: number } | null;
   formatPendingApprovalPrompt: DirectAutomationDeps['formatPendingApprovalPrompt'];
   parsePendingActionUserKey: DirectAutomationDeps['parsePendingActionUserKey'];
   setClarificationPendingAction: DirectAutomationDeps['setClarificationPendingAction'];

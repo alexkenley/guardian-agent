@@ -171,13 +171,6 @@ import {
   loadPromptKnowledgeBases as loadPromptKnowledgeBasesHelper,
 } from './runtime/chat-agent/prompt-context.js';
 import {
-  tryDirectMemoryRead as tryDirectMemoryReadHelper,
-  tryDirectMemorySave as tryDirectMemorySaveHelper,
-} from './runtime/chat-agent/direct-memory.js';
-import {
-  tryDirectFilesystemIntent as tryDirectFilesystemIntentHelper,
-} from './runtime/chat-agent/direct-route-runtime.js';
-import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
 import {
@@ -1798,6 +1791,8 @@ interface DegradedDirectIntentResponseInput {
       routedMessage: routedScopedMessage,
       ctx,
       userKey: pendingActionUserKey,
+      conversationKey,
+      conversationService: this.conversationService,
       stateAgentId,
       decision: directIntent?.decision,
       codeContext: effectiveCodeContext,
@@ -1816,6 +1811,7 @@ interface DegradedDirectIntentResponseInput {
         options,
         providerOrder,
       ),
+      executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
       callbacks: {
         personalAssistant: async () => (
           await this.tryDirectSecondBrainWrite(
@@ -1842,28 +1838,6 @@ interface DegradedDirectIntentResponseInput {
           directIntent?.decision,
           effectiveCodeContext,
         ),
-        filesystem: () => this.tryDirectFilesystemIntent(
-          routedScopedMessage,
-          ctx,
-          pendingActionUserKey,
-          conversationKey,
-          effectiveCodeContext,
-          message.content,
-          directIntent?.decision,
-        ),
-        memoryWrite: () => this.tryDirectMemorySave(
-          routedScopedMessage,
-          ctx,
-          pendingActionUserKey,
-          effectiveCodeContext,
-          message.content,
-        ),
-        memoryRead: () => this.tryDirectMemoryRead(
-          routedScopedMessage,
-          ctx,
-          effectiveCodeContext,
-          message.content,
-        ),
       },
     });
     const directIntentResponse = await runDirectRouteOrchestration({
@@ -1886,13 +1860,11 @@ interface DegradedDirectIntentResponseInput {
         conversationKey,
       }),
       onDegradedMemoryFallback: async () => {
-        const degradedMemorySave = await this.tryDirectMemorySave(
-          routedScopedMessage,
-          ctx,
-          pendingActionUserKey,
-          effectiveCodeContext,
-          message.content,
-        );
+        const degradedMemorySave = await directRouteHandlers.memory_write?.({
+          gatewayDirected: false,
+          gatewayUnavailable: true,
+          skipDirectWebSearch: false,
+        });
         if (!degradedMemorySave) {
           return null;
         }
@@ -3934,53 +3906,6 @@ interface DegradedDirectIntentResponseInput {
     );
   }
 
-  private async tryDirectMemorySave(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    codeContext?: { workspaceRoot?: string; sessionId?: string },
-    originalUserContent?: string,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectMemorySaveHelper({
-      tools: this.tools,
-      agentId: this.id,
-      message,
-      ctx,
-      userKey,
-      codeContext,
-      originalUserContent,
-      getPendingApprovals: (userKey, surfaceId) => this.getPendingApprovals(userKey, surfaceId),
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
-        userKey,
-        surfaceId,
-        action,
-        nowMs,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
-  }
-
-  private async tryDirectMemoryRead(
-    message: UserMessage,
-    ctx: AgentContext,
-    codeContext?: { workspaceRoot?: string; sessionId?: string },
-    originalUserContent?: string,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectMemoryReadHelper({
-      tools: this.tools,
-      agentId: this.id,
-      message,
-      ctx,
-      codeContext,
-      originalUserContent,
-    });
-  }
-
   private async tryRepairGenericIntentGatewayPlanWithFrontier(input: {
     message: UserMessage;
     ctx: AgentContext;
@@ -4229,43 +4154,6 @@ interface DegradedDirectIntentResponseInput {
       default:
         return new Set(['unknown']);
     }
-  }
-
-  private async tryDirectFilesystemIntent(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    conversationKey: ConversationKey,
-    codeContext?: { workspaceRoot: string; sessionId?: string },
-    originalUserContent?: string,
-    gatewayDecision?: IntentGatewayDecision,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    return tryDirectFilesystemIntentHelper({
-      message,
-      ctx,
-      userKey,
-      conversationKey,
-      codeContext,
-      originalUserContent,
-      gatewayDecision,
-      agentId: this.id,
-      tools: this.tools,
-      conversationService: this.conversationService,
-      executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
-      getPendingApprovals: (nextUserKey, surfaceId, nowMs) => this.getPendingApprovals(nextUserKey, surfaceId, nowMs),
-      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
-      setPendingApprovalActionForRequest: (nextUserKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
-        nextUserKey,
-        surfaceId,
-        action,
-        nowMs,
-      ),
-      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
-        result,
-        fallbackContent,
-      ),
-    });
   }
 
   private resolvePendingActionContinuationContent(

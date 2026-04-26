@@ -29,12 +29,12 @@ describe('runtime bootstrap helpers', () => {
   });
 
   it('keeps the configured Ollama model when an exact or tagged match exists', () => {
-    expect(selectOllamaStartupModel('llama3.2', ['llama3.2:latest', 'qwen2.5'])).toBeNull();
-    expect(selectOllamaStartupModel('qwen2.5:7b', ['qwen2.5:7b', 'llama3.2'])).toBeNull();
+    expect(selectOllamaStartupModel('gpt-oss:120b', ['gpt-oss:120b', 'qwen2.5'])).toBeNull();
+    expect(selectOllamaStartupModel('mistral', ['mistral:latest', 'gpt-oss:120b'])).toBeNull();
   });
 
   it('falls back to the first available Ollama model when the configured one is missing', () => {
-    expect(selectOllamaStartupModel('missing-model', ['llama3.2:latest', 'qwen2.5'])).toBe('llama3.2:latest');
+    expect(selectOllamaStartupModel('missing-model', ['gpt-oss:120b', 'qwen2.5'])).toBe('gpt-oss:120b');
     expect(selectOllamaStartupModel('missing-model', [])).toBeNull();
   });
 });

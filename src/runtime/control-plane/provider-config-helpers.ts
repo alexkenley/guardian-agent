@@ -69,7 +69,7 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
 
   const getDefaultModelForProviderType = (providerType: string): string => {
     switch (providerType.trim().toLowerCase()) {
-      case 'ollama': return 'llama3.2';
+      case 'ollama': return 'gpt-oss:120b';
       case 'ollama_cloud': return 'gpt-oss:120b';
       case 'openrouter': return 'qwen/qwen3.6-plus';
       case 'nvidia': return 'qwen/qwen3-coder-480b-a35b-instruct';

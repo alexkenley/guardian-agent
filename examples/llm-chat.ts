@@ -16,7 +16,7 @@ async function main(): Promise<void> {
   // Create an Ollama provider (no API key needed)
   const provider = createProvider({
     provider: 'ollama',
-    model: 'llama3.2',
+    model: 'gpt-oss:120b',
     baseUrl: 'http://127.0.0.1:11434',
   });
 

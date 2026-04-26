@@ -2150,11 +2150,11 @@ describe('ToolExecutor', () => {
         {
           name: 'ollama',
           type: 'ollama',
-          model: 'llama3.2',
+          model: 'gpt-oss:120b',
           locality: 'local',
           tier: 'local',
           connected: true,
-          availableModels: ['llama3.2', 'gemma3:latest'],
+          availableModels: ['gpt-oss:120b', 'gemma3:latest'],
           isDefault: true,
           isPreferredLocal: true,
         },
@@ -2206,15 +2206,15 @@ describe('ToolExecutor', () => {
       listLlmProviders: async () => [{
         name: 'ollama',
         type: 'ollama',
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
         locality: 'local',
         tier: 'local',
         connected: true,
-        availableModels: ['llama3.2', 'gemma3:latest'],
+        availableModels: ['gpt-oss:120b', 'gemma3:latest'],
         isDefault: true,
         isPreferredLocal: true,
       }],
-      listModelsForLlmProvider: async () => ['llama3.2', 'gemma3:latest'],
+      listModelsForLlmProvider: async () => ['gpt-oss:120b', 'gemma3:latest'],
       onLlmProviderConfigUpdate,
     });
 

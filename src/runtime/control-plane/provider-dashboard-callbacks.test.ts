@@ -37,7 +37,7 @@ describe('createProviderConfigHelpers', () => {
     } as LLMConfig;
     config.llm.local = {
       provider: 'ollama',
-      model: 'llama3.2',
+      model: 'gpt-oss:120b',
       baseUrl: 'http://127.0.0.1:11434',
     } as LLMConfig;
     config.assistant.credentials.refs = {
@@ -78,7 +78,7 @@ describe('createProviderConfigHelpers', () => {
       {
         name: 'local',
         type: 'ollama',
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
         baseUrl: 'http://127.0.0.1:11434',
         locality: 'local',
         tier: 'local',
@@ -100,7 +100,7 @@ describe('createProviderConfigHelpers', () => {
       {
         name: 'local',
         type: 'ollama',
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
         baseUrl: 'http://127.0.0.1:11434',
         locality: 'local',
         tier: 'local',

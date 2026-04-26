@@ -31,7 +31,7 @@ const DEFAULT_BOOTSTRAP_CONFIG_YAML = [
   '  ollama:',
   '    provider: ollama',
   '    baseUrl: http://127.0.0.1:11434',
-  '    model: llama3.2',
+  '    model: gpt-oss:120b',
   '',
   '  # Uncomment to use Anthropic:',
   '  # claude:',

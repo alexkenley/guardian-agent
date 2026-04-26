@@ -664,12 +664,12 @@ try {
         Write-Host "  Ollama: Running - $modelCount models available ($modelNames)" -ForegroundColor Green
     } else {
         Write-Host "  Ollama: Running but no models installed" -ForegroundColor DarkCyan
-        Write-Host "  Run: ollama pull llama3.2" -ForegroundColor DarkCyan
+        Write-Host "  Run: ollama pull gpt-oss:120b" -ForegroundColor DarkCyan
     }
 } catch {
     Write-Host "  Ollama: Not running" -ForegroundColor DarkCyan
     Write-Host "  The CLI will start but LLM responses will fail without a provider." -ForegroundColor DarkCyan
-    Write-Host "  To fix: Start Ollama and run 'ollama pull llama3.2'" -ForegroundColor DarkCyan
+    Write-Host "  To fix: Start Ollama and run 'ollama pull gpt-oss:120b'" -ForegroundColor DarkCyan
     Write-Host "  Or: Configure an API provider (Anthropic/OpenAI) via the web Config Center or CLI /config" -ForegroundColor DarkCyan
 }
 
@@ -693,7 +693,7 @@ llm:
   ollama:
     provider: ollama
     baseUrl: http://127.0.0.1:11434
-    model: llama3.2
+    model: gpt-oss:120b
 
   # Uncomment to use Anthropic:
   # claude:

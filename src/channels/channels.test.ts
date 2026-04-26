@@ -901,7 +901,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
       windowStart: Date.now() - windowMs, windowEnd: Date.now(),
     }),
     onConfig: () => ({
-      llm: { ollama: { provider: 'ollama', model: 'llama3.2' }, claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' } },
+      llm: { ollama: { provider: 'ollama', model: 'gpt-oss:120b' }, claude: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' } },
       defaultProvider: 'ollama',
       channels: {
         cli: { enabled: true },
@@ -993,11 +993,11 @@ describe('CLIChannel with DashboardCallbacks', () => {
       { agentId: 'agent-2', action: 'stalled' as const, stalledMs: 75000 },
     ],
     onProviders: () => [
-      { name: 'ollama', type: 'ollama', model: 'llama3.2', locality: 'local' as const, connected: true },
+      { name: 'ollama', type: 'ollama', model: 'gpt-oss:120b', locality: 'local' as const, connected: true },
       { name: 'claude', type: 'anthropic', model: 'claude-sonnet-4-20250514', locality: 'external' as const, connected: false },
     ],
     onProvidersStatus: async () => [
-      { name: 'ollama', type: 'ollama', model: 'llama3.2', locality: 'local' as const, connected: true, availableModels: ['llama3.2', 'llama3.3', 'mistral'] },
+      { name: 'ollama', type: 'ollama', model: 'gpt-oss:120b', locality: 'local' as const, connected: true, availableModels: ['gpt-oss:120b', 'llama3.3', 'mistral'] },
       { name: 'claude', type: 'anthropic', model: 'claude-sonnet-4-20250514', locality: 'external' as const, connected: false },
     ],
     onAssistantState: () => ({
@@ -2609,7 +2609,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('claude');
     expect(text).toContain('PASS');
     expect(text).toContain('FAIL');
-    expect(text).toContain('llama3.2');
+    expect(text).toContain('gpt-oss:120b');
     expect(text).toContain('llama3.3');
     expect(text).toContain('mistral');
 
@@ -2660,7 +2660,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('ollama');
-    expect(text).toContain('llama3.2');
+    expect(text).toContain('gpt-oss:120b');
     expect(text).toContain('anthropic');
     expect(text).toContain('claude-sonnet');
     expect(text).toContain('enabled');
@@ -2678,7 +2678,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('ollama');
-    expect(text).toContain('llama3.2');
+    expect(text).toContain('gpt-oss:120b');
 
     await cli.stop();
   });
@@ -2985,7 +2985,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('ollama');
-    expect(text).toContain('llama3.2');
+    expect(text).toContain('gpt-oss:120b');
     expect(text).toContain('llama3.3');
     expect(text).toContain('mistral');
     expect(text).toContain('active');
@@ -3001,7 +3001,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('ollama');
-    expect(text).toContain('llama3.2');
+    expect(text).toContain('gpt-oss:120b');
 
     await cli.stop();
   });
@@ -3914,7 +3914,7 @@ describe('WebChannel', () => {
         windowStart: Date.now() - windowMs, windowEnd: Date.now(),
       }),
       onConfig: () => ({
-        llm: { ollama: { provider: 'ollama', model: 'llama3.2' } },
+        llm: { ollama: { provider: 'ollama', model: 'gpt-oss:120b' } },
         defaultProvider: 'ollama',
         channels: {
           cli: { enabled: true },
@@ -3993,7 +3993,7 @@ describe('WebChannel', () => {
         recentOverruns: [],
       }),
       onWatchdog: () => [{ agentId: 'agent-1', action: 'ok' as const }],
-      onProviders: () => [{ name: 'ollama', type: 'ollama', model: 'llama3.2', locality: 'local' as const, connected: true }],
+      onProviders: () => [{ name: 'ollama', type: 'ollama', model: 'gpt-oss:120b', locality: 'local' as const, connected: true }],
       onAssistantState: () => ({
         orchestrator: {
           summary: {

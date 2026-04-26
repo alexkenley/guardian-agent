@@ -24,7 +24,7 @@ describe('createAgentDashboardCallbacks', () => {
     config.defaultProvider = 'local-provider';
     config.llm['local-provider'] = {
       provider: 'ollama',
-      model: 'llama3.2',
+      model: 'gpt-oss:120b',
       baseUrl: 'http://127.0.0.1:11434',
     } as LLMConfig;
     config.llm.research = {
@@ -107,7 +107,7 @@ describe('createAgentDashboardCallbacks', () => {
         capabilities: ['read_files'],
         provider: 'local-provider',
         providerType: 'ollama',
-        providerModel: 'llama3.2',
+        providerModel: 'gpt-oss:120b',
         providerLocality: 'local',
         schedule: undefined,
         lastActivityMs: 1000,

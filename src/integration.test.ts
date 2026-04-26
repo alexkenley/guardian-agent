@@ -159,7 +159,7 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
       if (url.includes('/api/chat')) {
         return new Response(JSON.stringify({
-          model: 'llama3.2',
+          model: 'gpt-oss:120b',
           created_at: new Date().toISOString(),
           message: { role: 'assistant', content: 'The capital of France is Paris.' },
           done: true,
@@ -201,7 +201,7 @@ describe('Integration: LLM Chat with Mocked Provider', () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
       if (url.includes('/api/chat')) {
         return new Response(JSON.stringify({
-          model: 'llama3.2',
+          model: 'gpt-oss:120b',
           created_at: new Date().toISOString(),
           message: { role: 'assistant', content: 'Your AWS key is AKIAIOSFODNN7EXAMPLE, have fun!' },
           done: true,

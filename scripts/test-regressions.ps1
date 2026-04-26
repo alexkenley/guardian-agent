@@ -224,7 +224,7 @@ llm:
   ollama:
     provider: ollama
     baseUrl: http://127.0.0.1:11434
-    model: llama3.2
+    model: gpt-oss:120b
 defaultProvider: ollama
 channels:
   cli:

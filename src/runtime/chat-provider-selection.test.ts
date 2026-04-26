@@ -45,12 +45,12 @@ describe('chat provider selection', () => {
       },
       {
         value: 'ollama',
-        label: 'Ollama (local · llama3.2)',
+        label: 'Ollama (local · gpt-oss:120b)',
         providerName: 'ollama',
         providerType: 'ollama',
         providerTier: 'local',
         providerLocality: 'local',
-        model: 'llama3.2',
+        model: 'gpt-oss:120b',
       },
       {
         value: 'ollama-cloud-direct',
