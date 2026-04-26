@@ -3193,12 +3193,16 @@ export class WorkerManager {
       .filter((token) => APPROVAL_ID_TOKEN_PATTERN.test(token));
     const targetIds = explicitIds.length > 0 ? explicitIds : pendingIds;
 
+    const executionGraphPendingAction = pendingAction?.resume?.kind === 'execution_graph'
+      ? pendingAction
+      : null;
     const directAutomationPendingAction = readAutomationAuthoringResumePayload(pendingAction?.resume?.payload)
       ? pendingAction
       : this.findDirectAutomationPendingAction(targetIds);
     const results: string[] = [];
     const approvedIds = new Set<string>();
     const failedIds = new Set<string>();
+    const approvalDecisionResults = new Map<string, ToolApprovalDecisionResult>();
     for (const approvalId of targetIds) {
       const decided = await this.tools.decideApproval(
         approvalId,
@@ -3206,6 +3210,7 @@ export class WorkerManager {
         input.message.principalId ?? input.message.userId,
         input.message.principalRole ?? 'owner',
       );
+      approvalDecisionResults.set(approvalId, decided);
       const approvalGranted = decision === 'approved' && (decided.approved ?? decided.success);
       const executionFailed = approvalGranted && decided.executionSucceeded === false;
       if (approvalGranted) approvedIds.add(approvalId);
@@ -3213,6 +3218,29 @@ export class WorkerManager {
         failedIds.add(approvalId);
       }
       results.push(decided.message);
+    }
+
+    if (executionGraphPendingAction && targetIds.length === 1) {
+      const approvalId = targetIds[0];
+      const approvalResult = approvalDecisionResults.get(approvalId);
+      if (approvalResult?.success && !failedIds.has(approvalId)) {
+        const resumed = await this.resumeExecutionGraphPendingAction(
+          executionGraphPendingAction,
+          {
+            approvalId,
+            approvalResult,
+          },
+        );
+        if (resumed) {
+          return {
+            content: [
+              ...results,
+              resumed.content,
+            ].filter(Boolean).join('\n\n'),
+            metadata: resumed.metadata,
+          };
+        }
+      }
     }
 
     this.updatePendingActionsAfterDirectApprovalDecision(targetIds, decision, approvedIds, failedIds);
@@ -3403,7 +3431,10 @@ export class WorkerManager {
       surfaceId,
     }, this.observability.now?.() ?? Date.now());
     if (pendingAction?.blocker.kind !== 'approval') return null;
-    return (pendingAction.blocker.approvalIds?.length ?? 0) > 0 ? pendingAction : null;
+    if ((pendingAction.blocker.approvalIds?.length ?? 0) === 0) return null;
+    if (pendingAction.resume?.kind === 'execution_graph') return pendingAction;
+    if (readAutomationAuthoringResumePayload(pendingAction.resume?.payload)) return pendingAction;
+    return null;
   }
 
   private updatePendingActionsAfterDirectApprovalDecision(

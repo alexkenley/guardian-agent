@@ -216,6 +216,7 @@ Checkpoint after the WorkerManager direct-approval cache deletion:
 
 - Direct automation authoring approvals in `WorkerManager` no longer maintain a parallel session-local pending approval cache.
 - Direct approval messages now resolve the active approval blocker from the shared `PendingActionStore` for the current agent/user/channel/surface scope, then update that same pending-action record after approval or denial.
+- WorkerManager only intercepts pending approvals it owns: execution-graph approvals it can resume through `resumeExecutionGraphPendingAction`, or the remaining direct automation remediation replay path.
 - This removes the last WorkerManager-owned in-memory direct approval list. The remaining direct automation debt is the replay payload used after policy remediation approval; its next architectural move is a graph policy-interrupt resume that reruns automation authoring from durable graph state instead of a `direct_route` payload.
 
 Checkpoint after the pending-action switch metadata cleanup:
