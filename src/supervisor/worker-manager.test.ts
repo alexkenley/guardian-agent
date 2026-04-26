@@ -2262,136 +2262,6 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('reconstructs brokered worker approval continuations from pending-action resume state', async () => {
-    const { WorkerManager } = await import('./worker-manager.js');
-
-    let sawContinuation = false;
-    workerMessageHandler = (params) => {
-      const message = (params.message ?? {}) as {
-        metadata?: Record<string, unknown>;
-      };
-      const continuation = message.metadata?.[APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY] as
-        | { type?: string; approvalId?: string; decision?: string; resultMessage?: string }
-        | undefined;
-      if (continuation?.approvalId === 'approval-rehydrate-1') {
-        sawContinuation = true;
-        expect(continuation).toMatchObject({
-          decision: 'approved',
-          resultMessage: 'Draft approved.',
-        });
-        return {
-          content: 'The draft continued from persisted approval state.',
-          metadata: {},
-        };
-      }
-      return {
-        content: 'Waiting for approval to create the draft.',
-        metadata: {
-          continueConversationAfterApproval: true,
-          ...approvalPendingActionMetadata([
-            {
-              id: 'approval-rehydrate-1',
-              toolName: 'outlook_draft',
-              argsPreview: '{"to":"alex@example.com"}',
-            },
-          ]),
-        },
-      };
-    };
-
-    const pendingActionStore = createMemoryPendingActionStore();
-    const manager = new WorkerManager(
-      {
-        listAlwaysLoadedDefinitions: () => [],
-        listApprovals: vi.fn(() => []),
-      } as never,
-      {
-        getFallbackProviderConfig: () => undefined,
-        auditLog: { record: vi.fn() },
-      } as never,
-      {
-        workerEntryPoint: 'src/worker/worker-entry.ts',
-        workerMaxMemoryMb: 2048,
-        workerIdleTimeoutMs: 300_000,
-        workerShutdownGracePeriodMs: 10,
-        capabilityTokenTtlMs: 600_000,
-        capabilityTokenMaxToolCalls: 0,
-      } as never,
-      undefined,
-      {
-        pendingActionStore,
-        now: () => 1,
-      },
-    );
-
-    await manager.handleMessage({
-      sessionId: 'tester:web',
-      agentId: 'local',
-      userId: 'tester',
-      grantedCapabilities: [],
-      message: {
-        id: 'm-rehydrate',
-        userId: 'tester',
-        principalId: 'tester',
-        principalRole: 'owner',
-        channel: 'web',
-        surfaceId: 'surface-1',
-        content: 'Draft an Outlook email to alex@example.com.',
-        timestamp: Date.now(),
-      },
-      systemPrompt: 'system',
-      history: [],
-      knowledgeBases: [],
-      activeSkills: [],
-      toolContext: '',
-      runtimeNotices: [],
-      delegation: {
-        requestId: 'm-rehydrate',
-        executionId: 'exec-rehydrate',
-        rootExecutionId: 'root-rehydrate',
-        originChannel: 'web',
-        originSurfaceId: 'surface-1',
-        continuityKey: 'tester:web',
-      },
-    });
-
-    const pending = pendingActionStore.findActiveByApprovalId('approval-rehydrate-1');
-    expect(pending?.resume).toMatchObject({
-      kind: 'worker_approval',
-      payload: {
-        approvalIds: ['approval-rehydrate-1'],
-        requestId: 'm-rehydrate',
-        executionId: 'exec-rehydrate',
-        rootExecutionId: 'root-rehydrate',
-        originSurfaceId: 'surface-1',
-        continuityKey: 'tester:web',
-      },
-    });
-
-    const workerApprovalState = manager as unknown as {
-      workerSuspendedApprovalsBySession: Map<string, unknown>;
-      workerSuspendedApprovalToSession: Map<string, unknown>;
-    };
-    workerApprovalState.workerSuspendedApprovalsBySession.clear();
-    workerApprovalState.workerSuspendedApprovalToSession.clear();
-    if (pending) {
-      pendingActionStore.complete(pending.id, 2);
-    }
-    expect(pendingActionStore.findActiveByApprovalId('approval-rehydrate-1', 2)).toBeNull();
-
-    const resumed = await manager.continueAfterApproval(
-      'approval-rehydrate-1',
-      'approved',
-      'Draft approved.',
-      pending,
-    );
-
-    expect(resumed?.content).toBe('The draft continued from persisted approval state.');
-    expect(sawContinuation).toBe(true);
-
-    manager.shutdown();
-  });
-
   it('resumes delegated worker approvals from graph-owned worker suspension artifacts', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
@@ -6560,7 +6430,7 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
-  it('resumes suspended worker sessions after approvals are granted out of band', async () => {
+  it('does not expose resumable worker approval metadata without graph suspension ownership', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 
     workerMessageHandler = (params) => {
@@ -6649,55 +6519,9 @@ describe('WorkerManager', () => {
       runtimeNotices: [],
     });
 
-    expect(initial.metadata).toMatchObject({
-      pendingAction: {
-        blocker: {
-          approvalSummaries: [
-            {
-              id: 'approval-outlook-1',
-              toolName: 'outlook_draft',
-            },
-          ],
-        },
-      },
-    });
-    expect(manager.hasSuspendedApproval('approval-outlook-1')).toBe(true);
-    expect(pendingActionStore.replaceActive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'local',
-        userId: 'tester',
-        channel: 'web',
-      }),
-      expect.objectContaining({
-        blocker: expect.objectContaining({
-          kind: 'approval',
-          approvalIds: ['approval-outlook-1'],
-          approvalSummaries: [expect.objectContaining({ id: 'approval-outlook-1' })],
-        }),
-        intent: expect.objectContaining({
-          originalUserContent: 'Draft an Outlook email to alex@example.com.',
-        }),
-      }),
-      1,
-    );
-    expect(initial.metadata).toMatchObject({
-      pendingAction: {
-        id: 'pending-worker-approval-1',
-        blocker: {
-          approvalIds: ['approval-outlook-1'],
-        },
-      },
-      continueConversationAfterApproval: true,
-    });
-
-    const resumed = await manager.continueAfterApproval(
-      'approval-outlook-1',
-      'approved',
-      'Outlook draft created.',
-    );
-
-    expect(resumed?.content).toBe('The Outlook draft is present in Drafts.');
-    expect(manager.hasSuspendedApproval('approval-outlook-1')).toBe(false);
+    expect(initial.metadata?.pendingAction).toBeUndefined();
+    expect(initial.metadata?.continueConversationAfterApproval).toBeUndefined();
+    expect(pendingActionStore.replaceActive).not.toHaveBeenCalled();
 
     manager.shutdown();
   });
@@ -6735,7 +6559,7 @@ describe('WorkerManager', () => {
       } as never,
     );
 
-    await manager.handleMessage({
+    const result = await manager.handleMessage({
       sessionId: 'tester:web',
       agentId: 'local',
       userId: 'tester',
@@ -6757,7 +6581,8 @@ describe('WorkerManager', () => {
       runtimeNotices: [],
     });
 
-    expect(manager.hasSuspendedApproval('approval-auto-run-1')).toBe(false);
+    expect(result.metadata?.pendingAction).toBeUndefined();
+    expect(result.metadata?.continueConversationAfterApproval).toBeUndefined();
 
     manager.shutdown();
   });
@@ -6804,10 +6629,62 @@ describe('WorkerManager', () => {
         ],
       }),
     );
+    const suspendedWorkerMetadata = (
+      baseMetadata: Record<string, unknown>,
+      message: {
+        id?: string;
+        userId?: string;
+        principalId?: string;
+        principalRole?: 'owner' | 'delegate' | 'system';
+        channel?: string;
+        surfaceId?: string;
+        content?: string;
+        metadata?: Record<string, unknown>;
+        timestamp?: number;
+      },
+      approval: { id: string; toolName: string },
+    ) => attachWorkerSuspensionMetadata(baseMetadata, {
+      version: WORKER_SUSPENSION_SCHEMA_VERSION,
+      kind: 'tool_loop',
+      llmMessages: [
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `call-${approval.id}`, name: approval.toolName, args: '{}' }],
+        },
+      ],
+      pendingTools: [{
+        approvalId: approval.id,
+        toolCallId: `call-${approval.id}`,
+        jobId: `job-${approval.id}`,
+        name: approval.toolName,
+      }],
+      originalMessage: {
+        id: message.id ?? 'm-security-follow-up',
+        userId: message.userId ?? 'tester',
+        principalId: message.principalId ?? 'tester',
+        principalRole: message.principalRole ?? 'owner',
+        channel: message.channel ?? 'web',
+        ...(message.surfaceId ? { surfaceId: message.surfaceId } : {}),
+        content: message.content ?? 'Create a security follow-up task and weekly automation.',
+        metadata: message.metadata,
+        timestamp: message.timestamp ?? 1,
+      },
+      createdAt: 1,
+      expiresAt: 30_001,
+    });
 
     workerMessageHandler = (params) => {
       const message = (params.message ?? {}) as {
+        id?: string;
+        userId?: string;
+        principalId?: string;
+        principalRole?: 'owner' | 'delegate' | 'system';
+        channel?: string;
+        surfaceId?: string;
+        content?: string;
         metadata?: Record<string, unknown>;
+        timestamp?: number;
       };
       const continuation = message.metadata?.[APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY] as
         | { type?: string; approvalId?: string; decision?: string; resultMessage?: string }
@@ -6815,7 +6692,7 @@ describe('WorkerManager', () => {
       if (continuation?.approvalId === 'approval-note-1') {
         return {
           content: 'Waiting for approval to create the weekly automation.',
-          metadata: {
+          metadata: suspendedWorkerMetadata({
             continueConversationAfterApproval: true,
             ...approvalPendingActionMetadata([
               {
@@ -6829,7 +6706,7 @@ describe('WorkerManager', () => {
               ...(continuationToolMetadata('second_brain_task_upsert', 'succeeded').executionEvents as unknown[]),
               ...(continuationToolMetadata('automation_save', 'pending_approval').executionEvents as unknown[]),
             ],
-          },
+          }, message, { id: 'approval-automation-2', toolName: 'automation_save' }),
         };
       }
       if (continuation?.approvalId === 'approval-automation-2') {
@@ -6840,7 +6717,7 @@ describe('WorkerManager', () => {
       }
       return {
         content: 'Waiting for approval to create the Second Brain task.',
-        metadata: {
+        metadata: suspendedWorkerMetadata({
           continueConversationAfterApproval: true,
           ...approvalPendingActionMetadata([
             {
@@ -6849,19 +6726,12 @@ describe('WorkerManager', () => {
               argsPreview: '{"title":"Review Guardian security posture findings"}',
             },
           ]),
-        },
+        }, message, { id: 'approval-note-1', toolName: 'second_brain_task_upsert' }),
       };
     };
 
-    const pendingActionStore = {
-      replaceActive: vi.fn((scope, record) => ({
-        id: `pending-${record.blocker.approvalIds?.[0] ?? 'approval'}`,
-        scope,
-        createdAt: 1,
-        updatedAt: 1,
-        ...record,
-      } satisfies PendingActionRecord)),
-    };
+    const pendingActionStore = createMemoryPendingActionStore(() => 1);
+    const executionGraphStore = new ExecutionGraphStore({ now: () => 1 });
     const intentRoutingTrace = {
       record: vi.fn(),
     };
@@ -6891,6 +6761,7 @@ describe('WorkerManager', () => {
       undefined,
       {
         pendingActionStore,
+        executionGraphStore,
         intentRoutingTrace,
         runTimeline,
         now: () => 1,
@@ -6910,6 +6781,7 @@ describe('WorkerManager', () => {
         channel: 'web',
         surfaceId: 'surface-1',
         content: 'Create a security follow-up task and weekly automation.',
+        metadata: repoGroundedCodingMetadata(),
         timestamp: Date.now(),
       },
       systemPrompt: 'system',
@@ -6920,10 +6792,26 @@ describe('WorkerManager', () => {
       runtimeNotices: [],
     });
 
-    const afterFirstApproval = await manager.continueAfterApproval(
-      'approval-note-1',
-      'approved',
-      'Task created.',
+    const firstPending = pendingActionStore.findActiveByApprovalId('approval-note-1');
+    expect(firstPending?.resume).toMatchObject({
+      kind: 'execution_graph',
+      payload: {
+        graphId: expect.stringContaining('delegated-worker'),
+        nodeKind: 'delegated_worker',
+      },
+    });
+
+    const afterFirstApproval = await manager.resumeExecutionGraphPendingAction(
+      firstPending!,
+      {
+        approvalId: 'approval-note-1',
+        approvalResult: {
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: 'Task created.',
+        },
+      },
     );
 
     expect(afterFirstApproval?.metadata).toMatchObject({
@@ -6940,29 +6828,26 @@ describe('WorkerManager', () => {
       },
       continueConversationAfterApproval: true,
     });
-    expect(manager.hasSuspendedApproval('approval-automation-2')).toBe(true);
-    expect(pendingActionStore.replaceActive).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agentId: 'local',
-        userId: 'tester',
-        channel: 'web',
-        surfaceId: 'surface-1',
-      }),
-      expect.objectContaining({
-        blocker: expect.objectContaining({
-          approvalIds: ['approval-automation-2'],
-        }),
-        intent: {
-          originalUserContent: 'Create a security follow-up task and weekly automation.',
-        },
-      }),
-      1,
-    );
+    const secondPending = pendingActionStore.findActiveByApprovalId('approval-automation-2');
+    expect(secondPending?.resume).toMatchObject({
+      kind: 'execution_graph',
+      payload: {
+        graphId: firstPending?.resume?.payload.graphId,
+        nodeKind: 'delegated_worker',
+      },
+    });
 
-    const completed = await manager.continueAfterApproval(
-      'approval-automation-2',
-      'approved',
-      'Automation created.',
+    const completed = await manager.resumeExecutionGraphPendingAction(
+      secondPending!,
+      {
+        approvalId: 'approval-automation-2',
+        approvalResult: {
+          success: true,
+          approved: true,
+          executionSucceeded: true,
+          message: 'Automation created.',
+        },
+      },
     );
 
     expect(completed?.content).toBe('Created the task and weekly automation.');

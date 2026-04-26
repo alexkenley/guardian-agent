@@ -248,45 +248,6 @@ describe('PendingActionStore', () => {
     expect(store.get(created.id)?.blocker.approvalIds).toEqual(['approval-2']);
   });
 
-  it('keeps worker approval resume approval ids aligned when approvals are cleared', () => {
-    const store = createStore();
-    const scope = createScope();
-    const created = store.replaceActive(scope, createRecord({
-      transferPolicy: 'origin_surface_only',
-      blocker: {
-        kind: 'approval',
-        prompt: 'Approve the delegated worker actions.',
-        approvalIds: ['approval-1', 'approval-2'],
-        approvalSummaries: [
-          { id: 'approval-1', toolName: 'gmail_draft', argsPreview: '{}' },
-          { id: 'approval-2', toolName: 'gmail_send', argsPreview: '{}' },
-        ],
-      },
-      intent: {
-        route: 'gmail',
-        operation: 'create',
-        originalUserContent: 'Draft and send the update.',
-      },
-      resume: {
-        kind: 'worker_approval',
-        payload: {
-          approvalIds: ['approval-1', 'approval-2'],
-          workerId: 'worker-1',
-        },
-      },
-    }));
-
-    clearApprovalIdFromPendingAction(store, 'approval-1', created.updatedAt + 1);
-
-    expect(store.get(created.id)?.resume).toMatchObject({
-      kind: 'worker_approval',
-      payload: {
-        approvalIds: ['approval-2'],
-        workerId: 'worker-1',
-      },
-    });
-  });
-
   it('completes the pending action when the last approval id is cleared', () => {
     const store = createStore();
     const scope = createScope();

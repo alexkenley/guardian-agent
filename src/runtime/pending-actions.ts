@@ -35,8 +35,7 @@ export type PendingActionResumeKind =
   | 'direct_route'
   | 'tool_loop'
   | 'playbook_run'
-  | 'execution_graph'
-  | 'worker_approval';
+  | 'execution_graph';
 
 export type PendingActionTransferPolicy =
   | 'origin_surface_only'
@@ -259,7 +258,6 @@ function normalizeResumeKind(value: unknown): PendingActionResumeKind | undefine
     case 'tool_loop':
     case 'playbook_run':
     case 'execution_graph':
-    case 'worker_approval':
       return value;
     default:
       return undefined;
@@ -1038,17 +1036,6 @@ export function clearApprovalIdFromPendingAction(
             approvalSummaries: (active.blocker.approvalSummaries ?? [])
               .filter((summary) => summary.id !== normalizedId),
           },
-          ...(active.resume?.kind === 'worker_approval' && Array.isArray(active.resume.payload.approvalIds)
-            ? {
-                resume: {
-                  kind: active.resume.kind,
-                  payload: {
-                    ...active.resume.payload,
-                    approvalIds: remainingApprovalIds,
-                  },
-                },
-              }
-            : {}),
         }, nowMs);
     if (!firstUpdated) {
       firstUpdated = updated;
