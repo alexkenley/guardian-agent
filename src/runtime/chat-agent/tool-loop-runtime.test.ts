@@ -1,10 +1,98 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildToolLoopResumePayload } from './tool-loop-resume.js';
-import { resumeStoredToolLoopPendingAction } from './tool-loop-runtime.js';
+import {
+  buildBlockedToolLoopPendingApprovalResume,
+  resumeStoredToolLoopPendingAction,
+} from './tool-loop-runtime.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 
 describe('tool-loop-runtime', () => {
+  it('builds blocked approval resumes after pruning pending observations and deferred calls', () => {
+    const llmMessages = [
+      { role: 'system' as const, content: 'system prompt' },
+      { role: 'user' as const, content: 'Run the remote test.' },
+      {
+        role: 'assistant' as const,
+        content: '',
+        toolCalls: [
+          { id: 'pending-call', name: 'fs_write', arguments: '{}' },
+          { id: 'deferred-call', name: 'code_test', arguments: '{}' },
+        ],
+      },
+      {
+        role: 'tool' as const,
+        toolCallId: 'pending-call',
+        content: '{"status":"pending_approval"}',
+      },
+      {
+        role: 'tool' as const,
+        toolCallId: 'deferred-call',
+        content: '{"status":"deferred_remote_sandbox_step"}',
+      },
+    ];
+
+    const resume = buildBlockedToolLoopPendingApprovalResume({
+      toolResults: [
+        {
+          status: 'fulfilled',
+          value: {
+            toolCall: { id: 'pending-call', name: 'fs_write', arguments: '{}' },
+            result: {
+              status: 'pending_approval',
+              approvalId: 'approval-1',
+              jobId: 'job-1',
+            },
+          },
+        },
+        {
+          status: 'fulfilled',
+          value: {
+            toolCall: { id: 'deferred-call', name: 'code_test', arguments: '{}' },
+            result: {
+              status: 'deferred_remote_sandbox_step',
+            },
+          },
+        },
+      ],
+      llmMessages,
+      deferredRemoteToolCallIds: new Set(['deferred-call']),
+      originalMessage: {
+        id: 'msg-1',
+        userId: 'owner',
+        channel: 'web',
+        timestamp: 1,
+        content: 'Run the remote test.',
+      },
+      requestText: 'Run the remote test.',
+      referenceTime: 1,
+      allowModelMemoryMutation: false,
+      activeSkillIds: [],
+      contentTrustLevel: 'trusted',
+      taintReasons: [],
+    });
+
+    expect(resume?.kind).toBe('tool_loop');
+    expect(llmMessages.at(-1)).toEqual({
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'pending-call', name: 'fs_write', arguments: '{}' },
+      ],
+    });
+    expect(resume?.payload).toMatchObject({
+      type: 'suspended_tool_loop',
+      pendingTools: [
+        {
+          approvalId: 'approval-1',
+          toolCallId: 'pending-call',
+          jobId: 'job-1',
+          name: 'fs_write',
+        },
+      ],
+    });
+  });
+
   it('recovers a final answer from the approved tool result when the first resume turn is empty', async () => {
     const pendingAction: PendingActionRecord = {
       id: 'pending-1',

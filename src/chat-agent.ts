@@ -54,9 +54,6 @@ import type { CodeSessionRecord, ResolvedCodeSessionContext } from './runtime/co
 import { CodeSessionStore } from './runtime/code-sessions.js';
 import { resolveConversationSurfaceId } from './runtime/channel-surface-ids.js';
 import {
-  buildToolLoopPendingApprovalResume,
-} from './runtime/chat-agent/tool-loop-resume.js';
-import {
   dispatchDirectIntentCandidates,
 } from './runtime/chat-agent/direct-intent-dispatch.js';
 import {
@@ -65,9 +62,6 @@ import {
 import {
   tryDirectCodingBackendDelegation as tryDirectCodingBackendDelegationHelper,
 } from './runtime/chat-agent/direct-coding-backend.js';
-import {
-  pruneDeferredRemoteSandboxToolCalls,
-} from './runtime/chat-agent/tool-execution.js';
 import {
   executeToolLoopRound,
 } from './runtime/chat-agent/tool-loop-round.js';
@@ -231,6 +225,7 @@ import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
 import {
+  buildBlockedToolLoopPendingApprovalResume,
   buildStoredToolLoopChatRunner as buildStoredToolLoopChatRunnerHelper,
   recoverDirectAnswerAfterTools as recoverDirectAnswerAfterToolsHelper,
   resumeStoredToolLoopPendingAction as resumeStoredToolLoopPendingActionHelper,
@@ -3040,13 +3035,10 @@ type DirectIntentShadowCandidate =
 
         if (roundResult.hasPending) {
           if (roundResult.allBlocked) {
-            // Remove the 'pending' tool result messages we just pushed, so we don't send duplicate toolCallIds when resuming
-            llmMessages.splice(-roundResult.toolResults.length, roundResult.toolResults.length);
-            pruneDeferredRemoteSandboxToolCalls(llmMessages, roundResult.deferredRemoteToolCallIds);
-
-            toolLoopPendingResume = buildToolLoopPendingApprovalResume({
+            toolLoopPendingResume = buildBlockedToolLoopPendingApprovalResume({
               toolResults: roundResult.toolResults,
               llmMessages,
+              deferredRemoteToolCallIds: roundResult.deferredRemoteToolCallIds,
               originalMessage: routedScopedMessage,
               requestText: stripLeadingContextPrefix(routedScopedMessage.content),
               referenceTime: message.timestamp,
@@ -3222,11 +3214,10 @@ type DirectIntentShadowCandidate =
 
             if (fallbackRoundResult.hasPending) {
               if (fallbackRoundResult.allBlocked) {
-                fbMessages.splice(-fallbackRoundResult.toolResults.length, fallbackRoundResult.toolResults.length);
-                pruneDeferredRemoteSandboxToolCalls(fbMessages, fallbackRoundResult.deferredRemoteToolCallIds);
-                toolLoopPendingResume = buildToolLoopPendingApprovalResume({
+                toolLoopPendingResume = buildBlockedToolLoopPendingApprovalResume({
                   toolResults: fallbackRoundResult.toolResults,
                   llmMessages: fbMessages,
+                  deferredRemoteToolCallIds: fallbackRoundResult.deferredRemoteToolCallIds,
                   originalMessage: routedScopedMessage,
                   requestText: stripLeadingContextPrefix(routedScopedMessage.content),
                   referenceTime: message.timestamp,

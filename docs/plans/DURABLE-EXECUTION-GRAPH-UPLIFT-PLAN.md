@@ -272,6 +272,12 @@ Checkpoint after the shared approval-continuation cleanup:
 - The ChatAgent public method is now `continuePendingActionAfterApproval`, and continuation response normalization no longer carries direct-route naming.
 - Remaining approval-continuation debt after this slice: filesystem-save and automation-authoring policy remediation still use `capability_continuation`, and chat-level tool-loop approvals still use `tool_loop`; both need graph interrupt equivalents before replay payloads can be removed.
 
+Checkpoint after the blocked tool-loop resume builder cleanup:
+
+- The repeated all-blocked tool-loop resume sequence now lives in `src/runtime/chat-agent/tool-loop-runtime.ts` as `buildBlockedToolLoopPendingApprovalResume`.
+- The live ChatAgent loop, fallback-provider loop, and stored tool-loop resume loop now share the same pending-observation removal, deferred remote sandbox pruning, and `tool_loop` resume payload construction.
+- Remaining tool-loop debt after this slice: the replay payload itself still stores model messages. The next architectural move is to replace `tool_loop` resumes with graph interrupts and artifact-backed observations.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.

@@ -21,10 +21,12 @@ import { buildPendingApprovalMetadata, formatPendingApprovalMessage } from '../p
 import type { PendingActionRecord } from '../pending-actions.js';
 import type { SecondBrainService } from '../second-brain/second-brain-service.js';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
+import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 import {
   buildToolLoopPendingApprovalResume,
   readToolLoopResumePayload,
+  type ToolLoopPendingApprovalToolResult,
 } from './tool-loop-resume.js';
 import {
   pruneDeferredRemoteSandboxToolCalls,
@@ -126,6 +128,39 @@ export async function recoverDirectAnswerAfterTools(input: {
   } catch {
     return '';
   }
+}
+
+export function buildBlockedToolLoopPendingApprovalResume(input: {
+  toolResults: readonly PromiseSettledResult<ToolLoopPendingApprovalToolResult>[];
+  llmMessages: ChatMessage[];
+  deferredRemoteToolCallIds: Set<string>;
+  originalMessage: UserMessage;
+  requestText: string;
+  referenceTime: number;
+  allowModelMemoryMutation: boolean;
+  activeSkillIds: string[];
+  contentTrustLevel: ContentTrustLevel;
+  taintReasons: string[];
+  intentDecision?: IntentGatewayDecision;
+  codeContext?: { workspaceRoot: string; sessionId?: string };
+  selectedExecutionProfile?: SelectedExecutionProfile | null;
+}): PendingActionRecord['resume'] | undefined {
+  input.llmMessages.splice(-input.toolResults.length, input.toolResults.length);
+  pruneDeferredRemoteSandboxToolCalls(input.llmMessages, input.deferredRemoteToolCallIds);
+  return buildToolLoopPendingApprovalResume({
+    toolResults: input.toolResults,
+    llmMessages: input.llmMessages,
+    originalMessage: input.originalMessage,
+    requestText: input.requestText,
+    referenceTime: input.referenceTime,
+    allowModelMemoryMutation: input.allowModelMemoryMutation,
+    activeSkillIds: input.activeSkillIds,
+    contentTrustLevel: input.contentTrustLevel,
+    taintReasons: input.taintReasons,
+    intentDecision: input.intentDecision,
+    codeContext: input.codeContext,
+    selectedExecutionProfile: input.selectedExecutionProfile,
+  }) ?? undefined;
 }
 
 export async function resumeStoredToolLoopPendingAction(input: {
@@ -332,17 +367,16 @@ export async function resumeStoredToolLoopPendingAction(input: {
 
     if (roundResult.hasPending) {
       if (roundResult.allBlocked) {
-        const { toolResults, pendingIds, deferredRemoteToolCallIds } = roundResult;
-        llmMessages.splice(-toolResults.length, toolResults.length);
-        pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
+        const { pendingIds } = roundResult;
         const originalMessage: UserMessage = {
           ...resume.originalMessage,
           ...(resume.originalMessage.metadata ? { metadata: { ...resume.originalMessage.metadata } } : {}),
         };
         const summaries = input.tools.getApprovalSummaries(pendingIds);
-        const nextResume = buildToolLoopPendingApprovalResume({
-          toolResults,
+        const nextResume = buildBlockedToolLoopPendingApprovalResume({
+          toolResults: roundResult.toolResults,
           llmMessages,
+          deferredRemoteToolCallIds: roundResult.deferredRemoteToolCallIds,
           originalMessage,
           requestText: resume.requestText,
           referenceTime: resume.referenceTime,
