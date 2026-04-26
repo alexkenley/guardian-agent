@@ -25,12 +25,20 @@ import { buildDelegatedTaskContract } from '../runtime/execution/verifier.js';
 import { APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY } from '../runtime/approval-continuations.js';
 import { requestNeedsExactFileReferences } from '../runtime/intent/request-patterns.js';
 import { attachPreRoutedIntentGatewayMetadata, readPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
-import type { PendingActionRecord } from '../runtime/pending-actions.js';
+import { PendingActionStore, type PendingActionRecord } from '../runtime/pending-actions.js';
 
 const workerNotifications: Array<{ method: string; params: Record<string, unknown> }> = [];
 let workerMessageHandler:
   | ((params: Record<string, unknown>) => Promise<{ content: string; metadata?: Record<string, unknown> }> | { content: string; metadata?: Record<string, unknown> })
   | undefined;
+
+function createMemoryPendingActionStore(now: () => number = () => 1): PendingActionStore {
+  return new PendingActionStore({
+    enabled: false,
+    sqlitePath: ':memory:',
+    now,
+  });
+}
 
 function approvalPendingActionMetadata(
   approvals: Array<{ id: string; toolName: string; argsPreview?: string }>,
@@ -5940,6 +5948,7 @@ describe('WorkerManager', () => {
       return { success: false, message: `Unknown approval ${approvalId}` };
     });
 
+    const pendingActionStore = createMemoryPendingActionStore();
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
@@ -5987,6 +5996,8 @@ describe('WorkerManager', () => {
         capabilityTokenTtlMs: 600_000,
         capabilityTokenMaxToolCalls: 0,
       } as never,
+      undefined,
+      { pendingActionStore },
     );
 
     const createRequest = {
@@ -6095,6 +6106,7 @@ describe('WorkerManager', () => {
       return { success: false, message: `Unknown approval ${approvalId}` };
     });
 
+    const pendingActionStore = createMemoryPendingActionStore();
     const manager = new WorkerManager(
       {
         listAlwaysLoadedDefinitions: () => [],
@@ -6143,6 +6155,8 @@ describe('WorkerManager', () => {
         capabilityTokenTtlMs: 600_000,
         capabilityTokenMaxToolCalls: 0,
       } as never,
+      undefined,
+      { pendingActionStore },
     );
 
     const createRequest = {

@@ -1728,8 +1728,7 @@ function buildDashboardCallbacks(
     }
     const continueConversation = !!pendingActionForApproval?.resume
       || !!runtime.workerManager?.hasSuspendedApproval(input.approvalId);
-    const continueAutomation = !!runtime.workerManager?.hasAutomationApprovalContinuation(input.approvalId);
-    const shouldContinue = continueConversation || continueAutomation;
+    const shouldContinue = continueConversation;
     const allowContinuation = shouldContinueConversationAfterApprovalDecision({
       decision: input.decision,
       hasContinuation: shouldContinue,
@@ -1789,7 +1788,6 @@ function buildDashboardCallbacks(
           : 'none',
         hasPendingActionResume: !!pendingActionForApproval?.resume,
         workerManagerSuspended: !!runtime.workerManager?.hasSuspendedApproval(input.approvalId),
-        hasAutomationContinuation: continueAutomation,
         continuedContentPreview: continuedResponse?.content?.slice(0, 200),
         displayMessagePreview: displayMessage?.slice(0, 200),
       },
@@ -5317,6 +5315,7 @@ async function main(): Promise<void> {
         runTimeline,
         pendingActionStore,
         executionGraphStore,
+        resolveStateAgentId: resolveSharedStateAgentId,
       },
     );
   } else {

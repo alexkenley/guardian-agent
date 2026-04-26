@@ -28,7 +28,7 @@ import {
   type OrchestrationRoleDescriptor,
 } from '../runtime/orchestration-role-descriptors.js';
 import { tryAutomationPreRoute, type AutomationPendingApprovalMetadata } from '../runtime/automation-prerouter.js';
-import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
+import { buildPendingApprovalMetadata, formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import { buildApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
 import type {
   PromptAssemblyAdditionalSection,
@@ -138,6 +138,14 @@ import {
   type PendingActionScope,
   type PendingActionStore,
 } from '../runtime/pending-actions.js';
+import {
+  buildAutomationAuthoringResumePayload,
+  buildStoredAutomationAuthoringInput,
+} from '../runtime/chat-agent/automation-authoring-resume.js';
+import {
+  normalizeFilesystemResumePrincipalRole,
+  readAutomationAuthoringResumePayload,
+} from '../runtime/chat-agent/direct-route-resume.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -272,8 +280,9 @@ export interface WorkerDelegationMetadata {
 export interface WorkerManagerObservability {
   intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'record'>;
   runTimeline?: Pick<RunTimelineStore, 'ingestDelegatedWorkerProgress' | 'ingestDelegatedExecutionEvents' | 'ingestExecutionGraphEvent'>;
-  pendingActionStore?: Pick<PendingActionStore, 'replaceActive' | 'complete' | 'update'>;
+  pendingActionStore?: Pick<PendingActionStore, 'replaceActive' | 'complete' | 'update' | 'findActiveByApprovalId' | 'listActiveByApprovalId'>;
   executionGraphStore?: Pick<ExecutionGraphStore, 'createGraph' | 'appendEvent' | 'writeArtifact' | 'getSnapshot' | 'getArtifact' | 'listArtifacts'>;
+  resolveStateAgentId?: (agentId?: string) => string | undefined;
   now?: () => number;
 }
 
@@ -456,12 +465,6 @@ export interface WorkerProcess {
   pendingMessageReject?: (error: Error) => void;
 }
 
-interface DirectAutomationContinuation {
-  request: WorkerMessageRequest;
-  pendingApprovalIds: string[];
-  expiresAt: number;
-}
-
 interface WorkerSuspendedApprovalState {
   workerId: string;
   workerSessionKey: string;
@@ -504,7 +507,6 @@ export class WorkerManager {
   private readonly workers = new Map<string, WorkerProcess>();
   private readonly sessionToWorker = new Map<string, string>();
   private readonly directPendingApprovals = new Map<string, { ids: string[]; expiresAt: number }>();
-  private readonly directAutomationContinuations = new Map<string, DirectAutomationContinuation>();
   private readonly workerSuspendedApprovalsBySession = new Map<string, WorkerSuspendedApprovalState>();
   private readonly workerSuspendedApprovalToSession = new Map<string, string>();
   private readonly delegatedFollowUpPayloads = new Map<string, {
@@ -2726,7 +2728,6 @@ export class WorkerManager {
     this.workers.clear();
     this.sessionToWorker.clear();
     this.directPendingApprovals.clear();
-    this.directAutomationContinuations.clear();
     this.workerSuspendedApprovalsBySession.clear();
     this.workerSuspendedApprovalToSession.clear();
     this.delegatedFollowUpPayloads.clear();
@@ -2820,6 +2821,7 @@ export class WorkerManager {
       .filter((token) => APPROVAL_ID_TOKEN_PATTERN.test(token));
     const targetIds = explicitIds.length > 0 ? explicitIds : pendingIds;
 
+    const directAutomationPendingAction = this.findDirectAutomationPendingAction(targetIds);
     const results: string[] = [];
     const approvedIds = new Set<string>();
     const failedIds = new Set<string>();
@@ -2840,37 +2842,25 @@ export class WorkerManager {
     }
 
     this.consumeDirectPendingApprovals(input.sessionId, targetIds);
-    const continuation = this.getDirectAutomationContinuation(input.sessionId);
-    if (continuation) {
-      const affected = targetIds.filter((id) => continuation.pendingApprovalIds.includes(id));
-      if (decision === 'approved' && affected.length > 0) {
-        const resolvedIds = new Set(affected.filter((id) => approvedIds.has(id) || failedIds.has(id)));
-        const stillPending = continuation.pendingApprovalIds.filter((id) => !resolvedIds.has(id));
-        if (stillPending.length === 0) {
-          if (affected.some((id) => failedIds.has(id))) {
-            this.directAutomationContinuations.delete(input.sessionId);
-          } else {
-            this.directAutomationContinuations.delete(input.sessionId);
-            const retry = await this.tryDirectAutomationAuthoring({
-              ...continuation.request,
-            });
-            if (retry) {
-              results.push('');
-              results.push(retry.content);
-              return {
-                content: results.join('\n'),
-                metadata: retry.metadata,
-              };
-            }
-          }
-        } else {
-          this.directAutomationContinuations.set(input.sessionId, {
-            ...continuation,
-            pendingApprovalIds: stillPending,
-          });
+    this.updatePendingActionsAfterDirectApprovalDecision(targetIds, decision, approvedIds, failedIds);
+
+    if (directAutomationPendingAction) {
+      const affected = targetIds.filter((id) => directAutomationPendingAction.blocker.approvalIds?.includes(id));
+      if (
+        decision === 'approved'
+        && affected.length > 0
+        && !affected.some((id) => failedIds.has(id))
+        && this.isDirectAutomationPendingActionReadyToResume(directAutomationPendingAction, approvedIds)
+      ) {
+        const retry = await this.resumeDirectAutomationPendingAction(directAutomationPendingAction, input);
+        if (retry) {
+          results.push('');
+          results.push(retry.content);
+          return {
+            content: results.join('\n'),
+            metadata: retry.metadata,
+          };
         }
-      } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
-        this.directAutomationContinuations.delete(input.sessionId);
       }
     }
     return { content: results.join('\n') };
@@ -2988,17 +2978,22 @@ export class WorkerManager {
       },
     }, options);
     if (!result) {
-      this.directAutomationContinuations.delete(input.sessionId);
       return null;
     }
-    if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
-      this.directAutomationContinuations.set(input.sessionId, {
+    if (trackedPendingApprovalIds.length > 0) {
+      const pendingRecord = this.recordDirectAutomationPendingApprovalAction({
         request: input,
-        pendingApprovalIds: trackedPendingApprovalIds,
-        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        result,
+        approvalIds: trackedPendingApprovalIds,
+        intentDecision: options?.intentDecision ?? undefined,
+        allowRemediation: options?.allowRemediation,
       });
-    } else {
-      this.directAutomationContinuations.delete(input.sessionId);
+      if (pendingRecord) {
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          pendingAction: toPendingActionClientMetadata(pendingRecord),
+        };
+      }
     }
     return result;
   }
@@ -3040,28 +3035,125 @@ export class WorkerManager {
     });
   }
 
-  private getDirectAutomationContinuation(
-    sessionId: string,
-    nowMs: number = Date.now(),
-  ): DirectAutomationContinuation | null {
-    const continuation = this.directAutomationContinuations.get(sessionId);
-    if (!continuation) return null;
-    if (continuation.expiresAt <= nowMs) {
-      this.directAutomationContinuations.delete(sessionId);
-      return null;
-    }
-    return continuation;
-  }
-
-  hasAutomationApprovalContinuation(approvalId: string): boolean {
-    const normalizedId = approvalId.trim();
-    if (!normalizedId) return false;
-    for (const continuation of this.directAutomationContinuations.values()) {
-      if (continuation.pendingApprovalIds.includes(normalizedId)) {
-        return true;
+  private findDirectAutomationPendingAction(approvalIds: string[]): PendingActionRecord | null {
+    const store = this.observability.pendingActionStore;
+    if (!store) return null;
+    for (const approvalId of approvalIds) {
+      const pendingAction = store.findActiveByApprovalId(approvalId);
+      if (pendingAction && readAutomationAuthoringResumePayload(pendingAction.resume?.payload)) {
+        return pendingAction;
       }
     }
-    return false;
+    return null;
+  }
+
+  private updatePendingActionsAfterDirectApprovalDecision(
+    approvalIds: string[],
+    decision: 'approved' | 'denied',
+    approvedIds: Set<string>,
+    failedIds: Set<string>,
+  ): void {
+    const store = this.observability.pendingActionStore;
+    if (!store) return;
+    const nowMs = this.observability.now?.() ?? Date.now();
+    for (const approvalId of approvalIds) {
+      const pendingAction = store.findActiveByApprovalId(approvalId);
+      if (!pendingAction) continue;
+      if (decision === 'denied') {
+        store.update(pendingAction.id, { status: 'cancelled' }, nowMs);
+        continue;
+      }
+      if (failedIds.has(approvalId)) {
+        store.update(pendingAction.id, { status: 'failed' }, nowMs);
+        continue;
+      }
+      if (approvedIds.has(approvalId)) {
+        this.clearApprovalIdFromPendingAction(approvalId, nowMs);
+      }
+    }
+  }
+
+  private clearApprovalIdFromPendingAction(approvalId: string, nowMs: number): PendingActionRecord | null {
+    const store = this.observability.pendingActionStore;
+    if (!store) return null;
+    const activeRecords = store.listActiveByApprovalId(approvalId, nowMs);
+    let firstUpdated: PendingActionRecord | null = null;
+    for (const active of activeRecords) {
+      const remainingApprovalIds = (active.blocker.approvalIds ?? []).filter((id) => id !== approvalId);
+      const updated = remainingApprovalIds.length === 0
+        ? store.complete(active.id, nowMs)
+        : store.update(active.id, {
+            blocker: {
+              ...active.blocker,
+              approvalIds: remainingApprovalIds,
+              approvalSummaries: (active.blocker.approvalSummaries ?? [])
+                .filter((summary) => summary.id !== approvalId),
+            },
+          }, nowMs);
+      if (!firstUpdated) {
+        firstUpdated = updated;
+      }
+    }
+    return firstUpdated;
+  }
+
+  private isDirectAutomationPendingActionReadyToResume(
+    pendingAction: PendingActionRecord,
+    approvedIds: Set<string>,
+  ): boolean {
+    const approvalIds = pendingAction.blocker.approvalIds ?? [];
+    if (approvalIds.length === 0) return false;
+    const livePendingIds = this.listLivePendingApprovalIdsForPendingAction(pendingAction);
+    if (!livePendingIds) {
+      return approvalIds.every((id) => approvedIds.has(id));
+    }
+    return approvalIds.every((id) => approvedIds.has(id) || !livePendingIds.has(id));
+  }
+
+  private listLivePendingApprovalIdsForPendingAction(pendingAction: PendingActionRecord): Set<string> | null {
+    if (!this.tools.listPendingApprovalIdsForUser) return null;
+    return new Set(this.tools.listPendingApprovalIdsForUser(
+      pendingAction.scope.userId,
+      pendingAction.scope.channel,
+      {
+        includeUnscoped: pendingAction.scope.channel === 'web',
+        principalId: pendingAction.scope.userId,
+      },
+    ));
+  }
+
+  private async resumeDirectAutomationPendingAction(
+    pendingAction: PendingActionRecord,
+    currentInput: WorkerMessageRequest,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const resume = readAutomationAuthoringResumePayload(pendingAction.resume?.payload);
+    if (!resume) return null;
+    const codeContext = resume.codeContext ?? this.readMessageCodeContext(currentInput.message);
+    const messageMetadata = codeContext
+      ? { ...(currentInput.message.metadata ?? {}), codeContext }
+      : currentInput.message.metadata;
+    return this.tryDirectAutomationAuthoring(
+      {
+        ...currentInput,
+        userId: pendingAction.scope.userId,
+        message: {
+          ...currentInput.message,
+          id: randomUUID(),
+          userId: pendingAction.scope.userId,
+          principalId: resume.principalId ?? currentInput.message.principalId ?? pendingAction.scope.userId,
+          principalRole: normalizeFilesystemResumePrincipalRole(resume.principalRole) ?? currentInput.message.principalRole,
+          channel: pendingAction.scope.channel,
+          surfaceId: pendingAction.scope.surfaceId,
+          content: resume.originalUserContent,
+          metadata: messageMetadata,
+          timestamp: Date.now(),
+        },
+      },
+      {
+        allowRemediation: resume.allowRemediation,
+        assumeAuthoring: true,
+      },
+    );
   }
 
   hasSuspendedApproval(approvalId: string): boolean {
@@ -3074,14 +3166,6 @@ export class WorkerManager {
     approvalIds?: string[];
   }): void {
     const approvalIds = new Set((args.approvalIds ?? []).map((id) => id.trim()).filter(Boolean));
-    for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
-      const matchesScope = continuation.request.userId === args.userId
-        && continuation.request.message.channel === args.channel;
-      const matchesApproval = continuation.pendingApprovalIds.some((id) => approvalIds.has(id));
-      if (matchesScope || matchesApproval) {
-        this.directAutomationContinuations.delete(sessionId);
-      }
-    }
     for (const [sessionId, pending] of this.directPendingApprovals.entries()) {
       if (pending.ids.some((id) => approvalIds.has(id))) {
         this.directPendingApprovals.delete(sessionId);
@@ -3105,47 +3189,6 @@ export class WorkerManager {
     if (!normalizedId) return null;
     const workerContinuation = await this.continueWorkerAfterApproval(normalizedId, decision, resultMessage);
     if (workerContinuation) return workerContinuation;
-    for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
-      if (!continuation.pendingApprovalIds.includes(normalizedId)) continue;
-      if (decision !== 'approved') {
-        this.directAutomationContinuations.delete(sessionId);
-        return null;
-      }
-      const stillPending = continuation.pendingApprovalIds.filter((id) => id !== normalizedId);
-      if (stillPending.length > 0) {
-        this.directAutomationContinuations.set(sessionId, {
-          ...continuation,
-          pendingApprovalIds: stillPending,
-        });
-        return null;
-      }
-      this.directAutomationContinuations.delete(sessionId);
-      return this.tryDirectAutomationAuthoring(continuation.request);
-    }
-
-    if (decision === 'approved') {
-      for (const [sessionId, continuation] of this.directAutomationContinuations.entries()) {
-        const livePendingIds = new Set(this.tools.listPendingApprovalIdsForUser?.(
-          continuation.request.userId,
-          continuation.request.message.channel,
-          {
-            includeUnscoped: continuation.request.message.channel === 'web',
-            principalId: continuation.request.message.principalId ?? continuation.request.userId,
-          },
-        ) ?? []);
-        const stillPending = continuation.pendingApprovalIds.filter((id) => livePendingIds.has(id));
-        if (stillPending.length === 0) {
-          this.directAutomationContinuations.delete(sessionId);
-          return this.tryDirectAutomationAuthoring(continuation.request);
-        }
-        if (stillPending.length !== continuation.pendingApprovalIds.length) {
-          this.directAutomationContinuations.set(sessionId, {
-            ...continuation,
-            pendingApprovalIds: stillPending,
-          });
-        }
-      }
-    }
     return null;
   }
 
@@ -3633,6 +3676,107 @@ export class WorkerManager {
       },
       nowMs,
     );
+  }
+
+  private recordDirectAutomationPendingApprovalAction(input: {
+    request: WorkerMessageRequest;
+    result: { content: string; metadata?: Record<string, unknown> };
+    approvalIds: string[];
+    intentDecision?: IntentGatewayDecision;
+    allowRemediation?: boolean;
+  }): PendingActionRecord | null {
+    const store = this.observability.pendingActionStore;
+    if (!store) return null;
+    const approvalIds = [...new Set(input.approvalIds.map((id) => id.trim()).filter(Boolean))];
+    if (approvalIds.length === 0) return null;
+    const summaries = this.tools.getApprovalSummaries(approvalIds);
+    const prompt = this.readPendingApprovalPrompt(input.result.metadata)
+      ?? formatPendingApprovalMessage(buildPendingApprovalMetadata(approvalIds, summaries))
+      ?? 'This action needs approval before I can continue.';
+    const codeContext = this.readMessageCodeContext(input.request.message);
+    const surfaceId = input.request.message.surfaceId?.trim()
+      || input.request.delegation?.originSurfaceId?.trim()
+      || input.request.message.channel;
+    const nowMs = this.observability.now?.() ?? Date.now();
+    return store.replaceActive(
+      {
+        agentId: this.resolvePendingActionAgentId(input.request.agentId),
+        userId: input.request.userId,
+        channel: input.request.message.channel,
+        surfaceId,
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'origin_surface_only',
+        blocker: {
+          kind: 'approval',
+          prompt,
+          approvalIds,
+          approvalSummaries: buildPendingApprovalMetadata(approvalIds, summaries),
+        },
+        intent: {
+          route: input.intentDecision?.route ?? 'automation_authoring',
+          operation: input.intentDecision?.operation ?? 'create',
+          summary: input.intentDecision?.summary ?? 'Creates or updates a Guardian automation.',
+          turnRelation: input.intentDecision?.turnRelation ?? 'new_request',
+          resolution: input.intentDecision?.resolution ?? 'ready',
+          ...(input.intentDecision?.missingFields?.length ? { missingFields: input.intentDecision.missingFields } : {}),
+          ...(input.intentDecision?.resolvedContent ? { resolvedContent: input.intentDecision.resolvedContent } : {}),
+          ...(input.intentDecision?.provenance ? { provenance: input.intentDecision.provenance } : {}),
+          ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
+          originalUserContent: input.request.message.content,
+        },
+        ...(input.result.metadata?.resumeAutomationAfterApprovals
+          ? {
+              resume: buildAutomationAuthoringResumePayload(buildStoredAutomationAuthoringInput({
+                originalUserContent: input.request.message.content,
+                userKey: `${input.request.userId}:${input.request.message.channel}`,
+                userId: input.request.userId,
+                channel: input.request.message.channel,
+                surfaceId,
+                principalId: input.request.message.principalId ?? input.request.userId,
+                principalRole: input.request.message.principalRole,
+                requestId: input.request.message.id,
+                ...(codeContext ? { codeContext } : {}),
+                allowRemediation: input.allowRemediation !== false,
+              })),
+            }
+          : {}),
+        ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
+        ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
+        ...(codeContext?.sessionId ? { codeSessionId: codeContext.sessionId } : {}),
+        expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+      },
+      nowMs,
+    );
+  }
+
+  private readPendingApprovalPrompt(metadata: Record<string, unknown> | undefined): string | null {
+    if (!isRecord(metadata?.pendingAction) || !isRecord(metadata.pendingAction.blocker)) {
+      return null;
+    }
+    const prompt = metadata.pendingAction.blocker.prompt;
+    return typeof prompt === 'string' && prompt.trim() ? prompt.trim() : null;
+  }
+
+  private readMessageCodeContext(message: UserMessage): { workspaceRoot: string; sessionId?: string } | undefined {
+    const metadata = message.metadata;
+    if (!isRecord(metadata?.codeContext)) return undefined;
+    const workspaceRoot = typeof metadata.codeContext.workspaceRoot === 'string'
+      ? metadata.codeContext.workspaceRoot.trim()
+      : '';
+    if (!workspaceRoot) return undefined;
+    const sessionId = typeof metadata.codeContext.sessionId === 'string'
+      ? metadata.codeContext.sessionId.trim()
+      : '';
+    return {
+      workspaceRoot,
+      ...(sessionId ? { sessionId } : {}),
+    };
+  }
+
+  private resolvePendingActionAgentId(agentId: string): string {
+    return this.observability.resolveStateAgentId?.(agentId)?.trim() || agentId;
   }
 
   private recordWorkerContinuationPendingApprovalAction(

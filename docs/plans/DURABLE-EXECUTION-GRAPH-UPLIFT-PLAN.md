@@ -76,7 +76,7 @@ Root ownership problems to resolve:
 - `ChatAgent` still owns normal turn orchestration, approval resume, direct-route dispatch, tool-loop resume, retry/continuation repair, and response shaping.
 - `WorkerManager` still owns delegated execution, retries, recovery advice, graph setup, and graph persistence instead of acting as a graph node runner.
 - `PendingActionStore`, `ExecutionStore`, `ContinuityThreadStore`, `ExecutionGraphStore`, and `RunTimelineStore` each hold part of the same execution lifecycle without one authoritative owner.
-- Approval continuity is split across pending actions, live `ToolExecutor` approvals, in-memory suspended sessions, direct-route resumes, tool-loop resumes, automation continuations, and graph suspensions.
+- Approval continuity is split across pending actions, live `ToolExecutor` approvals, in-memory suspended worker sessions, direct-route resumes, tool-loop resumes, worker-session automation continuations, and graph suspensions.
 - Continuity still has semantic recovery authority in places. It must become context projection over active execution refs and artifacts, not a source of reconstructed intent.
 - Routing and repair are split between pre-dispatch gateway handling, `ChatAgent` classification, direct candidate routing, and delegated retry/recovery.
 - Provider fallback is distributed across failover providers, model fallback chains, execution profile selection, classifier retry loops, dashboard fallback, and delegated escalation.
@@ -105,7 +105,7 @@ Refactor sequence:
    - Delete duplicate control-flow decisions from callers as they move behind the controller.
 
 3. Collapse approval and resume state.
-   - Remove `suspendedSessions`, approval follow-up maps, automation continuation maps, direct-route resume state, and tool-loop resume state as graph equivalents land.
+- Remove `suspendedSessions`, approval follow-up maps, worker-session automation continuation state, direct-route resume state, and tool-loop resume state as graph equivalents land.
    - Pending actions should carry graph interrupt identity and artifact refs, not opaque model-message replay blobs.
 
 4. Demote continuity to context projection.
@@ -143,7 +143,14 @@ Checkpoint after the chat automation-resume debt-burn slice:
 - Chat automation authoring remediation approvals now write a `direct_route` pending-action resume payload with `type: "automation_authoring"` instead of registering an in-memory ChatAgent continuation.
 - `approval-orchestration.ts` no longer owns a special automation retry path. Final approval resolution falls through to the shared pending-action direct-route resume path.
 - `direct-route-runtime.ts` dispatches stored automation-authoring resume payloads to `automation-authoring-resume.ts`, which reconstructs the authoring request from pending-action metadata and can create another pending action if follow-up remediation approvals are needed.
-- The temporary `automation-approval-continuation.ts` module and tests were deleted. The next debt-burn step is to apply the same pending-action/graph-resume ownership to `WorkerManager.directAutomationContinuations` and `WorkerSession` automation continuations, then remove those maps.
+- The temporary `automation-approval-continuation.ts` module and tests were deleted. The next debt-burn step was to apply the same pending-action/graph-resume ownership to `WorkerManager.directAutomationContinuations`; `WorkerSession` automation continuations remain to be migrated.
+
+Checkpoint after the worker-manager direct automation debt-burn slice:
+
+- `WorkerManager.directAutomationContinuations` was deleted. Direct automation remediation approvals now store the authoring resume payload on the pending action and inline approval messages resume by reading that pending-action payload.
+- The dashboard approval path no longer asks WorkerManager for a separate automation-continuation flag. Pending-action resume metadata is the continuation signal.
+- WorkerManager records direct automation pending actions under the resolved shared state agent id when the runtime provides a state-id resolver, so dashboard direct-route resume stays aligned with ChatAgent state ownership.
+- Remaining approval/resume overlap after this slice: `BrokeredWorkerSession.automationContinuation`, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
 
 Exit criteria for this refinement phase:
 
