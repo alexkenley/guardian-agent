@@ -150,7 +150,7 @@ Checkpoint after the worker-manager direct automation debt-burn slice:
 - `WorkerManager.directAutomationContinuations` was deleted. Direct automation remediation approvals now store the authoring resume payload on the pending action and inline approval messages resume by reading that pending-action payload.
 - The dashboard approval path no longer asks WorkerManager for a separate automation-continuation flag. Pending-action resume metadata is the continuation signal.
 - WorkerManager records direct automation pending actions under the resolved shared state agent id when the runtime provides a state-id resolver, so dashboard direct-route resume stays aligned with ChatAgent state ownership.
-- Remaining approval/resume overlap after this slice: `BrokeredWorkerSession.automationContinuation`, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still need graph interrupt equivalents before they can be deleted.
+- Remaining approval/resume overlap at this checkpoint: brokered worker automation continuation state, worker suspended approvals, direct-route resume payloads, and tool-loop resume payloads still needed graph interrupt equivalents before they could be deleted.
 
 Checkpoint after the chat-agent direct-intent helper extraction:
 
@@ -163,6 +163,13 @@ Checkpoint after the direct-mailbox helper extraction:
 - Gmail/Outlook read-intent resolution, continuation-kind mapping, reply-subject formatting, and mailbox address extraction moved into `src/runtime/chat-agent/direct-mailbox-helpers.ts`.
 - `src/chat-agent.ts` still owns the actual Gmail/Outlook tool execution and approval creation for now, but no longer owns the pure mailbox parsing/continuation rules inline.
 - Focused coverage now exists at `src/runtime/chat-agent/direct-mailbox-helpers.test.ts`, including decision-driven reads and paged-list continuation recovery.
+
+Checkpoint after the brokered worker automation-resume cleanup:
+
+- `BrokeredWorkerSession.automationContinuation` was deleted. The worker no longer keeps a separate hidden automation-authoring continuation beside pending approvals.
+- Brokered automation remediation now returns an explicit `workerAutomationAuthoringResume` metadata payload. `WorkerManager` carries that payload with the worker suspended-approval state and sends it back to the worker as structured continuation metadata after the approval set resolves.
+- The worker handles that resume metadata before intent classification and reruns automation authoring with `assumeAuthoring: true`, preserving the original user content and code context from the supervisor-provided resume payload.
+- Remaining approval/resume overlap after this slice: worker suspended approvals still own brokered-worker approval continuity until they are replaced by graph interrupt resume; direct-route and tool-loop resume payloads still need graph interrupt equivalents before deletion.
 
 Exit criteria for this refinement phase:
 

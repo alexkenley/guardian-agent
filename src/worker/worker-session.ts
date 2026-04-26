@@ -94,6 +94,12 @@ import {
   type LlmLoopOutcome,
   type LlmLoopToolEvent,
 } from './worker-llm-loop.js';
+import {
+  attachWorkerAutomationAuthoringResumeMetadata,
+  buildWorkerAutomationAuthoringResume,
+  buildWorkerAutomationAuthoringResumeMessage,
+  readWorkerAutomationAuthoringResumeMetadata,
+} from './automation-resume.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
@@ -184,12 +190,6 @@ interface PendingApprovalMetadata {
   toolName: string;
   argsPreview: string;
   actionLabel?: string;
-}
-
-interface AutomationApprovalContinuation {
-  originalMessage: UserMessage;
-  pendingApprovalIds: string[];
-  expiresAt: number;
 }
 
 export interface WorkerGroundedSynthesisRequest {
@@ -1769,7 +1769,6 @@ export class BrokeredWorkerSession {
   private readonly intentGateway = new IntentGateway();
   private pendingApprovals: PendingApprovalState | null = null;
   private suspendedSession: SuspendedSession | null = null;
-  private automationContinuation: AutomationApprovalContinuation | null = null;
   private readonly toolReportScopes = new Map<string, ToolReportScope>();
 
   constructor(client: BrokerClient) {
@@ -1939,6 +1938,22 @@ export class BrokeredWorkerSession {
         toolExecutor,
         params,
       );
+    }
+
+    const automationAuthoringResume = readWorkerAutomationAuthoringResumeMetadata(params.message.metadata);
+    if (automationAuthoringResume) {
+      const resumeMessage = buildWorkerAutomationAuthoringResumeMessage(params.message, automationAuthoringResume);
+      const resumed = await this.tryDirectAutomationAuthoring(resumeMessage, toolExecutor, {
+        allowRemediation: automationAuthoringResume.allowRemediation,
+        assumeAuthoring: true,
+      });
+      if (resumed) {
+        this.rememberToolReportScope(resumeMessage, automationAuthoringResume.codeContext, toolExecutor);
+        return resumed;
+      }
+      return {
+        content: 'I could not resume the automation authoring request after approval.',
+      };
     }
 
     const approvalResponse = await this.tryHandleApprovalMessage(params.message, chatFn, toolExecutor, params);
@@ -2506,8 +2521,6 @@ export class BrokeredWorkerSession {
 
     const results: string[] = [];
     let approvedAny = false;
-    const approvedIds = new Set<string>();
-    const failedIds = new Set<string>();
     for (const approvalId of targetIds) {
       const decided = await this.client.decideApproval(
         approvalId,
@@ -2517,12 +2530,7 @@ export class BrokeredWorkerSession {
       );
       results.push(decided.message);
       const approvalGranted = decision === 'approved' && (decided.approved ?? decided.success);
-      const executionFailed = approvalGranted && decided.executionSucceeded === false;
       approvedAny ||= approvalGranted;
-      if (approvalGranted) approvedIds.add(approvalId);
-      if (!decided.success || executionFailed || (decision === 'approved' && !approvalGranted)) {
-        failedIds.add(approvalId);
-      }
     }
 
     if (decision === 'approved' && approvedAny && this.suspendedSession) {
@@ -2530,39 +2538,6 @@ export class BrokeredWorkerSession {
     }
 
     this.consumePendingApprovals(targetIds);
-    if (this.automationContinuation) {
-      const affected = targetIds.filter((id) => this.automationContinuation?.pendingApprovalIds.includes(id));
-      if (decision === 'approved' && affected.length > 0) {
-        const resolvedIds = new Set(affected.filter((id) => approvedIds.has(id) || failedIds.has(id)));
-        const stillPending = this.automationContinuation.pendingApprovalIds.filter((id) => !resolvedIds.has(id));
-        if (stillPending.length === 0) {
-          if (affected.some((id) => failedIds.has(id))) {
-            this.automationContinuation = null;
-          } else {
-            const originalMessage = this.automationContinuation.originalMessage;
-            this.automationContinuation = null;
-            const retry = await this.tryDirectAutomationAuthoring(originalMessage, toolExecutor, {
-              assumeAuthoring: true,
-            });
-            if (retry) {
-              results.push('');
-              results.push(retry.content);
-              return {
-                content: results.join('\n'),
-                metadata: retry.metadata,
-              };
-            }
-          }
-        } else {
-          this.automationContinuation = {
-            ...this.automationContinuation,
-            pendingApprovalIds: stillPending,
-          };
-        }
-      } else if (affected.length > 0 && (decision === 'denied' || affected.some((id) => failedIds.has(id)))) {
-        this.automationContinuation = null;
-      }
-    }
     return { content: results.join('\n') };
   }
 
@@ -2852,18 +2827,14 @@ export class BrokeredWorkerSession {
         return resolved.length > 0 ? resolved : fallback;
       },
     }, options);
-    if (!result) {
-      this.automationContinuation = null;
-      return null;
-    }
+    if (!result) return null;
     if (result.metadata?.resumeAutomationAfterApprovals && trackedPendingApprovalIds.length > 0) {
-      this.automationContinuation = {
-        originalMessage: message,
-        pendingApprovalIds: trackedPendingApprovalIds,
-        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
-      };
-    } else {
-      this.automationContinuation = null;
+      result.metadata = attachWorkerAutomationAuthoringResumeMetadata(
+        result.metadata,
+        buildWorkerAutomationAuthoringResume(message, {
+          allowRemediation: true,
+        }),
+      );
     }
     return result;
   }
@@ -3296,7 +3267,6 @@ export class BrokeredWorkerSession {
     if (!this.pendingApprovals) return [];
     if (this.pendingApprovals.expiresAt <= nowMs) {
       this.pendingApprovals = null;
-      this.automationContinuation = null;
       return [];
     }
     return [...this.pendingApprovals.ids];

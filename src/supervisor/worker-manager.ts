@@ -146,6 +146,11 @@ import {
   normalizeFilesystemResumePrincipalRole,
   readAutomationAuthoringResumePayload,
 } from '../runtime/chat-agent/direct-route-resume.js';
+import {
+  attachWorkerAutomationAuthoringResumeMetadata,
+  readWorkerAutomationAuthoringResumeMetadata,
+  type WorkerAutomationAuthoringResume,
+} from '../worker/automation-resume.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -488,6 +493,7 @@ interface WorkerSuspendedApprovalState {
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
   executionProfile?: SelectedExecutionProfile;
+  automationResume?: WorkerAutomationAuthoringResume;
   principalId: string;
   principalRole: NonNullable<UserMessage['principalRole']>;
   channel: string;
@@ -3609,6 +3615,7 @@ export class WorkerManager {
       : [];
     this.clearWorkerSuspendedApprovals(worker.workerSessionKey);
     if (approvalIds.length === 0) return;
+    const automationResume = readWorkerAutomationAuthoringResumeMetadata(metadata);
     this.setWorkerSuspendedApprovals({
       workerId: worker.id,
       workerSessionKey: worker.workerSessionKey,
@@ -3625,6 +3632,7 @@ export class WorkerManager {
       principalRole: message.principalRole ?? 'owner',
       channel: message.channel,
       approvalIds: [...new Set(approvalIds)],
+      ...(automationResume ? { automationResume } : {}),
       expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
     });
   }
@@ -4023,6 +4031,15 @@ export class WorkerManager {
     this.clearWorkerSuspendedApprovals(state.workerSessionKey);
     if (!worker || worker.status !== 'ready') return null;
 
+    const continuationMetadata = buildApprovalOutcomeContinuationMetadata({
+      approvalId,
+      decision,
+      resultMessage,
+    });
+    const resumeMetadata = state.automationResume
+      ? attachWorkerAutomationAuthoringResumeMetadata(continuationMetadata, state.automationResume)
+      : continuationMetadata;
+
     const continuationResult = await this.dispatchToWorker(worker, {
       message: {
         id: randomUUID(),
@@ -4032,11 +4049,7 @@ export class WorkerManager {
         channel: state.channel,
         ...(state.surfaceId ? { surfaceId: state.surfaceId } : {}),
         content: '',
-        metadata: buildApprovalOutcomeContinuationMetadata({
-          approvalId,
-          decision,
-          resultMessage,
-        }),
+        metadata: resumeMetadata,
         timestamp: Date.now(),
       },
       systemPrompt: '',

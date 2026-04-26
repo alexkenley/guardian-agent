@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChatResponse } from '../llm/types.js';
 import { buildApprovalOutcomeContinuationMetadata } from '../runtime/approval-continuations.js';
 import { attachPreRoutedIntentGatewayMetadata } from '../runtime/intent-gateway.js';
+import {
+  attachWorkerAutomationAuthoringResumeMetadata,
+  buildWorkerAutomationAuthoringResume,
+} from './automation-resume.js';
 import { BrokeredWorkerSession } from './worker-session.js';
 
 const baseParams = {
@@ -33,6 +37,81 @@ function buildComplexPlanningMetadata() {
 }
 
 describe('BrokeredWorkerSession automation control', () => {
+  it('resumes automation authoring from supervisor-provided metadata without a worker continuation cache', async () => {
+    const originalMessage = {
+      id: 'msg-automation-original',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner' as const,
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Create a daily 8:00 AM automation that reads ./companies.csv and uses built-in Guardian tools only.',
+      metadata: {
+        codeContext: {
+          workspaceRoot: 'S:/Development/GuardianAgent',
+          sessionId: 'code-1',
+        },
+      },
+      timestamp: Date.now(),
+    };
+    const llmChat = vi.fn(async (_messages, options) => {
+      if (options?.tools?.[0]?.name === 'route_intent') {
+        throw new Error('Automation resume should not reclassify the turn.');
+      }
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse;
+    });
+    const callTool = vi.fn(async (request: Record<string, unknown>) => {
+      if (request.toolName === 'automation_list') {
+        return {
+          success: true,
+          output: { automations: [] },
+        };
+      }
+      if (request.toolName === 'automation_save') {
+        return {
+          success: true,
+          message: 'Automation saved.',
+          output: { id: 'automation-1', name: 'Daily companies summary' },
+        };
+      }
+      throw new Error(`Unexpected tool ${String(request.toolName)}`);
+    });
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: vi.fn(() => []),
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      recordTrace: vi.fn(),
+      recordExecutionGraphEvent: vi.fn(),
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        ...originalMessage,
+        id: 'msg-automation-resume',
+        content: '',
+        metadata: attachWorkerAutomationAuthoringResumeMetadata(
+          {},
+          buildWorkerAutomationAuthoringResume(originalMessage),
+        ),
+      },
+    });
+
+    expect(result.content).toContain('Created scheduled assistant task');
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'automation_save',
+    }));
+    expect(llmChat).not.toHaveBeenCalled();
+  });
+
   it('refreshes loaded tools for code-session turns so coding helpers are visible to the worker', async () => {
     let loadedTools = [
       {
