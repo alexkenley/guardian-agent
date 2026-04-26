@@ -1735,7 +1735,12 @@ function buildDashboardCallbacks(
     });
     let continuedResponse: { content: string; metadata?: Record<string, unknown> } | undefined;
     if (allowContinuation) {
-      continuedResponse = await runtime.workerManager?.continueAfterApproval(input.approvalId, input.decision, result.message) ?? undefined;
+      continuedResponse = await runtime.workerManager?.continueAfterApproval(
+        input.approvalId,
+        input.decision,
+        result.message,
+        pendingActionForApproval,
+      ) ?? undefined;
       if (!continuedResponse && pendingActionForApproval?.resume?.kind === 'execution_graph') {
         continuedResponse = await runtime.workerManager?.resumeExecutionGraphPendingAction(
           pendingActionForApproval,

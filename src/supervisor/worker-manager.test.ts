@@ -2258,6 +2258,136 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('reconstructs brokered worker approval continuations from pending-action resume state', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    let sawContinuation = false;
+    workerMessageHandler = (params) => {
+      const message = (params.message ?? {}) as {
+        metadata?: Record<string, unknown>;
+      };
+      const continuation = message.metadata?.[APPROVAL_OUTCOME_CONTINUATION_METADATA_KEY] as
+        | { type?: string; approvalId?: string; decision?: string; resultMessage?: string }
+        | undefined;
+      if (continuation?.approvalId === 'approval-rehydrate-1') {
+        sawContinuation = true;
+        expect(continuation).toMatchObject({
+          decision: 'approved',
+          resultMessage: 'Draft approved.',
+        });
+        return {
+          content: 'The draft continued from persisted approval state.',
+          metadata: {},
+        };
+      }
+      return {
+        content: 'Waiting for approval to create the draft.',
+        metadata: {
+          continueConversationAfterApproval: true,
+          ...approvalPendingActionMetadata([
+            {
+              id: 'approval-rehydrate-1',
+              toolName: 'outlook_draft',
+              argsPreview: '{"to":"alex@example.com"}',
+            },
+          ]),
+        },
+      };
+    };
+
+    const pendingActionStore = createMemoryPendingActionStore();
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        listApprovals: vi.fn(() => []),
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        pendingActionStore,
+        now: () => 1,
+      },
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-rehydrate',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        channel: 'web',
+        surfaceId: 'surface-1',
+        content: 'Draft an Outlook email to alex@example.com.',
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [],
+      toolContext: '',
+      runtimeNotices: [],
+      delegation: {
+        requestId: 'm-rehydrate',
+        executionId: 'exec-rehydrate',
+        rootExecutionId: 'root-rehydrate',
+        originChannel: 'web',
+        originSurfaceId: 'surface-1',
+        continuityKey: 'tester:web',
+      },
+    });
+
+    const pending = pendingActionStore.findActiveByApprovalId('approval-rehydrate-1');
+    expect(pending?.resume).toMatchObject({
+      kind: 'worker_approval',
+      payload: {
+        approvalIds: ['approval-rehydrate-1'],
+        requestId: 'm-rehydrate',
+        executionId: 'exec-rehydrate',
+        rootExecutionId: 'root-rehydrate',
+        originSurfaceId: 'surface-1',
+        continuityKey: 'tester:web',
+      },
+    });
+
+    const workerApprovalState = manager as unknown as {
+      workerSuspendedApprovalsBySession: Map<string, unknown>;
+      workerSuspendedApprovalToSession: Map<string, unknown>;
+    };
+    workerApprovalState.workerSuspendedApprovalsBySession.clear();
+    workerApprovalState.workerSuspendedApprovalToSession.clear();
+    if (pending) {
+      pendingActionStore.complete(pending.id, 2);
+    }
+    expect(pendingActionStore.findActiveByApprovalId('approval-rehydrate-1', 2)).toBeNull();
+
+    const resumed = await manager.continueAfterApproval(
+      'approval-rehydrate-1',
+      'approved',
+      'Draft approved.',
+      pending,
+    );
+
+    expect(resumed?.content).toBe('The draft continued from persisted approval state.');
+    expect(sawContinuation).toBe(true);
+
+    manager.shutdown();
+  });
+
   it('marks delegated workers as failed when the worker loop reports a non-terminal execution state', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
 

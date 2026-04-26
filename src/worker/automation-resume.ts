@@ -72,7 +72,7 @@ export function buildWorkerAutomationAuthoringResumeMessage(
   };
 }
 
-function serializeWorkerAutomationAuthoringResume(
+export function serializeWorkerAutomationAuthoringResume(
   resume: WorkerAutomationAuthoringResume,
 ): Record<string, unknown> {
   return {
@@ -88,7 +88,7 @@ function serializeWorkerAutomationAuthoringResume(
   };
 }
 
-function readWorkerAutomationAuthoringResume(value: unknown): WorkerAutomationAuthoringResume | null {
+export function readWorkerAutomationAuthoringResume(value: unknown): WorkerAutomationAuthoringResume | null {
   if (!isRecord(value)) return null;
   const originalUserContent = readNonEmptyString(value.originalUserContent);
   const userId = readNonEmptyString(value.userId);

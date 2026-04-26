@@ -171,6 +171,13 @@ Checkpoint after the brokered worker automation-resume cleanup:
 - The worker handles that resume metadata before intent classification and reruns automation authoring with `assumeAuthoring: true`, preserving the original user content and code context from the supervisor-provided resume payload.
 - Remaining approval/resume overlap after this slice: worker suspended approvals still own brokered-worker approval continuity until they are replaced by graph interrupt resume; direct-route and tool-loop resume payloads still need graph interrupt equivalents before deletion.
 
+Checkpoint after the brokered worker pending-action resume slice:
+
+- Brokered worker approval pending actions now carry a typed `worker_approval` resume payload with the worker/session identity, original request/delegation identity, approval ids, execution profile, orchestration role, and any worker automation-authoring resume payload.
+- `WorkerManager.continueAfterApproval` can reconstruct worker suspended-approval state from the pending action record the approval handler already resolved, even after the active pending-action row has been completed for the approved id.
+- The remaining in-memory worker suspended-approval map is now a live-worker cache rather than the only resume owner. The next debt-burn step is to replace this cache with graph interrupt ownership for worker approval pauses, including worker/process restart recovery instead of only live-worker continuation.
+- Remaining approval/resume overlap after this slice: direct-route and tool-loop resume payloads still need graph interrupt equivalents before deletion, and brokered worker approval resume still needs the graph controller to own worker restart/replay semantics.
+
 Exit criteria for this refinement phase:
 
 - There is one owner for each lifecycle decision: Intent Gateway for semantic classification, graph controller for execution, PendingActionStore for blocked work, ToolExecutor/Guardian for tool admission, continuity for context projection, and RunTimelineStore for operator event display.

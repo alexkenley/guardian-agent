@@ -151,6 +151,10 @@ import {
   readWorkerAutomationAuthoringResumeMetadata,
   type WorkerAutomationAuthoringResume,
 } from '../worker/automation-resume.js';
+import {
+  buildWorkerApprovalResumePayload,
+  readWorkerApprovalResumePayload,
+} from './worker-approval-resume.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -2301,8 +2305,11 @@ export class WorkerManager {
         };
       }
       const pendingApprovalRecord = this.recordDelegatedPendingApprovalAction({
+        worker,
         request: effectiveInput,
         result: normalizedResult,
+        target: delegatedTarget,
+        taskRunId: delegatedTaskRunId,
         intentDecision: effectiveIntentDecision ?? undefined,
       });
       if (lifecycle === 'blocked' && handoff.unresolvedBlockerKind === 'approval') {
@@ -3190,10 +3197,11 @@ export class WorkerManager {
     approvalId: string,
     decision: 'approved' | 'denied',
     resultMessage?: string,
+    pendingAction?: PendingActionRecord | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const normalizedId = approvalId.trim();
     if (!normalizedId) return null;
-    const workerContinuation = await this.continueWorkerAfterApproval(normalizedId, decision, resultMessage);
+    const workerContinuation = await this.continueWorkerAfterApproval(normalizedId, decision, resultMessage, pendingAction);
     if (workerContinuation) return workerContinuation;
     return null;
   }
@@ -3638,8 +3646,11 @@ export class WorkerManager {
   }
 
   private recordDelegatedPendingApprovalAction(input: {
+    worker: WorkerProcess;
     request: WorkerMessageRequest;
     result: { metadata?: Record<string, unknown> };
+    target: ResolvedDelegatedTargetMetadata;
+    taskRunId: string;
     intentDecision?: IntentGatewayDecision;
   }): PendingActionRecord | null {
     if (!this.observability.pendingActionStore) return null;
@@ -3649,6 +3660,19 @@ export class WorkerManager {
       || input.request.delegation?.originSurfaceId?.trim()
       || input.request.message.channel;
     const nowMs = this.observability.now?.() ?? Date.now();
+    const suspendedState = this.workerSuspendedApprovalsBySession.get(input.worker.workerSessionKey);
+    const resumeState = suspendedState
+      ? this.buildEnrichedWorkerSuspendedApprovalState({
+          state: {
+            ...suspendedState,
+            approvalIds: approvalMetadata.approvalIds,
+            expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+          },
+          request: input.request,
+          target: input.target,
+          taskRunId: input.taskRunId,
+        })
+      : null;
     return this.observability.pendingActionStore.replaceActive(
       {
         agentId: input.request.agentId,
@@ -3677,6 +3701,7 @@ export class WorkerManager {
           ...(input.intentDecision?.entities ? { entities: input.intentDecision.entities as Record<string, unknown> } : {}),
           originalUserContent: input.request.message.content,
         },
+        ...(resumeState ? { resume: buildWorkerApprovalResumePayload(resumeState) } : {}),
         ...(input.request.delegation?.executionId ? { executionId: input.request.delegation.executionId } : {}),
         ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
         ...(input.request.delegation?.codeSessionId ? { codeSessionId: input.request.delegation.codeSessionId } : {}),
@@ -3795,6 +3820,11 @@ export class WorkerManager {
     const approvalMetadata = readDelegatedPendingApprovalMetadata(metadata);
     if (!approvalMetadata) return null;
     const nowMs = this.observability.now?.() ?? Date.now();
+    const resumeState: WorkerSuspendedApprovalState = {
+      ...state,
+      approvalIds: approvalMetadata.approvalIds,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    };
     return this.observability.pendingActionStore.replaceActive(
       {
         agentId: state.agentId,
@@ -3814,6 +3844,7 @@ export class WorkerManager {
         intent: {
           originalUserContent: state.originalUserContent ?? '',
         },
+        resume: buildWorkerApprovalResumePayload(resumeState),
         expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
       },
       nowMs,
@@ -3933,6 +3964,22 @@ export class WorkerManager {
   }): void {
     const state = this.workerSuspendedApprovalsBySession.get(input.workerSessionKey);
     if (!state) return;
+    this.setWorkerSuspendedApprovals(this.buildEnrichedWorkerSuspendedApprovalState({
+      state,
+      request: input.request,
+      target: input.target,
+      taskRunId: input.taskRunId,
+      pendingActionId: input.pendingActionId,
+    }));
+  }
+
+  private buildEnrichedWorkerSuspendedApprovalState(input: {
+    state: WorkerSuspendedApprovalState;
+    request: WorkerMessageRequest;
+    target: ResolvedDelegatedTargetMetadata;
+    taskRunId: string;
+    pendingActionId?: string;
+  }): WorkerSuspendedApprovalState {
     const delegation = input.request.delegation;
     const requestId = delegation?.requestId?.trim() || input.request.message.id;
     const executionId = delegation?.executionId?.trim();
@@ -3947,8 +3994,8 @@ export class WorkerManager {
       : undefined;
     const agentName = input.target.agentName?.trim();
     const orchestration = cloneOrchestrationRoleDescriptor(input.target.orchestration);
-    this.setWorkerSuspendedApprovals({
-      ...state,
+    return {
+      ...input.state,
       requestId,
       messageId: input.request.message.id,
       ...(executionId ? { executionId } : {}),
@@ -3964,7 +4011,7 @@ export class WorkerManager {
       ...(agentName ? { agentName } : {}),
       ...(orchestration ? { orchestration } : {}),
       ...(input.request.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(input.request.executionProfile) } : {}),
-    });
+    };
   }
 
   private setWorkerSuspendedApprovals(state: WorkerSuspendedApprovalState): void {
@@ -3987,27 +4034,52 @@ export class WorkerManager {
   private getWorkerSuspendedApprovalState(
     approvalId: string,
     nowMs: number = Date.now(),
+    pendingAction?: PendingActionRecord | null,
   ): WorkerSuspendedApprovalState | null {
-    const workerSessionKey = this.workerSuspendedApprovalToSession.get(approvalId.trim());
-    if (!workerSessionKey) return null;
+    const normalizedApprovalId = approvalId.trim();
+    const workerSessionKey = this.workerSuspendedApprovalToSession.get(normalizedApprovalId);
+    if (!workerSessionKey) {
+      return this.readWorkerSuspendedApprovalStateFromPendingAction(normalizedApprovalId, nowMs, pendingAction);
+    }
     const state = this.workerSuspendedApprovalsBySession.get(workerSessionKey);
     if (!state) {
-      this.workerSuspendedApprovalToSession.delete(approvalId.trim());
-      return null;
+      this.workerSuspendedApprovalToSession.delete(normalizedApprovalId);
+      return this.readWorkerSuspendedApprovalStateFromPendingAction(normalizedApprovalId, nowMs, pendingAction);
     }
     if (state.expiresAt <= nowMs) {
       this.clearWorkerSuspendedApprovals(workerSessionKey);
-      return null;
+      return this.readWorkerSuspendedApprovalStateFromPendingAction(normalizedApprovalId, nowMs, pendingAction);
     }
     return state;
+  }
+
+  private readWorkerSuspendedApprovalStateFromPendingAction(
+    approvalId: string,
+    nowMs: number,
+    pendingAction?: PendingActionRecord | null,
+  ): WorkerSuspendedApprovalState | null {
+    const store = this.observability.pendingActionStore;
+    const candidate = pendingAction?.blocker.approvalIds?.includes(approvalId)
+      ? pendingAction
+      : typeof store?.findActiveByApprovalId === 'function'
+        ? store.findActiveByApprovalId(approvalId, nowMs)
+        : null;
+    const resume = readWorkerApprovalResumePayload(candidate?.resume);
+    if (!resume || !resume.approvalIds.includes(approvalId) || resume.expiresAt <= nowMs) {
+      return null;
+    }
+    this.setWorkerSuspendedApprovals(resume);
+    return resume;
   }
 
   private async continueWorkerAfterApproval(
     approvalId: string,
     decision: 'approved' | 'denied',
     resultMessage?: string,
+    pendingAction?: PendingActionRecord | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const state = this.getWorkerSuspendedApprovalState(approvalId);
+    const nowMs = this.observability.now?.() ?? Date.now();
+    const state = this.getWorkerSuspendedApprovalState(approvalId, nowMs, pendingAction);
     if (!state) return null;
 
     if (decision !== 'approved') {
