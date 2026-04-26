@@ -292,13 +292,14 @@ import {
   shouldUseStructuredPendingApprovalMessage,
 } from './runtime/pending-approval-copy.js';
 import {
-  buildLocalModelTooComplicatedMessage,
   getProviderLocalityFromName,
-  isLocalToolCallParseError,
   readResponseSourceMetadata,
-  shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
+import {
+  chatWithFallback as chatWithFallbackHelper,
+  chatWithRoutingMetadata as chatWithRoutingMetadataHelper,
+} from './runtime/chat-agent/provider-fallback.js';
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from './util/structured-json.js';
 import {
   buildDirectHandlerResponseSource,
@@ -940,32 +941,6 @@ type DirectIntentShadowCandidate =
     });
   }
 
-  private resolvePreferredProviderOrder(
-    fallbackProviderOrder?: string[],
-  ): string[] | undefined {
-    if (!Array.isArray(fallbackProviderOrder) || fallbackProviderOrder.length <= 0) {
-      return undefined;
-    }
-    const normalized = [...new Set(
-      fallbackProviderOrder
-        .map((providerName) => providerName.trim())
-        .filter((providerName) => providerName.length > 0),
-    )];
-    return normalized.length > 0 ? normalized : undefined;
-  }
-
-  private shouldStartChatWithPreferredProvider(
-    primaryProviderName: string | undefined,
-    preferredProviderOrder: string[] | undefined,
-  ): boolean {
-    if (!this.fallbackChain || !preferredProviderOrder || preferredProviderOrder.length <= 0) {
-      return false;
-    }
-    const preferredPrimary = preferredProviderOrder[0]?.trim() || '';
-    if (!preferredPrimary) return false;
-    return preferredPrimary !== (primaryProviderName?.trim() || '');
-  }
-
   private shouldHandleDirectAssistantInline(input: {
     gateway: IntentGatewayRecord | null | undefined;
     selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
@@ -999,26 +974,15 @@ type DirectIntentShadowCandidate =
     options?: import('./llm/types.js').ChatOptions,
     fallbackProviderOrder?: string[],
   ): Promise<import('./llm/types.js').ChatResponse> {
-    const preferredOrder = this.resolvePreferredProviderOrder(fallbackProviderOrder);
-    const primaryProviderName = ctx.llm?.name?.trim();
-    if (this.shouldStartChatWithPreferredProvider(primaryProviderName, preferredOrder)) {
-      return (await this.fallbackChain!.chatWithProviderOrder(preferredOrder!, messages, options)).response;
-    }
-    if (!this.fallbackChain) {
-      return ctx.llm!.chat(messages, options);
-    }
-    try {
-      return await ctx.llm!.chat(messages, options);
-    } catch (primaryError) {
-      log.warn(
-        { agent: this.id, error: primaryError instanceof Error ? primaryError.message : String(primaryError) },
-        'Primary LLM failed, trying fallback chain',
-      );
-      const result = preferredOrder
-        ? await this.fallbackChain.chatWithFallbackAfterProvider(ctx.llm?.name ?? 'unknown', preferredOrder, messages, options)
-        : await this.fallbackChain.chatWithFallback(messages, options);
-      return result.response;
-    }
+    return chatWithFallbackHelper({
+      agentId: this.id,
+      ctx,
+      messages,
+      options,
+      fallbackProviderOrder,
+      fallbackChain: this.fallbackChain,
+      log,
+    });
   }
 
   private async chatWithRoutingMetadata(
@@ -1034,98 +998,15 @@ type DirectIntentShadowCandidate =
     notice?: string;
     durationMs: number;
   }> {
-    const primaryProviderName = ctx.llm?.name ?? 'unknown';
-    const primaryProviderLocality = getProviderLocalityFromName(primaryProviderName);
-    const preferredOrder = this.resolvePreferredProviderOrder(fallbackProviderOrder);
-
-    if (this.shouldStartChatWithPreferredProvider(primaryProviderName, preferredOrder)) {
-      const startedAt = Date.now();
-      const result = await this.fallbackChain!.chatWithProviderOrder(preferredOrder!, messages, options);
-      return {
-        response: result.response,
-        providerName: result.providerName,
-        providerLocality: getProviderLocalityFromName(result.providerName),
-        usedFallback: result.usedFallback,
-        durationMs: Math.max(0, Date.now() - startedAt),
-      };
-    }
-
-    if (!this.fallbackChain) {
-      try {
-        const startedAt = Date.now();
-        const response = await ctx.llm!.chat(messages, options);
-        return {
-          response,
-          providerName: primaryProviderName,
-          providerLocality: primaryProviderLocality,
-          usedFallback: false,
-          durationMs: Math.max(0, Date.now() - startedAt),
-        };
-      } catch (primaryError) {
-        if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
-          if (shouldBypassLocalModelComplexityGuard()) {
-            throw primaryError;
-          }
-          throw new Error(buildLocalModelTooComplicatedMessage());
-        }
-        throw primaryError;
-      }
-    }
-
-    try {
-      const startedAt = Date.now();
-      const response = await ctx.llm!.chat(messages, options);
-      return {
-        response,
-        providerName: primaryProviderName,
-        providerLocality: primaryProviderLocality,
-        usedFallback: false,
-        durationMs: Math.max(0, Date.now() - startedAt),
-      };
-    } catch (primaryError) {
-      log.warn(
-        { agent: this.id, error: primaryError instanceof Error ? primaryError.message : String(primaryError) },
-        'Primary LLM failed, trying fallback chain',
-      );
-
-      if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
-        if (shouldBypassLocalModelComplexityGuard()) {
-          throw primaryError;
-        }
-        try {
-          const startedAt = Date.now();
-          const result = preferredOrder
-            ? await this.fallbackChain.chatWithFallbackAfterProvider(primaryProviderName, preferredOrder, messages, options)
-            : await this.fallbackChain.chatWithFallbackAfterPrimary(messages, options);
-          return {
-            response: result.response,
-            providerName: result.providerName,
-            providerLocality: getProviderLocalityFromName(result.providerName),
-            usedFallback: true,
-            notice: 'Retried with an alternate model after the local model failed to format a tool call.',
-            durationMs: Math.max(0, Date.now() - startedAt),
-          };
-        } catch (fallbackError) {
-          log.warn(
-            { agent: this.id, error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError) },
-            'No alternate model available after local tool-call parsing failure',
-          );
-          throw new Error(buildLocalModelTooComplicatedMessage());
-        }
-      }
-
-      const startedAt = Date.now();
-      const result = preferredOrder
-        ? await this.fallbackChain.chatWithFallbackAfterProvider(primaryProviderName, preferredOrder, messages, options)
-        : await this.fallbackChain.chatWithFallback(messages, options);
-      return {
-        response: result.response,
-        providerName: result.providerName,
-        providerLocality: getProviderLocalityFromName(result.providerName),
-        usedFallback: result.usedFallback || result.providerName !== primaryProviderName,
-        durationMs: Math.max(0, Date.now() - startedAt),
-      };
-    }
+    return chatWithRoutingMetadataHelper({
+      agentId: this.id,
+      ctx,
+      messages,
+      options,
+      fallbackProviderOrder,
+      fallbackChain: this.fallbackChain,
+      log,
+    });
   }
 
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
