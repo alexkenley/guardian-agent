@@ -14,6 +14,7 @@ import {
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
   shouldAdoptDelegatedTaskContract,
+  shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
 } from './delegated-worker-retry.js';
 
@@ -80,6 +81,93 @@ describe('delegated worker retry graph policy', () => {
       failure!,
       'code-session-1',
     )).toContain('Retrying Workspace Explorer with openrouter / moonshotai/kimi-k2.6 in code session code-session-1 because required steps remain unsatisfied (answer)');
+  });
+
+  it('keeps answer-only delegated retries on the managed-cloud profile when the plan omitted an answer step', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          { stepId: 'search_web', kind: 'search', summary: 'Search the web.' },
+          { stepId: 'search_repo', kind: 'search', summary: 'Search the repo.' },
+        ],
+      }),
+      stepReceipts: [
+        {
+          stepId: 'search_web',
+          status: 'satisfied',
+          evidenceReceiptIds: ['web'],
+          summary: 'Searched the web.',
+          startedAt: 1,
+          endedAt: 2,
+        },
+        {
+          stepId: 'search_repo',
+          status: 'satisfied',
+          evidenceReceiptIds: ['repo'],
+          summary: 'Searched the repo.',
+          startedAt: 3,
+          endedAt: 4,
+        },
+      ],
+      evidenceReceipts: [
+        {
+          receiptId: 'web',
+          sourceType: 'tool_call',
+          toolName: 'browser_read',
+          status: 'succeeded',
+          refs: ['https://example.com'],
+          summary: 'Read example.com.',
+          startedAt: 1,
+          endedAt: 2,
+        },
+        {
+          receiptId: 'repo',
+          sourceType: 'tool_call',
+          toolName: 'fs_search',
+          status: 'succeeded',
+          refs: ['src/tools/builtin/browser-tools.ts'],
+          summary: 'Found browser tool implementation.',
+          startedAt: 3,
+          endedAt: 4,
+        },
+      ],
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Delegated worker returned an in-progress status message instead of a terminal user-facing answer.'],
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      requiredNextAction: 'Complete the delegated task and return the final answer, not a progress promise.',
+    }, envelope);
+
+    expect(failure?.unsatisfiedSteps).toEqual([]);
+    expect(isDelegatedAnswerSynthesisRetry(failure!)).toBe(true);
+    expect(shouldRetryDelegatedAnswerSynthesisOnSameProfile(failure!, executionProfile())).toBe(true);
+  });
+
+  it('uses a same-profile corrective pass for managed-cloud answer-only failures before stronger escalation', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          { stepId: 'answer', kind: 'answer', summary: 'Return the final answer.' },
+        ],
+      }),
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Delegated worker returned an in-progress status message instead of a terminal user-facing answer.'],
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['answer'],
+      requiredNextAction: 'Complete the delegated task and return the final answer, not a progress promise.',
+    }, envelope);
+
+    expect(isDelegatedAnswerSynthesisRetry(failure!)).toBe(false);
+    expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, executionProfile())).toBe(true);
+    expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, {
+      ...executionProfile(),
+      providerTier: 'frontier',
+    })).toBe(false);
   });
 
   it('owns retry gateway repair and task-contract adoption outside WorkerManager', () => {

@@ -1158,6 +1158,24 @@ describe('BrokeredWorkerSession automation control', () => {
 
     expect(resumed.content).toContain('src/config/types.ts');
     expect(resumed.content).toContain('src/runtime/message-router.ts');
+    const delegatedResult = resumed.metadata?.delegatedResult as {
+      runStatus?: string;
+      taskContract?: { kind?: string; route?: string; operation?: string };
+      evidenceReceipts?: Array<{ receiptId?: string; toolName?: string; status?: string }>;
+    } | undefined;
+    expect(delegatedResult?.runStatus).toBe('completed');
+    expect(delegatedResult?.taskContract).toMatchObject({
+      kind: 'repo_inspection',
+      route: 'coding_task',
+      operation: 'search',
+    });
+    expect(delegatedResult?.evidenceReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        receiptId: 'approval:approval-search-1:receipt',
+        toolName: 'fs_search',
+        status: 'succeeded',
+      }),
+    ]));
     expect(getApprovalResult).toHaveBeenCalledWith('approval-search-1');
     expect(
       llmChat.mock.calls.filter(([, options]) => options?.tools?.[0]?.name === 'route_intent'),

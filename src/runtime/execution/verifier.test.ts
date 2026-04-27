@@ -260,6 +260,74 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('adds a required answer step when repo-grounded gateway plans omit synthesis', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web and repo evidence, then return a comparison.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web evidence.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search the repo evidence.', expectedToolCategories: ['fs_search'], required: true },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.kind).toBe('repo_inspection');
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['search', 'search', 'answer']);
+    expect(taskContract.plan.steps[2]).toMatchObject({
+      kind: 'answer',
+      dependsOn: ['step_1', 'step_2'],
+    });
+
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-web',
+        sourceType: 'tool_call',
+        toolName: 'web_search',
+        status: 'succeeded',
+        refs: ['https://example.com/'],
+        summary: 'Example Domain.',
+        startedAt: 1,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'receipt-repo',
+        sourceType: 'tool_call',
+        toolName: 'fs_search',
+        status: 'succeeded',
+        refs: ['src/tools/builtin/browser-tools.ts'],
+        summary: 'Found browser tool implementation candidates.',
+        startedAt: 3,
+        endedAt: 4,
+      },
+    ];
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        evidenceReceipts,
+        operatorSummary: 'I have the web search evidence already. Now let me narrow the repo search.',
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
   it('keeps simple no-tool security refusals on an answer-first contract', () => {
     const taskContract = buildSimpleSecurityTaskContract();
 

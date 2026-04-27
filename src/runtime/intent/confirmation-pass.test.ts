@@ -203,6 +203,73 @@ describe('confirmIntentGatewayDecisionIfNeeded', () => {
     expect(result.decision.plannedSteps?.[0]?.expectedToolCategories).toEqual(['automation_list']);
   });
 
+  it('rejects confirmation routes outside the candidate route set', async () => {
+    const record = buildAutomationCatalogRecord();
+    record.decision.summary = 'List saved automations.';
+    record.decision.plannedSteps = [
+      {
+        kind: 'read',
+        summary: 'List saved automations.',
+        expectedToolCategories: ['automation_list'],
+        required: true,
+      },
+      {
+        kind: 'answer',
+        summary: 'Answer with automation names and enabled state.',
+        required: true,
+        dependsOn: ['step_1'],
+      },
+    ];
+
+    const chat = vi.fn(async (messages) => {
+      const prompt = messages.map((message) => message.content).join('\n');
+      expect(prompt).toContain('Candidate routes: automation_control');
+      return {
+        content: JSON.stringify({
+          route: 'automation_output_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Analyze saved automation output.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          executionClass: 'tool_orchestration',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          simpleVsComplex: 'simple',
+          planned_steps: [
+            {
+              kind: 'read',
+              summary: 'Read stored automation output.',
+              expectedToolCategories: ['automation_output_read'],
+              required: true,
+            },
+            {
+              kind: 'answer',
+              summary: 'Answer from stored automation output.',
+              required: true,
+              dependsOn: ['step_1'],
+            },
+          ],
+        }),
+        model: 'test-confirmation',
+        finishReason: 'stop',
+      } satisfies ChatResponse;
+    });
+
+    const result = await confirmIntentGatewayDecisionIfNeeded({
+      content: 'List my saved automations. Keep the answer short and include only names and whether each is enabled.',
+      userId: 'owner',
+      channel: 'web',
+    }, record, chat);
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(result).toBe(record);
+    expect(result.decision.route).toBe('automation_control');
+  });
+
   it('confirms generic general-assistant tool plans so concrete evidence steps can be supplied', async () => {
     const record = buildAutomationCatalogRecord();
     record.rawStructuredDecision = {

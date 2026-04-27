@@ -76,8 +76,9 @@ export function buildPlannedTask(
     : [];
 
   if (gatewaySteps.length > 0) {
+    const answerBackedSteps = ensureRequiredAnswerStep(gatewaySteps, contract);
     const steps = ensureExactFileReferenceReadStep(
-      applyContractAnswerSummary(gatewaySteps, contract.summary, contract.answerConstraints),
+      applyContractAnswerSummary(answerBackedSteps, contract.summary, contract.answerConstraints),
       contract,
     );
     return {
@@ -252,6 +253,46 @@ function ensureExactFileReferenceReadStep(
     nextSteps.push(exactFileReadStep);
   }
   return renumberPlannedSteps(nextSteps);
+}
+
+function ensureRequiredAnswerStep(
+  steps: PlannedStep[],
+  contract: {
+    kind: DelegatedTaskContractKind;
+    summary?: string;
+    answerConstraints?: AnswerConstraints;
+  },
+): PlannedStep[] {
+  if (steps.some((step) => step.kind === 'answer')) {
+    return steps;
+  }
+  if (!shouldRequireFinalAnswerStep(contract.kind)) {
+    return steps;
+  }
+  const requiredEvidenceStepIds = steps
+    .filter((step) => step.required !== false)
+    .map((step) => step.stepId);
+  const answerSummary = enrichAnswerSummaryForConstraints(
+    contract.summary?.trim() || 'Answer with grounded findings from the collected evidence.',
+    contract.answerConstraints,
+  );
+  return renumberPlannedSteps([
+    ...steps,
+    {
+      stepId: '__answer__',
+      kind: 'answer',
+      summary: answerSummary,
+      required: true,
+      ...(requiredEvidenceStepIds.length > 0 ? { dependsOn: requiredEvidenceStepIds } : {}),
+    },
+  ]);
+}
+
+function shouldRequireFinalAnswerStep(kind: DelegatedTaskContractKind): boolean {
+  return kind === 'repo_inspection'
+    || kind === 'security_analysis'
+    || kind === 'general_answer'
+    || kind === 'tool_execution';
 }
 
 function applyContractAnswerSummary(

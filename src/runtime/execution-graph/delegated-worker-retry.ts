@@ -111,10 +111,13 @@ export function isDelegatedAnswerSynthesisRetry(
   const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
   const hasOnlyAnswerEvidenceMissing = missingEvidenceKinds.length === 0
     || missingEvidenceKinds.every((kind) => kind === 'answer');
+  const hasExplicitAnswerStepRemaining = insufficiency.unsatisfiedSteps.length > 0
+    && insufficiency.unsatisfiedSteps.every((step) => !step.kind || step.kind === 'answer');
+  const hasImplicitAnswerOnlyGap = insufficiency.unsatisfiedSteps.length === 0
+    && missingEvidenceKinds.includes('answer');
   return hasOnlyAnswerEvidenceMissing
     && insufficiency.satisfiedSteps.length > 0
-    && insufficiency.unsatisfiedSteps.length > 0
-    && insufficiency.unsatisfiedSteps.every((step) => !step.kind || step.kind === 'answer');
+    && (hasExplicitAnswerStepRemaining || hasImplicitAnswerOnlyGap);
 }
 
 export function shouldRetryDelegatedAnswerSynthesisOnSameProfile(
@@ -122,6 +125,25 @@ export function shouldRetryDelegatedAnswerSynthesisOnSameProfile(
   currentProfile: SelectedExecutionProfile | undefined,
 ): boolean {
   return !!currentProfile && isDelegatedAnswerSynthesisRetry(insufficiency);
+}
+
+export function shouldRetryDelegatedCorrectivePassOnSameProfile(
+  insufficiency: DelegatedResultSufficiencyFailure,
+  currentProfile: SelectedExecutionProfile | undefined,
+): boolean {
+  if (!currentProfile) return false;
+  if (isDelegatedAnswerSynthesisRetry(insufficiency)) return true;
+  if (currentProfile.providerTier !== 'managed_cloud') return false;
+  const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
+  const onlyAnswerEvidenceMissing = missingEvidenceKinds.length === 0
+    || missingEvidenceKinds.every((kind) => kind === 'answer');
+  const onlyAnswerStepsUnsatisfied = insufficiency.unsatisfiedSteps.length === 0
+    ? missingEvidenceKinds.includes('answer')
+    : insufficiency.unsatisfiedSteps.length > 0
+    && insufficiency.unsatisfiedSteps.every((step) => !step.kind || step.kind === 'answer');
+  return onlyAnswerEvidenceMissing
+    && onlyAnswerStepsUnsatisfied
+    && insufficiency.decision.decision === 'insufficient';
 }
 
 export function buildDelegatedRetryDetail(

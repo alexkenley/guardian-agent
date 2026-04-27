@@ -117,7 +117,7 @@ export async function confirmIntentGatewayDecisionIfNeeded(
         parsed = retryParsed;
       }
     }
-    if (!parsed.available || !shouldAdoptConfirmationDecision(record, parsed.decision, priorStructuredDecision)) {
+    if (!parsed.available || !shouldAdoptConfirmationDecision(record, parsed.decision, priorStructuredDecision, confirmation)) {
       return record;
     }
     const rawResponsePreview = buildRawResponsePreview(response);
@@ -374,7 +374,11 @@ function shouldAdoptConfirmationDecision(
   previousRecord: IntentGatewayRecord,
   next: IntentGatewayDecision,
   priorStructuredDecision: Record<string, unknown> | null,
+  confirmation: { candidateRoutes: ConfirmationCandidateRoute[] },
 ): boolean {
+  if (!confirmation.candidateRoutes.includes(next.route as ConfirmationCandidateRoute)) {
+    return false;
+  }
   if (priorStructuredDecision && doesPriorStructuredDecisionDisagree(priorStructuredDecision, next)) {
     return true;
   }

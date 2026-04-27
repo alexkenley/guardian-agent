@@ -84,6 +84,7 @@ import {
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
   shouldAdoptDelegatedTaskContract,
+  shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
   type DelegatedResultSufficiencyFailure,
 } from '../runtime/execution-graph/delegated-worker-retry.js';
@@ -2314,6 +2315,9 @@ export class WorkerManager {
           : null;
       if (insufficiency) {
         const retryProfile = shouldRetryDelegatedAnswerSynthesisOnSameProfile(
+          insufficiency,
+          effectiveExecutionProfile,
+        ) || shouldRetryDelegatedCorrectivePassOnSameProfile(
           insufficiency,
           effectiveExecutionProfile,
         )

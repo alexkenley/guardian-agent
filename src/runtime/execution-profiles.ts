@@ -79,6 +79,20 @@ const READ_LIKE_OPERATIONS = new Set<IntentGatewayOperation>([
   'read',
   'search',
 ]);
+const READ_ONLY_EVIDENCE_STEP_CATEGORIES = new Set([
+  'read',
+  'search',
+  'fs_read',
+  'fs_list',
+  'fs_search',
+  'code_symbol_search',
+  'web_search',
+  'web_fetch',
+  'browser_read',
+  'browser_links',
+  'browser_extract',
+  'browser_state',
+]);
 
 function normalizeModelSelectionPolicy(
   config: GuardianAgentConfig,
@@ -111,6 +125,37 @@ function isExecutionProfileSelectionSource(value: unknown): value is ExecutionPr
 
 function isReadLikeOperation(value: IntentGatewayOperation | undefined): boolean {
   return value ? READ_LIKE_OPERATIONS.has(value) : false;
+}
+
+function hasStructuredReadOnlyEvidencePlan(decision: IntentGatewayDecision): boolean {
+  const requiredEvidenceSteps = (decision.plannedSteps ?? []).filter((step) => (
+    step.required !== false && step.kind !== 'answer'
+  ));
+  if (requiredEvidenceSteps.length === 0 || hasRequiredWritePlannedStep(decision)) {
+    return false;
+  }
+  return requiredEvidenceSteps.every((step) => {
+    const expectedCategories = step.expectedToolCategories ?? [];
+    const categoriesAreReadOnly = expectedCategories.length === 0
+      || expectedCategories.every((category) => READ_ONLY_EVIDENCE_STEP_CATEGORIES.has(category.trim()));
+    return categoriesAreReadOnly && (step.kind === 'read' || step.kind === 'search');
+  });
+}
+
+function deriveDelegatedReadOperation(base: IntentGatewayDecision): IntentGatewayOperation {
+  if (isReadLikeOperation(base.operation)) {
+    return base.operation;
+  }
+  const requiredEvidenceSteps = (base.plannedSteps ?? []).filter((step) => (
+    step.required !== false && step.kind !== 'answer'
+  ));
+  if (requiredEvidenceSteps.some((step) => step.kind === 'search')) {
+    return 'search';
+  }
+  if (requiredEvidenceSteps.some((step) => step.kind === 'read')) {
+    return 'read';
+  }
+  return 'inspect';
 }
 
 export function providerMatchesTier(
@@ -705,8 +750,12 @@ function deriveDelegatedExecutionDecision(input: {
 
   const descriptorLabel = descriptor.label?.trim() || descriptor.role;
   const lenses = new Set(descriptor.lenses ?? []);
-  const readOperation = isReadLikeOperation(base.operation) ? base.operation : 'inspect';
+  const readOperation = deriveDelegatedReadOperation(base);
   const mutateOperation = lenses.has('provider-admin') ? 'update' : 'run';
+  const codingWorkspaceOperation = descriptor.role === 'implementer'
+    && !hasStructuredReadOnlyEvidencePlan(base)
+    ? mutateOperation
+    : readOperation;
   const preferredDirectTier = base.preferredTier
     ?? input.parentProfile?.requestedTier
     ?? 'local';
@@ -768,7 +817,7 @@ function deriveDelegatedExecutionDecision(input: {
       route: base.route === 'filesystem_task' || base.route === 'coding_session_control'
         ? base.route
         : 'coding_task',
-      operation: descriptor.role === 'implementer' ? mutateOperation : readOperation,
+      operation: codingWorkspaceOperation,
       executionClass: 'repo_grounded',
       preferredTier: 'external',
       requiresRepoGrounding: true,

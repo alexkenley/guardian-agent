@@ -1174,22 +1174,6 @@ function buildApprovalContinuationToolEvent(input: {
   };
 }
 
-function buildReceiptStepIdsFromEnvelope(
-  envelope: DelegatedResultEnvelope | undefined,
-): Map<string, string> {
-  const evidenceById = new Map((envelope?.evidenceReceipts ?? []).map((receipt) => [receipt.receiptId, receipt]));
-  const ids = new Map<string, string>();
-  for (const stepReceipt of envelope?.stepReceipts ?? []) {
-    for (const receiptId of stepReceipt.evidenceReceiptIds) {
-      const receipt = evidenceById.get(receiptId);
-      if (receipt?.sourceType === 'tool_call') {
-        ids.set(receiptId, stepReceipt.stepId);
-      }
-    }
-  }
-  return ids;
-}
-
 function removeFallbackAnswerReceipts(receipts: EvidenceReceipt[]): EvidenceReceipt[] {
   return receipts.filter((receipt) => !(
     receipt.sourceType === 'model_answer'
@@ -1197,14 +1181,35 @@ function removeFallbackAnswerReceipts(receipts: EvidenceReceipt[]): EvidenceRece
   ));
 }
 
+function removeModelAnswerReceipts(receipts: EvidenceReceipt[]): EvidenceReceipt[] {
+  return receipts.filter((receipt) => receipt.sourceType !== 'model_answer');
+}
+
+function uniqueReceipts(receipts: EvidenceReceipt[]): EvidenceReceipt[] {
+  const seen = new Set<string>();
+  const next: EvidenceReceipt[] = [];
+  for (const receipt of receipts) {
+    if (seen.has(receipt.receiptId)) continue;
+    seen.add(receipt.receiptId);
+    next.push(receipt);
+  }
+  return next;
+}
+
 function buildApprovalContinuationReceiptStepIds(input: {
   taskContract: DelegatedTaskContract;
   sourceEnvelope?: DelegatedResultEnvelope;
   approvedReceipts: EvidenceReceipt[];
 }): Map<string, string> {
-  const receiptStepIds = buildReceiptStepIdsFromEnvelope(input.sourceEnvelope);
-  const matchedStepIds = new Set(receiptStepIds.values());
-  for (const receipt of input.approvedReceipts) {
+  const receiptStepIds = new Map<string, string>();
+  const matchedStepIds = new Set<string>();
+  const receipts = uniqueReceipts([
+    ...input.approvedReceipts,
+    ...(input.sourceEnvelope?.evidenceReceipts ?? []),
+  ])
+    .filter((receipt) => receipt.sourceType === 'tool_call')
+    .sort((left, right) => left.startedAt - right.startedAt);
+  for (const receipt of receipts) {
     if (!receipt.toolName) continue;
     const stepId = matchPlannedStepForTool({
       toolName: receipt.toolName,
@@ -1218,6 +1223,13 @@ function buildApprovalContinuationReceiptStepIds(input: {
     }
   }
   return receiptStepIds;
+}
+
+function readResponseSourceMetadata(
+  metadata: Record<string, unknown> | undefined,
+): ResponseSourceMetadata | undefined {
+  const source = metadata?.responseSource;
+  return isRecord(source) ? source as unknown as ResponseSourceMetadata : undefined;
 }
 
 function buildApprovalContinuationSynthesisMessages(input: {
@@ -2795,6 +2807,7 @@ export class BrokeredWorkerSession {
     this.suspendedSession = null;
     this.pendingApprovals = null;
 
+    const originalIntentDecision = readPreRoutedIntentGatewayMetadata(suspended.originalMessage.metadata)?.decision;
     const resumed = await this.executeLoop(
       suspended.originalMessage,
       resumedMessages,
@@ -2804,8 +2817,10 @@ export class BrokeredWorkerSession {
         ...params,
         message: suspended.originalMessage,
       },
+      originalIntentDecision,
+      suspended.taskContract,
     );
-    const synthesized = await this.trySynthesizeApprovalContinuationFallback({
+    const reconciled = await this.tryBuildApprovalContinuationResponse({
       suspended,
       resumed,
       resumedMessages,
@@ -2813,10 +2828,10 @@ export class BrokeredWorkerSession {
       approvedEvents,
       chatFn,
     });
-    return synthesized ?? resumed;
+    return reconciled ?? resumed;
   }
 
-  private async trySynthesizeApprovalContinuationFallback(input: {
+  private async tryBuildApprovalContinuationResponse(input: {
     suspended: SuspendedToolLoopSession;
     resumed: { content: string; metadata?: Record<string, unknown> };
     resumedMessages: ChatMessage[];
@@ -2824,41 +2839,57 @@ export class BrokeredWorkerSession {
     approvedEvents: ExecutionEvent[];
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
   }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!shouldSynthesizeApprovalContinuationFallback(input.resumed)) {
-      return null;
-    }
     const sourceEnvelope = readDelegatedResultEnvelope(input.resumed.metadata);
+    const taskContract = input.suspended.taskContract
+      ?? sourceEnvelope?.taskContract
+      ?? buildDelegatedTaskContract(readPreRoutedIntentGatewayMetadata(input.suspended.originalMessage.metadata)?.decision);
     const usefulReceiptCount = input.approvedReceipts.filter((receipt) => receipt.status === 'succeeded').length
       + (sourceEnvelope?.evidenceReceipts.filter((receipt) => (
         receipt.status === 'succeeded'
         && !(receipt.sourceType === 'model_answer' && isEmptyResponseFallbackContent(receipt.summary))
       )).length ?? 0);
-    if (usefulReceiptCount <= 0) {
+    if (!input.suspended.taskContract && !sourceEnvelope && usefulReceiptCount <= 0) {
       return null;
     }
 
-    const response = await input.chatFn(
-      buildApprovalContinuationSynthesisMessages({
-        originalMessage: input.suspended.originalMessage,
-        resumedMessages: input.resumedMessages,
-        approvedReceipts: input.approvedReceipts,
-        sourceEnvelope,
-      }),
-      {
-        tools: [],
-        maxTokens: 2_000,
-        temperature: 0,
-      },
-    );
-    const finalAnswer = response.content.trim();
-    if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
+    let finalAnswer = input.resumed.content.trim();
+    let responseSource = readResponseSourceMetadata(input.resumed.metadata)
+      ?? buildExecutionProfileResponseSource(input.suspended.executionProfile);
+    let synthesisMetadata: Record<string, unknown> | undefined;
+    if (shouldSynthesizeApprovalContinuationFallback(input.resumed)) {
+      if (usefulReceiptCount <= 0) {
+        return null;
+      }
+      const response = await input.chatFn(
+        buildApprovalContinuationSynthesisMessages({
+          originalMessage: input.suspended.originalMessage,
+          resumedMessages: input.resumedMessages,
+          approvedReceipts: input.approvedReceipts,
+          sourceEnvelope,
+        }),
+        {
+          tools: [],
+          maxTokens: 2_000,
+          temperature: 0,
+        },
+      );
+      finalAnswer = response.content.trim();
+      if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
+        return null;
+      }
+      responseSource = buildChatResponseSource(response as BrokeredChatResponse, input.suspended.executionProfile, {
+        usedFallback: false,
+      });
+      synthesisMetadata = {
+        available: true,
+        reason: 'empty_response_after_approval',
+        approvedReceiptCount: input.approvedReceipts.length,
+      };
+    } else if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
       return null;
     }
 
-    const taskContract = input.suspended.taskContract
-      ?? sourceEnvelope?.taskContract
-      ?? buildDelegatedTaskContract(readPreRoutedIntentGatewayMetadata(input.suspended.originalMessage.metadata)?.decision);
-    const sourceReceipts = removeFallbackAnswerReceipts(sourceEnvelope?.evidenceReceipts ?? []);
+    const sourceReceipts = removeModelAnswerReceipts(removeFallbackAnswerReceipts(sourceEnvelope?.evidenceReceipts ?? []));
     const approvedReceiptIds = new Set(input.approvedReceipts.map((receipt) => receipt.receiptId));
     const receipts = [
       ...sourceReceipts.filter((receipt) => !approvedReceiptIds.has(receipt.receiptId)),
@@ -2868,9 +2899,6 @@ export class BrokeredWorkerSession {
       taskContract,
       sourceEnvelope,
       approvedReceipts: input.approvedReceipts,
-    });
-    const responseSource = buildChatResponseSource(response as BrokeredChatResponse, input.suspended.executionProfile, {
-      usedFallback: false,
     });
     const envelope = buildDelegatedResultEnvelope({
       taskContract,
@@ -2891,11 +2919,7 @@ export class BrokeredWorkerSession {
       metadata: {
         ...(input.resumed.metadata ?? {}),
         ...buildDelegatedExecutionMetadata(envelope),
-        approvalContinuationSynthesis: {
-          available: true,
-          reason: 'empty_response_after_approval',
-          approvedReceiptCount: input.approvedReceipts.length,
-        },
+        ...(synthesisMetadata ? { approvalContinuationSynthesis: synthesisMetadata } : {}),
         ...(responseSource ? { responseSource } : {}),
       },
     };
@@ -3184,8 +3208,9 @@ export class BrokeredWorkerSession {
     toolExecutor: BrokeredToolExecutor,
     params: WorkerMessageHandleParams,
     intentDecision?: IntentGatewayDecision,
+    taskContractOverride?: DelegatedTaskContract,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
-    const taskContract = buildDelegatedTaskContract(intentDecision);
+    const taskContract = taskContractOverride ?? buildDelegatedTaskContract(intentDecision);
     const pendingTools: SuspendedToolCall[] = [];
     const delegatedEvents: ExecutionEvent[] = [];
     const evidenceReceipts = new Map<string, EvidenceReceipt>();

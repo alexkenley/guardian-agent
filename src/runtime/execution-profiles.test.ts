@@ -692,6 +692,52 @@ describe('execution profiles', () => {
     });
   });
 
+  it('keeps delegated implementer workloads read-only when the structured plan only requires search/read evidence', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'general_assistant',
+        operation: 'run',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'chat_synthesis',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search the web for the page title.',
+            expectedToolCategories: ['web_search', 'web_fetch'],
+            required: true,
+          },
+          {
+            kind: 'search',
+            summary: 'Search the repo for the relevant implementation files.',
+            expectedToolCategories: ['fs_search', 'code_symbol_search'],
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'coding_task',
+      operation: 'search',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'search']);
+  });
+
   it('derives coding-workspace intent when pre-routed gateway metadata is absent', () => {
     const delegatedDecision = resolveDelegatedExecutionDecision({
       gatewayDecision: null,
