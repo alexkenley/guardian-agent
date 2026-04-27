@@ -77,6 +77,13 @@ describe('memory intent helpers', () => {
       labelSources: true,
     });
 
+    expect(parseDirectMemoryReadRequest('Search memory for UI-MEM-91827 and reply with only the marker if you find it.')).toEqual({
+      mode: 'search',
+      query: 'UI-MEM-91827',
+      separateScopes: false,
+      labelSources: false,
+    });
+
     expect(parseDirectMemoryReadRequest(`Recall global memory and code-session memory separately
 for global-memory-marker-maple-58
 and code-session-marker-onyx-91.`)).toEqual({

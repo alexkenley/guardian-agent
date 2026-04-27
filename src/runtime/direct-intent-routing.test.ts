@@ -176,6 +176,15 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('keeps unknown-operation memory routes on memory handlers so direct parsing can disambiguate read vs write', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'memory_task', operation: 'unknown' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['memory_read', 'memory_write']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('defers automation catalog plus answer plans to the worker synthesis path', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({

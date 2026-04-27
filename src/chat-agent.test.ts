@@ -2381,6 +2381,141 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
+  it('passes explicit direct continuation state to direct handlers even when fresh-turn chat context is isolated', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-direct-continuation-state.test.sqlite',
+      retentionDays: 30,
+    });
+    const automations = Array.from({ length: 38 }, (_, index) => {
+      const ordinal = index + 1;
+      return {
+        id: `automation-${ordinal}`,
+        name: `Automation ${ordinal}`,
+        kind: 'assistant_task',
+        enabled: true,
+        task: {
+          id: `automation-${ordinal}`,
+          name: `Automation ${ordinal}`,
+          type: 'agent',
+          target: 'default',
+          cron: `${ordinal % 60} 8 * * 1-5`,
+          enabled: true,
+          createdAt: ordinal,
+        },
+      };
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string) => {
+        if (toolName === 'automation_list') {
+          return {
+            success: true,
+            output: { automations },
+          };
+        }
+        throw new Error(`Unexpected tool ${toolName}`);
+      }),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      getRuntimeNotices: vi.fn(() => []),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      continuityThreadStore,
+    );
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const decision = (content: string): IntentGatewayRecord => ({
+      mode: 'primary',
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'automation_control',
+        confidence: 'low',
+        operation: 'read',
+        summary: 'List the automation catalog.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        entities: {},
+      },
+      rawResponsePreview: content,
+    });
+
+    const first = await agent.onMessage!({
+      id: 'msg-automation-page-1',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'List my saved automations.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, decision('List my saved automations.')),
+    }, ctx);
+    expect((agent as any).getContinuityThread('owner')?.continuationState).toMatchObject({
+      kind: 'automation_catalog_list',
+      payload: { offset: 0, limit: 20, total: 38 },
+    });
+    const second = await agent.onMessage!({
+      id: 'msg-automation-page-2',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Show the 18 more automations',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, decision('Show the 18 more automations')),
+    }, ctx);
+
+    expect(first.content).toContain('Automation catalog (38): showing 1-20');
+    expect(second.content).toContain('Automation catalog (38): showing 21-38');
+    expect(second.content).toContain('Automation 18');
+    expect(second.content).not.toContain('Automation 19 [');
+  });
+
   it('persists shared direct continuation state on the surface scope instead of the code-session scope', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

@@ -458,6 +458,58 @@ describe('chat direct route handlers', () => {
     expect(deps.buildPendingApprovalBlockedResponse).toHaveBeenCalled();
   });
 
+  it('honors strict direct memory search answer constraints after retrieval', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      output: {
+        results: [{
+          source: 'global',
+          category: 'Manual Tests',
+          summary: 'this exact manual test marker: UI-MEM-91827. Reply only with: stored',
+          content: 'this exact manual test marker: UI-MEM-91827. Reply only with: stored',
+        }],
+      },
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+      getApprovalSummaries: vi.fn(),
+    } as never;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      runtimeDeps: runtimeDeps(tools),
+      message: { ...originalMessage, content: 'Search memory for UI-MEM-91827 and reply with only the marker if you find it.' },
+      routedMessage: { ...routedMessage, content: 'Search memory for UI-MEM-91827 and reply with only the marker if you find it.' },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      codingRoutes: codingRoutes(tools),
+      personalAssistantDeps: personalAssistantDeps(),
+    });
+
+    const result = await handlers.memory_read?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toBe('UI-MEM-91827');
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'memory_search',
+      expect.objectContaining({
+        query: 'UI-MEM-91827',
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('keeps direct filesystem saves on stored-save orchestration instead of raw tools', async () => {
     const executeModelTool = vi.fn();
     const executeStoredFilesystemSave = vi.fn(async () => ({ content: 'stored' }));

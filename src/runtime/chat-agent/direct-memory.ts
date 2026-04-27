@@ -9,6 +9,7 @@ import {
   parseDirectMemoryReadRequest,
   parseDirectMemorySaveRequest,
 } from '../../util/memory-intent.js';
+import { deriveAnswerConstraints } from '../intent/request-patterns.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
@@ -23,6 +24,7 @@ function formatDirectMemorySearchResponse(
     scope: 'global' | 'code_session' | 'both';
     separateScopes: boolean;
     labelSources: boolean;
+    strictOutputOnly?: boolean;
   },
 ): string {
   const record = isRecord(output) ? output : {};
@@ -54,6 +56,9 @@ function formatDirectMemorySearchResponse(
       return `I didn't find any matching persistent memory in global or code-session memory for "${options.query}".`;
     }
     return `I didn't find any matching ${effectiveScopes[0] === 'code_session' ? 'code-session memory' : 'global memory'} for "${options.query}".`;
+  }
+  if (options.strictOutputOnly) {
+    return options.query.trim();
   }
 
   const formatRow = (row: Record<string, unknown>): string => {
@@ -318,6 +323,7 @@ export async function tryDirectMemoryRead(input: {
       scope,
       separateScopes: intent.separateScopes,
       labelSources: intent.labelSources,
+      strictOutputOnly: deriveAnswerConstraints(input.originalUserContent ?? input.message.content).strictOutputOnly === true,
     });
   }
 

@@ -71,7 +71,7 @@ function preferredCandidatesForDecision(
         ? ['memory_write']
         : (decision.operation === 'read' || decision.operation === 'search')
           ? ['memory_read']
-          : [];
+          : ['memory_read', 'memory_write'];
     case 'filesystem_task':
       return ['filesystem'];
     case 'coding_task':

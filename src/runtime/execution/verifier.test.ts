@@ -210,6 +210,56 @@ describe('verifyDelegatedResult', () => {
     expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['read', 'answer']);
   });
 
+  it('rejects completed envelopes whose final answer is only an in-progress promise', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Search web and repo evidence, then return a comparison.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web evidence.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search the repo evidence.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'answer', summary: 'Return the requested comparison.', required: true, dependsOn: ['step_1', 'step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = "I'll run both searches in parallel and then compare the results.";
+    const stepReceipts: StepReceipt[] = taskContract.plan.steps.map((step, index) => ({
+      stepId: step.stepId,
+      status: 'satisfied',
+      evidenceReceiptIds: [`receipt-${index + 1}`],
+      summary: step.kind === 'answer' ? finalAnswer : step.summary,
+      startedAt: index + 1,
+      endedAt: index + 1,
+    }));
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
   it('keeps simple no-tool security refusals on an answer-first contract', () => {
     const taskContract = buildSimpleSecurityTaskContract();
 

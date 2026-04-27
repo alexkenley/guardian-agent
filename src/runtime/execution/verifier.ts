@@ -6,6 +6,7 @@ import { normalizeUserFacingIntentGatewaySummary } from '../intent/summary.js';
 import {
   buildPlannedTask,
   collectMissingEvidenceKinds,
+  findAnswerStepIds,
   readUnsatisfiedRequiredSteps,
 } from './task-plan.js';
 import type {
@@ -16,6 +17,7 @@ import type {
   StepReceipt,
   VerificationDecision,
 } from './types.js';
+import { looksLikeOngoingWorkResponse } from '../../util/assistant-response-shape.js';
 
 export function buildDelegatedTaskContract(
   decision: IntentGatewayDecision | null | undefined,
@@ -88,6 +90,10 @@ export function verifyDelegatedResult(input: {
   const unsatisfiedStepIds = unsatisfiedSteps.map((step) => step.stepId);
 
   if (input.envelope.runStatus === 'completed' && unsatisfiedStepIds.length === 0) {
+    const ongoingAnswerFailure = verifyFinalAnswerIsTerminal(input.envelope);
+    if (ongoingAnswerFailure) {
+      return ongoingAnswerFailure;
+    }
     const exactFileReferenceFailure = verifyExactFileReferenceRequirements(input.envelope);
     if (exactFileReferenceFailure) {
       return exactFileReferenceFailure;
@@ -154,6 +160,30 @@ export function verifyDelegatedResult(input: {
     retryable: false,
     requiredNextAction: buildUnsatisfiedStepsAction(input.envelope.taskContract.plan.steps, unsatisfiedStepIds),
     unsatisfiedStepIds,
+  };
+}
+
+function verifyFinalAnswerIsTerminal(
+  envelope: DelegatedResultEnvelope,
+): VerificationDecision | null {
+  const finalAnswer = envelope.finalUserAnswer?.trim();
+  if (!finalAnswer || !looksLikeOngoingWorkResponse(finalAnswer)) {
+    return null;
+  }
+  const hasRequiredEvidenceStep = envelope.taskContract.plan.steps.some(
+    (step) => step.required !== false && step.kind !== 'answer',
+  );
+  if (!envelope.taskContract.requiresEvidence && !hasRequiredEvidenceStep) {
+    return null;
+  }
+  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  return {
+    decision: 'insufficient',
+    reasons: ['Delegated worker returned an in-progress status message instead of a terminal user-facing answer.'],
+    retryable: true,
+    requiredNextAction: 'Complete the delegated task and return the final answer, not a progress promise.',
+    missingEvidenceKinds: ['answer'],
+    ...(answerStepIds.length > 0 ? { unsatisfiedStepIds: answerStepIds } : {}),
   };
 }
 

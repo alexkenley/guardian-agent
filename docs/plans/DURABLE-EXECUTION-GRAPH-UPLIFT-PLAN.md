@@ -205,6 +205,15 @@ Checkpoint after the automation-control routing and direct-rendering cleanup:
 - Focused coverage passed: `npx vitest run src/runtime/direct-reasoning-mode.test.ts` reported 31 passing tests. `npm run check` and `npm run build` passed after the cleanup.
 - Live `/api/message` replay on the rebuilt app with request id `live-strict-import-expand-6a24012c` and request-scoped Ollama Cloud managed-cloud profile `ollama-cloud` / `gpt-oss:120b` returned exactly `src/runtime/execution-graph/delegated-worker-retry.ts` for the strict comma-separated delegated retry-policy repo-inspection prompt. Trace showed direct reasoning, evidence hydration, grounded synthesis, deterministic coverage revision, and no provider fallback.
 
+> Checkpoint after web UI manual smoke cleanup:
+
+- Manual web UI smoke exposed three app-facing issues: strict memory lookup could fall back to chat-model synthesis and answer with the stored response text, automation catalog pagination lost its continuation state on a fresh-classified follow-up, and delegated mixed web+repo requests could complete with progress narration instead of a terminal answer.
+- Continuity projection now passes explicit direct continuation state to direct handlers even when broader stale chat context is withheld from fresh turns. This keeps fresh-surface isolation intact while letting same-surface list continuations such as "Show the 18 more automations" advance the existing automation catalog page.
+- Direct memory search now strips trailing answer-format instructions from the search query and honors strict output-only answer constraints after retrieval. Unknown-operation `memory_task` gateway decisions now expose both memory handlers to the shared direct-dispatch loop so handler-level parsing can disambiguate read vs write without adding pre-gateway keyword routing.
+- Delegated verification now rejects completed evidence/tool contracts whose final answer is only an in-progress promise, while answer-only direct fallback contracts remain allowed. This keeps mixed tool-synthesis requests from reporting "I'll run both searches" as a completed answer.
+- Live `/api/message` sweep on the rebuilt app with request-scoped Ollama Cloud managed-cloud metadata proved exact-answer, strict memory save/search, automation catalog pagination, credential-refusal security, and mixed web+repo browser/repo search. The final strict memory replay used request ids `api-smoke-1777285445-memsave` and `api-smoke-1777285445-memsearch`; the search response returned exactly `API-MEM-FIX-1777285445`.
+- Focused coverage passed for routing, direct memory, verifier, worker-session, and ChatAgent continuity paths. Full gates passed after the cleanup: `npm run check`, full `npm test` (311 files, 3335 tests), and `npm run build`.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.

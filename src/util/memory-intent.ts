@@ -139,6 +139,7 @@ export function parseDirectMemoryReadRequest(content: string): DirectMemoryReadI
   }
 
   query = stripWrappingQuotes(stripTrailingMemoryReadDirective((query ?? '').trim()))
+    .replace(/\s*,?\s+(?:and\s+)?(?:reply|respond|answer|return)\b[\s\S]*$/i, '')
     .replace(/[?!.]+$/g, '')
     .trim() || undefined;
 

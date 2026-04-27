@@ -1802,6 +1802,8 @@ interface DegradedDirectIntentResponseInput {
         fallbackContent,
       ),
     };
+    const continuityThreadForDirectState = continuityThreadForContext
+      ?? (continuityThread?.continuationState ? continuityThread : null);
     const directRouteHandlers = buildChatDirectRouteHandlers({
       agentId: this.id,
       tools: this.tools,
@@ -1815,7 +1817,7 @@ interface DegradedDirectIntentResponseInput {
       stateAgentId,
       decision: directIntent?.decision,
       codeContext: effectiveCodeContext,
-      continuityThread: continuityThreadForContext,
+      continuityThread: continuityThreadForDirectState,
       llmMessages,
       fallbackProviderOrder,
       defaultToolResultProviderKind,
@@ -1843,7 +1845,7 @@ interface DegradedDirectIntentResponseInput {
       codeContext: effectiveCodeContext,
       recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, {
         ...traceInput,
-        continuityThread: continuityThreadForContext,
+        continuityThread: continuityThreadForDirectState,
       }),
       handlers: directRouteHandlers,
       onHandled: (candidate, result) => buildScopedDirectIntentResponse({
