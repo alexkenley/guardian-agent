@@ -265,6 +265,10 @@ export async function tryDirectMemorySave(input: {
 
   const output = isRecord(toolResult.output) ? toolResult.output : {};
   const savedScope = toString(output.scope) === 'code_session' ? 'code-session memory' : 'global memory';
+  const strictAcknowledgement = readStrictReplyOnlyDirective(input.originalUserContent ?? input.message.content);
+  if (strictAcknowledgement) {
+    return strictAcknowledgement;
+  }
   return `I saved that to ${savedScope}.`;
 }
 
@@ -342,4 +346,14 @@ export async function tryDirectMemoryRead(input: {
     return `I couldn't recall persistent memory: ${errorMessage}`;
   }
   return formatDirectMemoryRecallResponse(toolResult.output, scope);
+}
+
+function readStrictReplyOnlyDirective(content: string | undefined): string | null {
+  const raw = content?.trim() ?? '';
+  if (!raw) return null;
+  const match = raw.match(
+    /(?:^|[.!?]\s+|,\s*(?:and\s+)?)(?:reply|respond|answer|return)\s+(?:only\s+with|with\s+only|exactly)\s*:?\s*["'`]?([^"'`.!?\r\n]+)["'`]?[.!?]*$/i,
+  );
+  const value = match?.[1]?.trim();
+  return value || null;
 }

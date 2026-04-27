@@ -90,6 +90,7 @@ export function parseDirectMemorySaveRequest(content: string): DirectMemorySaveI
   normalized = normalized.replace(/^(?:to|in)\s+(?:global\s+memory|(?:code(?:-| )session|coding session)\s+memory)\b[:,]?\s*/i, '');
   normalized = stripTrailingMemoryStorageDirective(normalized);
   normalized = stripTrailingMemoryScopeDirective(normalized);
+  normalized = stripTrailingResponseDirective(normalized);
   normalized = stripWrappingQuotes(normalized.trim());
 
   if (!normalized) return null;
@@ -254,6 +255,13 @@ function stripTrailingMemoryReadDirective(content: string): string {
     .replace(/\s*,?\s*(?:and\s+)?show\s+which\s+scope\s+(?:each\s+)?result\s+came\s+from[.!?]*$/i, '')
     .replace(/\s*,?\s*separately[.!?]*$/i, '')
     .trim();
+}
+
+function stripTrailingResponseDirective(content: string): string {
+  return content.replace(
+    /(?:[.!?]\s+|,\s*(?:and\s+)?)(?:reply|respond|answer|return)\b[\s\S]*$/i,
+    '',
+  ).trim();
 }
 
 function stripWrappingQuotes(content: string): string {

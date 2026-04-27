@@ -50,6 +50,11 @@ describe('memory intent helpers', () => {
       content: 'code-session-marker-rivet-22',
     });
 
+    expect(parseDirectMemorySaveRequest('Remember this exact manual test marker: SMOKE-MEM-42801. Reply only with: stored')).toEqual({
+      scope: 'global',
+      content: 'this exact manual test marker: SMOKE-MEM-42801',
+    });
+
     expect(parseDirectMemorySaveRequest('Save this to memory for later.')).toBeNull();
   });
 

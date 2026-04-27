@@ -2,7 +2,10 @@ import type { AgentContext, UserMessage } from '../../agent/types.js';
 import { isRecord, toBoolean, toString } from '../../chat-agent-helpers.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
-import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
+import {
+  buildPendingApprovalMetadata,
+  formatPendingApprovalMessage,
+} from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
@@ -392,12 +395,16 @@ export async function executeDirectSecondBrainMutation<TFocusState>(input: {
       });
     }
     const summaries = pendingIds.length > 0 ? input.tools?.getApprovalSummaries(pendingIds) : undefined;
-    const prompt = input.formatPendingApprovalPrompt(pendingIds, summaries);
+    const structuredPrompt = formatPendingApprovalMessage(
+      pendingIds
+        .map((id) => summaries?.get(id))
+        .filter((summary): summary is { toolName: string; argsPreview: string; actionLabel?: string } => Boolean(summary)),
+    );
     const pendingActionResult = input.setPendingApprovalActionForRequest(
       input.userKey,
       input.message.surfaceId,
       {
-        prompt,
+        prompt: structuredPrompt,
         approvalIds: pendingIds,
         approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
         originalUserContent: input.message.content,
@@ -415,7 +422,7 @@ export async function executeDirectSecondBrainMutation<TFocusState>(input: {
     );
     return input.buildPendingApprovalBlockedResponse(pendingActionResult, [
       input.pendingIntro,
-      prompt,
+      structuredPrompt,
     ].filter(Boolean).join('\n\n'));
   }
 

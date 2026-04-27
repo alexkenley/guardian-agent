@@ -260,6 +260,106 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('rejects completed envelopes whose final answer promises another search before synthesis', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Search web and repo evidence, then return a comparison.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web evidence.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search the repo evidence.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'answer', summary: 'Return the requested comparison.', required: true, dependsOn: ['step_1', 'step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'I have step_1 evidence already (title = "Example Domain"). Let me search for the browser read tool implementation more specifically in the source code, then deliver the comparison.';
+    const stepReceipts: StepReceipt[] = taskContract.plan.steps.map((step, index) => ({
+      stepId: step.stepId,
+      status: 'satisfied',
+      evidenceReceiptIds: [`receipt-${index + 1}`],
+      summary: step.kind === 'answer' ? finalAnswer : step.summary,
+      startedAt: index + 1,
+      endedAt: index + 1,
+    }));
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
+  it('rejects completed envelopes whose final answer promises further verification', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web and repo evidence, then return a comparison.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web evidence.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search the repo evidence.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'answer', summary: 'Return the requested comparison.', required: true, dependsOn: ['step_1', 'step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = 'Let me verify the implementation chain more thoroughly by inspecting the actual browser read handler and its delegate, rather than stopping at the registration wrapper.';
+    const stepReceipts: StepReceipt[] = taskContract.plan.steps.map((step, index) => ({
+      stepId: step.stepId,
+      status: 'satisfied',
+      evidenceReceiptIds: [`receipt-${index + 1}`],
+      summary: step.kind === 'answer' ? finalAnswer : step.summary,
+      startedAt: index + 1,
+      endedAt: index + 1,
+    }));
+
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        stepReceipts,
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['step_3'],
+    });
+  });
+
   it('adds a required answer step when repo-grounded gateway plans omit synthesis', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'coding_task',

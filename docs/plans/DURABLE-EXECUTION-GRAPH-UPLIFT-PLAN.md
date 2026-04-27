@@ -1,7 +1,7 @@
 # Durable Execution Graph Uplift Plan
 
-**Status:** Architecture refinement, cleanup, and broad smoke expansion phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented and app-proven for the current core paths. The latest app-facing slices proved routing, continuity, approval, security, OpenRouter/Ollama Cloud managed-cloud routing, browser/tool-loop reads, web approval, memory, automation reads, skills-routing, and Code UI smoke paths against the real app and browser/API surfaces. The current risk is no longer missing primitives; it is deleting the remaining overlapping owners as graph-owned replacements land, improving answer precision in mixed delegated tasks, and expanding smoke coverage without weakening brokered-worker isolation.
-**Date:** 2026-04-27
+**Status:** Architecture refinement, cleanup, and broad smoke expansion phase. Phases 1-4 are implemented for the read-only graph/artifact lane and the first graph-controlled search/write slice. Phase 5+ approval/continuation and delegated graph cleanup are partially implemented and app-proven for the current core paths. The latest app-facing slices proved routing, continuity, approval, security, Ollama Cloud managed-cloud routing, browser/tool-loop reads, second-brain approvals, memory save/search, automation pagination, web approval, skills-routing, and Code UI smoke paths against the real app and browser/API surfaces. The current risk is no longer missing primitives; it is deleting the remaining overlapping owners as graph-owned replacements land, tightening delegated answer-quality/retry behavior for mixed tasks, and expanding smoke coverage without weakening brokered-worker isolation.
+**Date:** 2026-04-28
 **Supersedes for future work:**
 - `docs/plans/archive/DIRECT-REASONING-MODE-ARCHITECTURE-SPLIT.md`
 - `docs/plans/archive/INTENT-GATEWAY-AND-DELEGATED-EXECUTION-REALIGNMENT-PLAN.md`
@@ -16,7 +16,7 @@ This is not a request to import LangGraph, Temporal, or another framework. The p
 
 ## Current Implementation State
 
-As of 2026-04-27:
+As of 2026-04-28:
 
 - Phase 1 graph kernel and event projection are implemented: execution graph types, event types, bounded store, run-timeline adapter, and focused tests.
 - Phase 2 direct reasoning as an `explore_readonly` graph node is implemented: direct reasoning emits graph events, read/search tool calls project into `RunTimelineStore`, and focused direct-reasoning/run-timeline tests pass.
@@ -93,6 +93,46 @@ Verified locally after these changes:
 - Latest live OpenRouter API replay after rebuild/restart proved the content-plan exact-answer path with request id `codex-final-verify-fresh-f42c13a3-f066-43a4-b284-617f0a3f935d`, returning exactly `OR-FRESH-CLEAN-27491` with managed-cloud OpenRouter metadata, no fallback, no continuity context, no active execution refs, and no code-session resolution in the request trace.
 - Latest live same-surface continuity replay used request ids `codex-final-verify-same-first-f6ad8ac3-b4cf-49a8-862a-a9185dff4a15` and `codex-final-verify-same-second-00a841a3-6b25-4b59-b1cf-cc2fb91b3293`; the second turn recovered `SAME-SURFACE-CLEAN-27491` from the first same-surface turn and carried only the current execution ref, not stale same-principal `code_session` refs.
 - Latest live security refusal replay with request id `codex-final-verify-security-74452ddb-7261-4992-ac58-91423644dbb2` refused the request to read/print raw Guardian config credentials, leaked no raw secret patterns, used OpenRouter managed-cloud metadata, and avoided fallback.
+
+### 2026-04-28 Live Uplift Checkpoint
+
+This slice kept the fixes in shared orchestration, second-brain, memory, and delegated verification layers. It did not add pre-gateway keyword routing, channel-specific approval behavior, or brokered-worker authority.
+
+Implemented in this slice:
+
+- Direct memory saves now strip trailing response-only directives before persistence, so prompts like `Remember this exact manual test marker: SMOKE-MEM-FIX-42801. Reply only with: stored` store only the marker content while still honoring the strict acknowledgment in the response.
+- Direct second-brain mutation approvals now use structured pending-approval copy and keep raw approval ids in metadata, not user-facing chat text.
+- Delegated final-answer verification now rejects completed envelopes whose final answer is only an in-progress promise such as `Let me search... then deliver...` or `Let me verify...`, forcing retry/recovery instead of marking the graph satisfied.
+
+Verified against the real app after rebuild/restart:
+
+- `npm run build` passed before the first live pass and again after verifier updates.
+- `GET http://localhost:3000/api/status` returned `status=running` after starting the actual app with `scripts/start-dev-windows.ps1 -StartOnly`.
+- Exact answer passed with request id `codex-live-exact-fcf4cce3704a49fb91e4fbb05926ad05`, returning exactly `SMOKE-FRESH-42801` via Ollama Cloud managed-cloud direct routing.
+- Same-surface continuity passed with request ids `codex-live-cont-1-0025f877924f41f0af86a1fb84867689` and `codex-live-cont-2-66d11cc4daab4d318c22c6af59488971`, recovering `SMOKE-CONT-42801` only on the same surface.
+- Fresh-surface isolation passed with request id `codex-live-fresh-prev-166a1e1fa21c46269efc379c64bfe035`, returning `UNKNOWN` for an immediately previous marker on a brand-new surface. A separate ambiguous memory-oriented prompt retrieved a previously saved global marker; that was confirmed as explicit memory behavior, not surface leakage.
+- Memory save/search passed after the fix: request id `codex-live-memfix-save-304f19b1d0a74118b5f11a295e4348c1` returned exactly `stored`, persisted `this exact manual test marker: SMOKE-MEM-FIX-42801` without the response directive, and request id `codex-live-memfix-search-8cb5c7510c6648efb65220ad3506da3b` returned `SMOKE-MEM-FIX-42801`.
+- Automation listing and pagination passed with request ids `codex-live-auto-list-8f01c1e5ac29426194af3959e885cac8` and `codex-live-auto-page2-e377019e973142fd98e70d94b566ade9`, returning the first and second pages of saved automations.
+- Natural-language calendar creation inferred the required fields without a clarification: request id `codex-live-calendarfix-e018187e639d44cf9fe0c33ed5a52775` prepared local calendar event `Take my dog Benny to the vet` for Wednesday 29 April 2026 from 12:00 pm to 1:00 pm, exposed approval id `43091b60-a704-4f19-a9ad-97775e8e0b5b` only in metadata, approval created the event, and the pending action cleared.
+- Denied second-brain approval path passed with request id `codex-live-caldeny-cd6c643dc2aa4feea876a875a925ee29`; denial returned `I did not complete the local Second Brain update.` and cleared the pending action.
+- Policy-gated delegated file write passed after temporarily setting `fs_write` to manual: request id `codex-live-filewrite-manual-38c355ce0264449fb63f3c2122543c9d` created graph approval `6f0b31d2-cac2-4946-b682-fafe694382c6`, approval resumed the delegated graph, wrote `tmp/manual-web/approval-42801.txt` with exactly `approved from web ui`, verified the file, and cleared the pending action. The policy was restored to `fs_write: auto`.
+- Repo read-only search passed with request id `codex-live-reposearch-054ee32665de497f8e6b6d27d775c3f3`, identifying `src/runtime/chat-agent/live-tool-loop-controller.ts` as the implementation file for `runLiveToolLoopController`.
+- Mixed web+repo comparison initially exposed a delegated verifier gap: request id `codex-live-webrepo-f4e78c13c8b04e3eb2516e3e6bf12234` ended with a progress-only answer that the graph treated as final. After the verifier fix, request id `codex-live-webrepo-fix2-eafffd6baf07400e9847c6648c6b0e2d` returned a two-bullet comparison citing the `Example Domain` title and `src/tools/builtin/browser-tools.ts`, with graph status `completed`.
+- Security refusal passed with request id `codex-live-security-569a29b7b89e4208a74cc0a306074a79`: the request to read and print raw Guardian config credentials was refused, no pending action was created, and no secret-like output pattern leaked.
+
+Focused verification added or rerun:
+
+- `npx vitest run src/util/memory-intent.test.ts`
+- `npx vitest run src/runtime/chat-agent/direct-route-handlers.test.ts`
+- `npx vitest run src/runtime/chat-agent/direct-second-brain-write.test.ts`
+- `npx vitest run src/runtime/execution/verifier.test.ts`
+
+Remaining risks and cleanup:
+
+- Delegated retry/recovery still has overlapping ownership between graph node runners and worker-manager/tool-loop paths. The next cleanup should keep moving terminal retry/recovery ownership into graph node runners and delete the replaced side channels in the same slice.
+- Mixed web+repo delegated quality is improved, but the live failure showed that answer-shape verification needs continued hardening around progress-only completions from managed-cloud models.
+- Natural-language second-brain title normalization still produced an awkward denied-smoke title (`Named Denied Smoke Appointment`) in one path; fix that in second-brain mutation normalization if it recurs in user-facing flows.
+- Continue to prefer Ollama Cloud for managed-cloud app/API sweeps until OpenRouter account/profile drift is the specific target under test.
 
 Checkpoint after the delegated-worker and recovery graph ownership cleanup:
 

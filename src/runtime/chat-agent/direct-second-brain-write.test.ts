@@ -19,6 +19,7 @@ import {
   extractUrlFromText,
   normalizeSecondBrainInlineFieldValue,
 } from './direct-intent-helpers.js';
+import { executeDirectSecondBrainMutation } from './direct-second-brain-mutation.js';
 import { tryDirectSecondBrainWrite } from './direct-second-brain-write.js';
 
 const messageBase: UserMessage = {
@@ -133,5 +134,72 @@ describe('tryDirectSecondBrainWrite task creation', () => {
         fallbackLabel: 'Call the vet about Benny',
       }),
     }));
+  });
+});
+
+describe('executeDirectSecondBrainMutation approvals', () => {
+  it('returns structured approval copy without inline approval ids', async () => {
+    const setPendingApprovalActionForRequest = vi.fn(() => ({ action: null }));
+    const buildPendingApprovalBlockedResponse = vi.fn((_result, fallbackContent: string) => ({ content: fallbackContent }));
+    const result = await executeDirectSecondBrainMutation({
+      message: {
+        ...messageBase,
+        content: 'Create an appointment for tomorrow at noon to take Benny to the vet.',
+        surfaceId: 'web-chat',
+      },
+      ctx: { checkAction: vi.fn() } as unknown as AgentContext,
+      userKey: 'owner:web',
+      decision: createDecision('calendar'),
+      toolName: 'second_brain_calendar_upsert',
+      args: {
+        title: 'Take Benny to the vet',
+        startsAt: 1_700_086_400_000,
+        endsAt: 1_700_090_000_000,
+      },
+      summary: 'Creates a local Second Brain calendar event.',
+      pendingIntro: 'I prepared a local calendar event create, but it needs approval first.',
+      successDescriptor: {
+        itemType: 'calendar',
+        action: 'create',
+        fallbackLabel: 'Take Benny to the vet',
+      },
+      focusState: null,
+      agentId: 'chat',
+      tools: {
+        isEnabled: vi.fn(() => true),
+        executeModelTool: vi.fn(async () => ({
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-calendar-1',
+        })),
+        getApprovalSummaries: vi.fn(() => new Map([
+          ['approval-calendar-1', {
+            toolName: 'second_brain_calendar_upsert',
+            argsPreview: '{"title":"Take Benny to the vet","startsAt":1700086400000,"endsAt":1700090000000}',
+            actionLabel: 'create local calendar event "Take Benny to the vet" tomorrow at noon',
+          }],
+        ])),
+      } as never,
+      getPendingApprovals: vi.fn(() => null),
+      setApprovalFollowUp: vi.fn(),
+      formatPendingApprovalPrompt: vi.fn(() => 'Approval ID: approval-calendar-1'),
+      setPendingApprovalActionForRequest,
+      buildPendingApprovalBlockedResponse,
+      toPendingActionEntities: (entities) => entities as Record<string, unknown>,
+      buildDirectSecondBrainMutationSuccessResponse: vi.fn(() => ({ content: 'created' })),
+    });
+
+    expect(result).toMatchObject({
+      content: expect.stringContaining('Waiting for approval to create local calendar event "Take Benny to the vet" tomorrow at noon.'),
+    });
+    expect(typeof result === 'string' ? result : result.content).not.toContain('Approval ID:');
+    expect(setPendingApprovalActionForRequest).toHaveBeenCalledWith(
+      'owner:web',
+      'web-chat',
+      expect.objectContaining({
+        prompt: 'Waiting for approval to create local calendar event "Take Benny to the vet" tomorrow at noon.',
+        approvalIds: ['approval-calendar-1'],
+      }),
+    );
   });
 });

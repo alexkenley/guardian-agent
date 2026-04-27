@@ -69,7 +69,7 @@ export function looksLikeOngoingWorkResponse(content: string | undefined): boole
     /^(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
     presentTenseActionStartPattern,
     /\b(?:now|next|first|then)\s+(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
-    /\b(?:let me|i['’]ll|i will(?!\s+not))\s+(?:inspect|check|review|look|find|apply|restart|resume|write|create|read|use|try|run|continue|proceed|retry|delete|remove|append|save)\b/i,
+    /\b(?:let me|i['’]ll|i will(?!\s+not))\s+(?:inspect|check|review|verify|look|find|search|narrow|apply|restart|resume|write|create|read|use|try|run|continue|proceed|retry|delete|remove|append|save|deliver|provide|return)\b/i,
     /\b(?:proceeding to|moving on to|next step is|i still need to)\b/i,
   ];
   const terminalMarkers = [
