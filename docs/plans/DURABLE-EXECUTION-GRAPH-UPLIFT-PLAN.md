@@ -101,10 +101,19 @@ Checkpoint after the delegated-worker and recovery graph ownership cleanup:
 - Full `npm test` passed after the cleanup: 308 files, 3294 tests.
 - `npm run build` passed after the cleanup.
 
+Checkpoint after the chat-continuation approval-resume ownership cleanup:
+
+- `src/runtime/chat-agent/chat-continuation-graph.ts` now owns graph approval-resume lifecycle projection for chat continuations: persisted resume lookup, pending-action completion timing, `interruption_resolved`, denied `graph_failed`, completion `graph_completed`, and execution-graph response metadata.
+- `ChatAgent` still invokes the payload-specific continuation executors for filesystem save, automation authoring, and suspended tool-loop payloads, but it no longer hand-builds chat-continuation graph resume events or terminal graph metadata.
+- Focused coverage for this cleanup passed: `npx vitest run src/runtime/chat-agent/chat-continuation-graph.test.ts src/runtime/chat-agent/tool-loop-continuation.test.ts src/runtime/chat-agent/orchestration-state.test.ts src/chat-agent.test.ts src/runtime/pending-action-resume.test.ts` reported 105 passing tests.
+- `npm run check` passed after the cleanup.
+- Full `npm test` passed after the cleanup: 309 files, 3296 tests.
+- `npm run build` passed after the cleanup.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.
-- Approval/resume ownership is still not fully collapsed. The live proof covers a policy-gated API flow, but remaining legacy producers and replay/resume owners should still be deleted only as graph interrupt equivalents land.
+- Approval/resume ownership is narrower after the latest cleanup, but payload-specific chat continuation executors and suspended tool-loop replay still need graph-native node equivalents before the remaining replay payload can be deleted.
 - Delegated graph ownership is narrower after the latest cleanup, but delegated worker dispatch, task-contract verification policy, retry budgeting, and recovery-advisor invocation are still coordinated from `WorkerManager`. Continue moving those decisions into graph node/controller boundaries before deleting old side channels.
 - Provider alias drift for compact dated OpenRouter snapshots is now covered in the delegated verifier. Remaining provider risk is broader fallback/profile ownership cleanup, not this known `moonshotai/kimi-k2.6` alias mismatch.
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.

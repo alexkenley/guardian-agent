@@ -46,6 +46,21 @@ export interface ChatContinuationGraphResume {
   payload: ChatContinuationPayload;
 }
 
+export interface ChatContinuationApprovalDecision {
+  approved?: boolean;
+  success?: boolean;
+  message?: string;
+}
+
+export interface ChatContinuationGraphApprovalResumeStart {
+  resume: ChatContinuationGraphResume;
+  approved: boolean;
+  deniedResponse?: {
+    content: string;
+    metadata: Record<string, unknown>;
+  };
+}
+
 export interface ChatContinuationArtifactContent extends Record<string, unknown> {
   type: 'chat_continuation';
   payload: Record<string, unknown>;
@@ -261,6 +276,103 @@ export function emitChatContinuationGraphResumeEvent(input: {
   input.graphStore.appendEvent(event);
   input.runTimeline?.ingestExecutionGraphEvent(event);
   return event;
+}
+
+export function startChatContinuationGraphApprovalResume(input: {
+  graphStore: Pick<ExecutionGraphStore, 'appendEvent' | 'getArtifact' | 'getSnapshot'>;
+  runTimeline?: Pick<RunTimelineStore, 'ingestExecutionGraphEvent'>;
+  pendingAction: PendingActionRecord;
+  approvalId: string;
+  approvalResult: ChatContinuationApprovalDecision;
+  completePendingAction: (actionId: string, nowMs: number) => void;
+  nowMs?: number;
+}): ChatContinuationGraphApprovalResumeStart | null {
+  const resume = readChatContinuationGraphResume({
+    graphStore: input.graphStore,
+    pendingAction: input.pendingAction,
+  });
+  if (!resume) return null;
+  const nowMs = input.nowMs ?? Date.now();
+  input.completePendingAction(input.pendingAction.id, nowMs);
+  const approved = input.approvalResult.approved ?? input.approvalResult.success ?? false;
+  emitChatContinuationGraphResumeEvent({
+    graphStore: input.graphStore,
+    runTimeline: input.runTimeline,
+    resume,
+    kind: 'interruption_resolved',
+    payload: {
+      kind: 'approval',
+      approvalId: input.approvalId,
+      resumeToken: resume.resumeToken,
+      resultStatus: approved ? 'approved' : 'denied',
+    },
+    eventKey: 'approval-resolved',
+    nowMs,
+  });
+  if (approved) {
+    return { resume, approved: true };
+  }
+  emitChatContinuationGraphResumeEvent({
+    graphStore: input.graphStore,
+    runTimeline: input.runTimeline,
+    resume,
+    kind: 'graph_failed',
+    payload: {
+      reason: input.approvalResult.message || 'Approval denied.',
+      continuationArtifactId: resume.artifact.artifactId,
+    },
+    eventKey: 'denied',
+    nowMs,
+  });
+  return {
+    resume,
+    approved: false,
+    deniedResponse: {
+      content: input.approvalResult.message || 'Approval denied. I did not continue the pending action.',
+      metadata: {
+        executionGraph: {
+          graphId: resume.graph.graphId,
+          status: 'failed',
+          reason: 'approval_denied',
+        },
+      },
+    },
+  };
+}
+
+export function completeChatContinuationGraphResume(input: {
+  graphStore: Pick<ExecutionGraphStore, 'appendEvent' | 'getSnapshot'>;
+  runTimeline?: Pick<RunTimelineStore, 'ingestExecutionGraphEvent'>;
+  resume: ChatContinuationGraphResume;
+  response: { content: string; metadata?: Record<string, unknown> };
+  nowMs?: number;
+}): { content: string; metadata: Record<string, unknown> } {
+  const nextPendingAction = isRecord(input.response.metadata?.pendingAction)
+    ? input.response.metadata.pendingAction
+    : null;
+  emitChatContinuationGraphResumeEvent({
+    graphStore: input.graphStore,
+    runTimeline: input.runTimeline,
+    resume: input.resume,
+    kind: 'graph_completed',
+    payload: {
+      continuationArtifactId: input.resume.artifact.artifactId,
+      resultStatus: nextPendingAction ? 'pending_approval' : 'completed',
+    },
+    eventKey: 'completed',
+    nowMs: input.nowMs,
+  });
+  return {
+    content: input.response.content,
+    metadata: {
+      ...(input.response.metadata ?? {}),
+      executionGraph: {
+        graphId: input.resume.graph.graphId,
+        status: nextPendingAction ? 'pending_approval' : 'completed',
+        continuationArtifactId: input.resume.artifact.artifactId,
+      },
+    },
+  };
 }
 
 function buildChatContinuationArtifact(input: {

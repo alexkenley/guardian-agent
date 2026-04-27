@@ -170,9 +170,9 @@ import {
   executeStoredFilesystemSave as executeStoredFilesystemSaveHelper,
 } from './runtime/chat-agent/filesystem-save-resume.js';
 import {
-  emitChatContinuationGraphResumeEvent,
-  readChatContinuationGraphResume,
+  completeChatContinuationGraphResume,
   recordChatContinuationGraphApproval,
+  startChatContinuationGraphApprovalResume,
   type ChatContinuationPayload,
 } from './runtime/chat-agent/chat-continuation-graph.js';
 import {
@@ -3983,54 +3983,21 @@ interface DegradedDirectIntentResponseInput {
       options: { approvalId: string; approvalResult: ToolApprovalDecisionResult },
     ) => Promise<{ content: string; metadata?: Record<string, unknown> } | null>,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const chatResume = readChatContinuationGraphResume({
-      graphStore: this.executionGraphStore,
-      pendingAction,
-    });
-    if (!chatResume) {
-      return fallback ? fallback(pendingAction, options) : null;
-    }
     if (!this.executionGraphStore) return null;
-    const nowMs = Date.now();
-    this.completePendingAction(pendingAction.id, nowMs);
-    emitChatContinuationGraphResumeEvent({
+    const graphResume = startChatContinuationGraphApprovalResume({
       graphStore: this.executionGraphStore,
       runTimeline: this.runTimeline,
-      resume: chatResume,
-      kind: 'interruption_resolved',
-      payload: {
-        kind: 'approval',
-        approvalId: options.approvalId,
-        resumeToken: chatResume.resumeToken,
-        resultStatus: (options.approvalResult.approved ?? options.approvalResult.success) ? 'approved' : 'denied',
-      },
-      eventKey: 'approval-resolved',
-      nowMs,
+      pendingAction,
+      approvalId: options.approvalId,
+      approvalResult: options.approvalResult,
+      completePendingAction: (actionId, nowMs) => this.completePendingAction(actionId, nowMs),
     });
-
-    if (!(options.approvalResult.approved ?? options.approvalResult.success)) {
-      emitChatContinuationGraphResumeEvent({
-        graphStore: this.executionGraphStore,
-        runTimeline: this.runTimeline,
-        resume: chatResume,
-        kind: 'graph_failed',
-        payload: {
-          reason: options.approvalResult.message || 'Approval denied.',
-          continuationArtifactId: chatResume.artifact.artifactId,
-        },
-        eventKey: 'denied',
-        nowMs,
-      });
-      return {
-        content: options.approvalResult.message || 'Approval denied. I did not continue the pending action.',
-        metadata: {
-          executionGraph: {
-            graphId: chatResume.graph.graphId,
-            status: 'failed',
-            reason: 'approval_denied',
-          },
-        },
-      };
+    if (!graphResume) {
+      return fallback ? fallback(pendingAction, options) : null;
+    }
+    const chatResume = graphResume.resume;
+    if (!graphResume.approved) {
+      return graphResume.deniedResponse ?? null;
     }
 
     const result = chatResume.payload.type === 'filesystem_save_output'
@@ -4066,31 +4033,12 @@ interface DegradedDirectIntentResponseInput {
             content: 'I could not resume the pending coding run after approval.',
           };
     const response = typeof result === 'string' ? { content: result } : result;
-    const nextPendingAction = isRecord(response.metadata?.pendingAction)
-      ? response.metadata.pendingAction
-      : null;
-    emitChatContinuationGraphResumeEvent({
+    return completeChatContinuationGraphResume({
       graphStore: this.executionGraphStore,
       runTimeline: this.runTimeline,
       resume: chatResume,
-      kind: 'graph_completed',
-      payload: {
-        continuationArtifactId: chatResume.artifact.artifactId,
-        resultStatus: nextPendingAction ? 'pending_approval' : 'completed',
-      },
-      eventKey: 'completed',
+      response,
     });
-    return {
-      content: response.content,
-      metadata: {
-        ...(response.metadata ?? {}),
-        executionGraph: {
-          graphId: chatResume.graph.graphId,
-          status: nextPendingAction ? 'pending_approval' : 'completed',
-          continuationArtifactId: chatResume.artifact.artifactId,
-        },
-      },
-    };
   }
 
   private normalizeContinuationResponse(
