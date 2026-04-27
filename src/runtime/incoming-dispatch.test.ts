@@ -428,6 +428,140 @@ describe('createIncomingDispatchPreparer', () => {
     }, expect.any(Object));
   });
 
+  it('classifies ordinary channel-default turns before dispatching to the configured agent', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-direct'] = {
+      provider: 'ollama_cloud',
+      model: 'minimax-m2.1',
+      credentialRef: 'llm.ollama_cloud.direct',
+    };
+    const gatewayRecord = createGatewayRecord({
+      route: 'filesystem_task',
+      operation: 'create',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+    });
+    const routingIntentGateway = {
+      classify: vi.fn(async () => gatewayRecord),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch('default-agent', {
+      content: 'Create C:\\Temp\\guardian-approval-smoke\\approved.txt with the content hello.',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      metadata: attachChatProviderSelectionMetadata({}, 'ollama-cloud-direct'),
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+    expect(result.decision).toEqual({
+      agentId: 'default-agent',
+      confidence: 'high',
+      reason: 'channel default override',
+    });
+    expect(result.gateway).toEqual(gatewayRecord);
+    expect(readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata)).toMatchObject({
+      decision: {
+        route: 'filesystem_task',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+      },
+    });
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      providerName: 'ollama-cloud-direct',
+      providerModel: 'minimax-m2.1',
+      providerTier: 'managed_cloud',
+    });
+  });
+
+  it('continues to classifier fallback providers when a requested chat provider cannot classify', async () => {
+    const config = createConfig();
+    config.llm['forced-bad-classifier'] = {
+      provider: 'ollama_cloud',
+      model: 'glm-4.7',
+      credentialRef: 'llm.ollama_cloud.bad',
+    };
+    config.llm['fallback-classifier'] = {
+      provider: 'ollama_cloud',
+      model: 'minimax-m2.1',
+      credentialRef: 'llm.ollama_cloud.fallback',
+    };
+    const filesystemGatewayRecord = createGatewayRecord({
+      route: 'filesystem_task',
+      operation: 'create',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+    });
+    const routingIntentGateway = {
+      classify: vi.fn()
+        .mockResolvedValueOnce(createGatewayRecord({
+          route: 'unknown',
+          operation: 'unknown',
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        }, { available: false }))
+        .mockResolvedValueOnce(filesystemGatewayRecord),
+    };
+    const runtime = {
+      getProvider: vi.fn(() => ({
+        chat: vi.fn(async () => ({ content: 'ok' })),
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      routingIntentGateway,
+      runtime,
+      findProviderByLocality: vi.fn((_config: GuardianAgentConfig, locality: 'local' | 'external') => (
+        locality === 'external' ? 'fallback-classifier' : config.defaultProvider
+      )),
+    }));
+
+    const result = await prepareIncomingDispatch('default-agent', {
+      content: 'Create C:\\Temp\\guardian-approval-smoke\\approved.txt with the content hello.',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      metadata: attachChatProviderSelectionMetadata({}, 'forced-bad-classifier'),
+    });
+
+    expect(runtime.getProvider).toHaveBeenCalledWith('forced-bad-classifier');
+    expect(runtime.getProvider).toHaveBeenCalledWith('fallback-classifier');
+    expect(routingIntentGateway.classify).toHaveBeenCalledTimes(2);
+    expect(result.gateway).toEqual(filesystemGatewayRecord);
+    expect(readPreRoutedIntentGatewayMetadata(result.routedMessage.metadata)).toMatchObject({
+      decision: {
+        route: 'filesystem_task',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+      },
+    });
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      id: 'managed_cloud_tool',
+      providerName: 'forced-bad-classifier',
+      providerModel: 'glm-4.7',
+      providerTier: 'managed_cloud',
+      preferredAnswerPath: 'tool_loop',
+    });
+  });
+
   it('does not force gateway classification for exact replies on an active code-session surface', async () => {
     const routingIntentGateway = {
       classify: vi.fn(async () => createGatewayRecord()),

@@ -211,9 +211,12 @@ export function createIncomingDispatchPreparer(args: {
       currentConfig,
       currentConfig.routing?.tierMode,
     );
-    const classifierProviders = requestedProviderName?.trim()
-      ? [requestedProviderName.trim()]
-      : listClassifierProvidersForMode(currentConfig, routingMode);
+    const classifierProviders = [
+      ...new Set([
+        ...(requestedProviderName?.trim() ? [requestedProviderName.trim()] : []),
+        ...listClassifierProvidersForMode(currentConfig, routingMode),
+      ]),
+    ];
     const pendingAction = args.pendingActionStore.resolveActiveForSurface({
       agentId: stateAgentId,
       userId: canonicalUserId,
@@ -446,6 +449,7 @@ export function createIncomingDispatchPreparer(args: {
       allowSharedAttachment: false,
     });
     let classifiedGatewayPromise: Promise<IntentGatewayRecord | null> | null = null;
+    let suppressChannelDefaultGateway = false;
     const getGateway = (options: { force?: boolean } = {}): Promise<IntentGatewayRecord | null> => {
       if (resolvedChannelDefault && options.force !== true) {
         return Promise.resolve(null);
@@ -660,6 +664,7 @@ export function createIncomingDispatchPreparer(args: {
             gateway: null,
           };
         }
+        suppressChannelDefaultGateway = true;
       } else {
         const gateway = await getGateway({ force: true });
         const shouldApplyCodeSession = shouldAttachCodeSessionForRequest({
@@ -726,6 +731,9 @@ export function createIncomingDispatchPreparer(args: {
       };
     }
     if (resolvedChannelDefault) {
+      const gateway = suppressChannelDefaultGateway
+        ? null
+        : await getGateway({ force: true });
       const decision = {
         agentId: resolvedChannelDefault,
         confidence: 'high' as const,
@@ -733,14 +741,14 @@ export function createIncomingDispatchPreparer(args: {
       };
       const profile = selectProfileForResolvedRoute(
         decision,
-        null,
+        gateway,
         tierMode,
         requestedChatProvider?.providerName,
       );
-      recordResolvedRoute(decision, null, profile);
+      recordResolvedRoute(decision, gateway, profile);
       return {
         decision,
-        gateway: null,
+        gateway,
       };
     }
     const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');

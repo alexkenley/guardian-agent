@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { UserMessage } from '../agent/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { ContentTrustLevel, ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
@@ -99,6 +100,7 @@ import {
   runLlmLoop,
   type LlmLoopOutcome,
   type LlmLoopToolEvent,
+  type PolicyBlockedToolSample,
 } from './worker-llm-loop.js';
 import {
   attachWorkerAutomationAuthoringResumeMetadata,
@@ -196,6 +198,12 @@ interface PendingApprovalMetadata {
   toolName: string;
   argsPreview: string;
   actionLabel?: string;
+}
+
+interface PolicyRemediationCandidate {
+  action: 'add_path' | 'add_domain' | 'add_command';
+  value: string;
+  sourceToolName: string;
 }
 
 export interface WorkerGroundedSynthesisRequest {
@@ -1870,6 +1878,136 @@ export class BrokeredWorkerSession {
     return `${userId}::${channel}`;
   }
 
+  private async tryStartPolicyRemediationApproval(input: {
+    samples: PolicyBlockedToolSample[];
+    message: UserMessage;
+    messages: ChatMessage[];
+    toolExecutor: BrokeredToolExecutor;
+    codeContext: { workspaceRoot: string; sessionId?: string } | undefined;
+    onToolEvent: (event: LlmLoopToolEvent) => void;
+  }): Promise<SuspendedToolCall | null> {
+    const candidate = await this.resolvePolicyRemediationCandidate(input.samples, input.toolExecutor);
+    if (!candidate) return null;
+    const policyTool = input.toolExecutor.getToolDefinition('update_tool_policy')
+      ?? (await input.toolExecutor.searchTools('update_tool_policy')).find((definition) => definition.name === 'update_tool_policy');
+    if (!policyTool) return null;
+
+    const args = {
+      action: candidate.action,
+      value: candidate.value,
+    };
+    const toolCallId = `policy-remediation:${randomUUID()}`;
+    const startedAt = Date.now();
+    input.messages.push({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{
+        id: toolCallId,
+        name: 'update_tool_policy',
+        arguments: JSON.stringify(args),
+      }],
+    });
+    input.onToolEvent({
+      phase: 'started',
+      toolCall: { id: toolCallId, name: 'update_tool_policy' },
+      args,
+      startedAt,
+    });
+    const result = await input.toolExecutor.executeModelTool('update_tool_policy', args, {
+      origin: 'assistant',
+      requestId: input.message.id,
+      userId: input.message.userId,
+      channel: input.message.channel,
+      surfaceId: input.message.surfaceId,
+      principalId: input.message.principalId ?? input.message.userId,
+      principalRole: input.message.principalRole ?? 'owner',
+      contentTrustLevel: 'trusted',
+      taintReasons: [],
+      derivedFromTaintedContent: false,
+      ...(input.codeContext ? { codeContext: input.codeContext } : {}),
+    });
+    input.onToolEvent({
+      phase: 'completed',
+      toolCall: { id: toolCallId, name: 'update_tool_policy' },
+      args,
+      startedAt,
+      endedAt: Date.now(),
+      result,
+    });
+
+    if (
+      result.status !== 'pending_approval'
+      || typeof result.approvalId !== 'string'
+      || !result.approvalId.trim()
+      || typeof result.jobId !== 'string'
+      || !result.jobId.trim()
+    ) {
+      return null;
+    }
+    return {
+      approvalId: result.approvalId,
+      toolCallId,
+      jobId: result.jobId,
+      name: 'update_tool_policy',
+    };
+  }
+
+  private async resolvePolicyRemediationCandidate(
+    samples: PolicyBlockedToolSample[],
+    toolExecutor: BrokeredToolExecutor,
+  ): Promise<PolicyRemediationCandidate | null> {
+    for (const sample of samples) {
+      const definition = toolExecutor.getToolDefinition(sample.toolName)
+        ?? (await toolExecutor.searchTools(sample.toolName)).find((tool) => tool.name === sample.toolName);
+      const pathValue = this.readPolicyRemediationPathValue(sample, definition);
+      if (pathValue) {
+        return {
+          action: 'add_path',
+          value: pathValue,
+          sourceToolName: sample.toolName,
+        };
+      }
+    }
+    return null;
+  }
+
+  private readPolicyRemediationPathValue(
+    sample: PolicyBlockedToolSample,
+    definition: ToolDefinition | undefined,
+  ): string | null {
+    if (definition?.category !== 'filesystem' && !sample.toolName.startsWith('fs_') && sample.toolName !== 'doc_create') {
+      return null;
+    }
+    const args = isRecord(sample.args) ? sample.args : {};
+    const pathKeys = sample.toolName === 'fs_move' || sample.toolName === 'fs_copy'
+      ? ['destination', 'source']
+      : ['path', 'cwd'];
+    for (const key of pathKeys) {
+      const value = typeof args[key] === 'string' ? args[key].trim() : '';
+      if (!value || value === '.') continue;
+      return this.normalizePolicyRemediationPathValue(sample.toolName, key, value);
+    }
+    return null;
+  }
+
+  private normalizePolicyRemediationPathValue(toolName: string, key: string, value: string): string {
+    if (
+      (toolName === 'fs_write' || toolName === 'doc_create')
+      && key === 'path'
+      && dirname(value) !== '.'
+    ) {
+      return dirname(value);
+    }
+    if (
+      (toolName === 'fs_move' || toolName === 'fs_copy')
+      && key === 'destination'
+      && dirname(value) !== '.'
+    ) {
+      return dirname(value);
+    }
+    return value;
+  }
+
   private async handleRecoveryAdvisorMessage(
     request: RecoveryAdvisorRequest,
     chatFn: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
@@ -3182,6 +3320,20 @@ export class BrokeredWorkerSession {
         onToolEvent: recordDelegatedToolEvent,
       },
     );
+
+    if (pendingTools.length === 0) {
+      const remediation = await this.tryStartPolicyRemediationApproval({
+        samples: result.outcome.policyBlockedSamples ?? [],
+        message,
+        messages: result.messages,
+        toolExecutor,
+        codeContext,
+        onToolEvent: recordDelegatedToolEvent,
+      });
+      if (remediation) {
+        pendingTools.push(remediation);
+      }
+    }
 
     if (pendingTools.length > 0) {
       this.rememberToolReportScope(message, codeContext, toolExecutor);

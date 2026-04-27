@@ -23,6 +23,7 @@ import {
   normalizeSimpleVsComplex,
   normalizeTurnRelation,
 } from './normalization.js';
+import { hasRequiredWritePlannedStep } from './planned-steps.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import {
   isConversationTranscriptReferenceRequest,
@@ -332,28 +333,49 @@ export function normalizeIntentGatewayDecision(
     operation,
     personalItemType: entityResolution.entities.personalItemType,
   });
-  const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(route, effectivePlannedSteps);
+  const structuredWritePlanRoute = route === 'unknown' && hasRequiredWritePlannedStep({
+    plannedSteps: effectivePlannedSteps,
+  } as IntentGatewayDecision)
+    ? 'filesystem_task' as const
+    : null;
+  const effectiveRoute = structuredWritePlanRoute ?? route;
+  const effectiveOperation = structuredWritePlanRoute && operation === 'unknown'
+    ? 'create'
+    : operation;
+  const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(effectiveRoute, effectivePlannedSteps);
   const structurallyDirectAnswer = isStructurallyDirectAssistantTurn({
     executionClass,
     requiresRepoGrounding,
     requiresToolSynthesis,
     plannedSteps: effectivePlannedSteps,
   });
-  const effectiveExecutionClass = toolBackedAnswerPlan ? 'tool_orchestration' : executionClass;
-  const effectivePreferredTier = toolBackedAnswerPlan ? 'external' : preferredTier;
-  const effectiveRequiresToolSynthesis = toolBackedAnswerPlan ? true : requiresToolSynthesis;
+  const effectiveExecutionClass = structuredWritePlanRoute
+    ? 'tool_orchestration'
+    : toolBackedAnswerPlan ? 'tool_orchestration' : executionClass;
+  const effectivePreferredTier = structuredWritePlanRoute
+    ? 'external'
+    : toolBackedAnswerPlan ? 'external' : preferredTier;
+  const effectiveRequiresToolSynthesis = structuredWritePlanRoute
+    ? true
+    : toolBackedAnswerPlan ? true : requiresToolSynthesis;
   const effectiveExpectedContextPressure = toolBackedAnswerPlan
     ? 'medium'
+    : structuredWritePlanRoute
+      ? 'medium'
     : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
       ? derivedWorkload.expectedContextPressure
       : expectedContextPressure;
   const effectivePreferredAnswerPath = toolBackedAnswerPlan
     ? 'tool_loop'
+    : structuredWritePlanRoute
+      ? 'tool_loop'
     : structurallyDirectAnswer
       ? 'direct'
       : preferredAnswerPath;
   const effectiveSimpleVsComplex = toolBackedAnswerPlan
     ? 'complex'
+    : structuredWritePlanRoute
+      ? 'complex'
     : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
       ? derivedWorkload.simpleVsComplex
       : simpleVsComplex;
@@ -366,14 +388,18 @@ export function normalizeIntentGatewayDecision(
     && clarificationPendingOperation !== 'unknown'
     && operation === clarificationPendingOperation;
   const provenance = {
-    route: route === normalizedParsedRoute
+    route: structuredWritePlanRoute
+      ? 'derived.workload'
+      : route === normalizedParsedRoute
       ? classifierSource
       : clarificationOwnsRoute
         ? 'resolver.clarification'
         : route === semanticallyRepairedRoute
         ? 'repair.structured'
         : 'resolver.clarification',
-    operation: operation === parsedOperation
+    operation: structuredWritePlanRoute && operation === 'unknown'
+      ? 'derived.workload'
+      : operation === parsedOperation
       ? classifierSource
       : clarificationOwnsOperation
         ? 'resolver.clarification'
@@ -381,12 +407,16 @@ export function normalizeIntentGatewayDecision(
         ? 'repair.structured'
         : 'resolver.clarification',
     ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
-    executionClass: toolBackedAnswerPlan
+    executionClass: structuredWritePlanRoute
+      ? 'derived.workload'
+      : toolBackedAnswerPlan
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
-    preferredTier: toolBackedAnswerPlan
+    preferredTier: structuredWritePlanRoute
+      ? 'derived.workload'
+      : toolBackedAnswerPlan
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
@@ -394,7 +424,9 @@ export function normalizeIntentGatewayDecision(
     requiresRepoGrounding: rawCredentialDisclosure
       ? 'derived.workload'
       : hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
-    requiresToolSynthesis: toolBackedAnswerPlan
+    requiresToolSynthesis: structuredWritePlanRoute
+      ? 'derived.workload'
+      : toolBackedAnswerPlan
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
@@ -406,21 +438,21 @@ export function normalizeIntentGatewayDecision(
             : 'derived.workload',
         }
       : {}),
-    expectedContextPressure: toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+    expectedContextPressure: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedExpectedContextPressure)
       ? classifierSource
       : 'derived.workload',
-    preferredAnswerPath: toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+    preferredAnswerPath: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedPreferredAnswerPath)
       ? classifierSource
       : 'derived.workload',
-    simpleVsComplex: toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+    simpleVsComplex: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
@@ -431,9 +463,9 @@ export function normalizeIntentGatewayDecision(
   } satisfies NonNullable<IntentGatewayDecision['provenance']>;
 
   return {
-    route,
+    route: effectiveRoute,
     confidence,
-    operation,
+    operation: effectiveOperation,
     summary,
     turnRelation,
     resolution: effectiveResolution,

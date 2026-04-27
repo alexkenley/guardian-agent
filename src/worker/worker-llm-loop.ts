@@ -45,6 +45,12 @@ export interface LlmLoopOptions {
   onToolEvent?: (event: LlmLoopToolEvent) => void;
 }
 
+export interface PolicyBlockedToolSample {
+  toolName: string;
+  message: string;
+  args?: Record<string, unknown>;
+}
+
 export interface LlmLoopOutcome {
   stopReason: WorkerStopReason;
   completionReason: WorkerExecutionCompletionReason;
@@ -53,7 +59,7 @@ export interface LlmLoopOutcome {
   toolCallCount: number;
   toolResultCount: number;
   successfulToolResultCount: number;
-  policyBlockedSamples?: Array<{ toolName: string; message: string }>;
+  policyBlockedSamples?: PolicyBlockedToolSample[];
 }
 
 export interface LlmLoopToolEvent {
@@ -90,7 +96,11 @@ export async function runLlmLoop(
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
   let forcedDiscoveryContinuationRetryUsed = false;
-  let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
+  let lastToolRoundResults: Array<{
+    toolName: string;
+    args: Record<string, unknown>;
+    result: Record<string, unknown>;
+  }> = [];
   let currentContextTrustLevel: import('../tools/types.js').ContentTrustLevel = 'trusted';
   const currentTaintReasons = new Set<string>();
   let seededAnswerFirstResponse: ChatResponse | null = null;
@@ -449,7 +459,7 @@ export async function runLlmLoop(
             endedAt: Date.now(),
             result: denied as unknown as Record<string, unknown>,
           });
-          return { toolCall: tc, result: denied };
+          return { toolCall: tc, args: parsedArgs, result: denied };
         }
         try {
           const res = await toolCallerWithDiscovery(tc.name, parsedArgs, {
@@ -482,7 +492,7 @@ export async function runLlmLoop(
             result: res as unknown as Record<string, unknown>,
           });
 
-          return { toolCall: tc, result: res };
+          return { toolCall: tc, args: parsedArgs, result: res };
         } catch (error) {
           options?.onToolEvent?.({
             phase: 'completed',
@@ -502,10 +512,15 @@ export async function runLlmLoop(
       if (settled.status !== 'fulfilled') return count;
       return count + (isSuccessfulToolResult(settled.value.result as unknown as Record<string, unknown>) ? 1 : 0);
     }, 0);
-    lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
+    lastToolRoundResults = toolResults.reduce<Array<{
+      toolName: string;
+      args: Record<string, unknown>;
+      result: Record<string, unknown>;
+    }>>((acc, settled) => {
       if (settled.status !== 'fulfilled') return acc;
       acc.push({
         toolName: settled.value.toolCall.name,
+        args: settled.value.args,
         result: settled.value.result as unknown as Record<string, unknown>,
       });
       return acc;
@@ -625,12 +640,12 @@ export async function runLlmLoop(
     completionReason = 'degraded_response';
   }
 
-  const policyBlockedSamples: Array<{ toolName: string; message: string }> = [];
-  for (const { toolName, result } of lastToolRoundResults) {
+  const policyBlockedSamples: PolicyBlockedToolSample[] = [];
+  for (const { toolName, args, result } of lastToolRoundResults) {
     if (!isFixablePolicyBlockedToolResult(result)) continue;
     const message = readString((result as Record<string, unknown>).message)
       || extractToolOutputMessage(result as Record<string, unknown>);
-    policyBlockedSamples.push({ toolName, message: message.slice(0, 400) });
+    policyBlockedSamples.push({ toolName, args: { ...args }, message: message.slice(0, 400) });
   }
 
   return {

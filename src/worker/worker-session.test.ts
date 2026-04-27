@@ -1024,6 +1024,253 @@ describe('BrokeredWorkerSession automation control', () => {
     ).toHaveLength(1);
   });
 
+  it('requests policy remediation approval from structured brokered filesystem blocks and resumes afterward', async () => {
+    let toolLoopCallCount = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed filesystem tasks should not reclassify the turn.');
+      }
+
+      toolLoopCallCount += 1;
+      if (toolLoopCallCount === 1) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-list-blocked',
+            name: 'fs_list',
+            arguments: JSON.stringify({ path: 'C:\\Temp\\GuardianPolicySmoke' }),
+          }],
+        } satisfies ChatResponse;
+      }
+      if (toolLoopCallCount <= 3) {
+        return {
+          content: 'I cannot complete the request until the path is allowed.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+        } satisfies ChatResponse;
+      }
+
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId?.startsWith('policy-remediation:')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-write-after-policy',
+            name: 'fs_write',
+            arguments: JSON.stringify({
+              path: 'C:\\Temp\\GuardianPolicySmoke\\approved.txt',
+              content: 'approved\n',
+            }),
+          }],
+        } satisfies ChatResponse;
+      }
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-write-after-policy') {
+        return {
+          content: 'Created C:\\Temp\\GuardianPolicySmoke\\approved.txt.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected worker loop call ${toolLoopCallCount}`);
+    });
+
+    const callTool = vi.fn(async (request: { toolName: string; args?: Record<string, unknown> }) => {
+      if (request.toolName === 'fs_list') {
+        return {
+          success: false,
+          status: 'failed',
+          jobId: 'job-list-blocked',
+          message: "Path 'C:\\Temp\\GuardianPolicySmoke' is outside allowed paths. Use the update_tool_policy tool to add the path.",
+        };
+      }
+      if (request.toolName === 'update_tool_policy') {
+        return {
+          success: false,
+          status: 'pending_approval',
+          jobId: 'job-policy-approval',
+          approvalId: 'approval-policy-remediation',
+          message: 'Policy update awaiting approval.',
+          approvalSummary: {
+            toolName: 'update_tool_policy',
+            argsPreview: JSON.stringify(request.args),
+            actionLabel: 'Add C:\\Temp\\GuardianPolicySmoke to allowed paths',
+          },
+        };
+      }
+      if (request.toolName === 'fs_write') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-write-after-policy',
+          message: 'Wrote approved.txt.',
+          output: {
+            path: 'C:\\Temp\\GuardianPolicySmoke\\approved.txt',
+            size: 9,
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${request.toolName}`);
+    });
+    const getApprovalResult = vi.fn(async (approvalId: string) => {
+      expect(approvalId).toBe('approval-policy-remediation');
+      return {
+        success: true,
+        message: 'Policy updated.',
+        output: {
+          message: "Policy updated: add_path 'C:\\Temp\\GuardianPolicySmoke'.",
+          allowedPaths: ['C:\\Temp\\GuardianPolicySmoke'],
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'fs_list',
+          description: 'List files.',
+          risk: 'read_only',
+          category: 'filesystem',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        },
+        {
+          name: 'fs_write',
+          description: 'Write a file.',
+          risk: 'mutating',
+          category: 'filesystem',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+        {
+          name: 'update_tool_policy',
+          description: 'Update tool sandbox policy.',
+          risk: 'external_post',
+          category: 'system',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: { type: 'string' },
+              value: { type: 'string' },
+            },
+            required: ['action', 'value'],
+          },
+        },
+      ],
+      searchTools: vi.fn(async () => []),
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult,
+    } as never);
+
+    const initial = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-policy-remediation-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Create approved.txt in C:\\Temp\\GuardianPolicySmoke and continue after approval.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'filesystem_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Create a file after resolving filesystem policy.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: false,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              {
+                kind: 'write',
+                summary: 'Create the requested file.',
+                expectedToolCategories: ['fs_write'],
+                required: true,
+              },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_path',
+        value: 'C:\\Temp\\GuardianPolicySmoke',
+      },
+    }));
+    expect(initial.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          approvalSummaries: [
+            {
+              id: 'approval-policy-remediation',
+              toolName: 'update_tool_policy',
+            },
+          ],
+        },
+      },
+      delegatedResult: {
+        interruptions: [
+          {
+            kind: 'approval',
+          },
+        ],
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-policy-remediation-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-policy-remediation',
+          decision: 'approved',
+          resultMessage: 'Policy updated.',
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(resumed.content).toBe('Created C:\\Temp\\GuardianPolicySmoke\\approved.txt.');
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'fs_write',
+    }));
+  });
+
   it('synthesizes from approved tool evidence when approval resume ends without a final answer', async () => {
     const finalAnswer = 'The approved search found src/config/types.ts and src/runtime/message-router.ts.';
     const llmChat = vi.fn(async (messages, options) => {

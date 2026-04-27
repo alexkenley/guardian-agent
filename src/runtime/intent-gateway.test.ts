@@ -636,6 +636,51 @@ describe('IntentGateway', () => {
     expect(toIntentGatewayClientMetadata(restored)).not.toHaveProperty('recoveryReason');
   });
 
+  it('derives a filesystem tool-loop workload from fallback write plans', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Create a file at C:\\Temp\\guardian-approval-smoke\\approved.txt with exactly this content: hello. If the directory needs a policy allowlist update, request that approval and continue after approval.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: 'I need to add this path to the allowed paths first, then create the file.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.mode).toBe('route_only_fallback');
+    expect(result.available).toBe(false);
+    expect(result.decision).toMatchObject({
+      route: 'filesystem_task',
+      operation: 'create',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    });
+    expect(result.decision.plannedSteps?.some((step) => step.kind === 'write')).toBe(true);
+    expect(result.decision.provenance).toMatchObject({
+      route: 'derived.workload',
+      operation: 'derived.workload',
+      executionClass: 'derived.workload',
+      preferredAnswerPath: 'derived.workload',
+    });
+  });
+
   it('keeps explicit complex-planning requests on the JSON fallback path', async () => {
     const gateway = new IntentGateway();
     const request = 'Use your complex-planning path for this request. In tmp/manual-dag-smoke, create risks.txt, controls.txt, and gaps.txt with 3 short bullet points each about brokered agent isolation. Then create summary.md that turns them into a markdown table plus a final recommendation paragraph. When you finish, include the DAG plan JSON you executed.';
