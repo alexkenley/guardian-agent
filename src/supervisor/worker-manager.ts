@@ -3887,6 +3887,8 @@ export class WorkerManager {
     if (!store || !graphStore || !graphCompletion || !interruption || !workerSuspension) {
       return null;
     }
+    const originChannel = input.request.delegation?.originChannel?.trim()
+      || input.request.message.channel;
     const surfaceId = input.request.message.surfaceId?.trim()
       || input.request.delegation?.originSurfaceId?.trim()
       || input.request.message.channel;
@@ -3918,7 +3920,7 @@ export class WorkerManager {
       scope: {
         agentId: input.request.agentId,
         userId: input.request.userId,
-        channel: input.request.message.channel,
+        channel: originChannel,
         surfaceId,
       },
       event: interruption,
@@ -3986,7 +3988,7 @@ export class WorkerManager {
       ...(input.request.executionProfile ? { executionProfile: cloneSelectedExecutionProfile(input.request.executionProfile) } : {}),
       principalId: input.request.message.principalId ?? input.request.userId,
       principalRole: input.request.message.principalRole ?? 'owner',
-      channel: input.request.message.channel,
+      channel: originChannel,
       approvalIds: [...new Set(input.approvalIds)],
       expiresAt: input.expiresAt,
     };
@@ -4026,6 +4028,8 @@ export class WorkerManager {
       ?? formatPendingApprovalMessage(buildPendingApprovalMetadata(approvalIds, summaries))
       ?? 'This action needs approval before I can continue.';
     const codeContext = this.readMessageCodeContext(input.request.message);
+    const originChannel = input.request.delegation?.originChannel?.trim()
+      || input.request.message.channel;
     const surfaceId = input.request.message.surfaceId?.trim()
       || input.request.delegation?.originSurfaceId?.trim()
       || input.request.message.channel;
@@ -4037,9 +4041,9 @@ export class WorkerManager {
       return recordChatContinuationGraphApproval({
         graphStore,
         runTimeline: this.observability.runTimeline,
-        userKey: `${input.request.userId}:${input.request.message.channel}`,
+        userKey: `${input.request.userId}:${originChannel}`,
         userId: input.request.userId,
-        channel: input.request.message.channel,
+        channel: originChannel,
         surfaceId,
         agentId: this.resolvePendingActionAgentId(input.request.agentId),
         requestId: input.request.message.id,
@@ -4074,7 +4078,7 @@ export class WorkerManager {
             scope: {
               agentId: this.resolvePendingActionAgentId(input.request.agentId),
               userId: input.request.userId,
-              channel: input.request.message.channel,
+              channel: originChannel,
               surfaceId,
             },
             event: action.event,
@@ -4094,7 +4098,7 @@ export class WorkerManager {
       {
         agentId: this.resolvePendingActionAgentId(input.request.agentId),
         userId: input.request.userId,
-        channel: input.request.message.channel,
+        channel: originChannel,
         surfaceId,
       },
       {

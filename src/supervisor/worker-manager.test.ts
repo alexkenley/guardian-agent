@@ -2271,6 +2271,7 @@ describe('WorkerManager', () => {
         id?: string;
         userId?: string;
         channel?: string;
+        surfaceId?: string;
         content?: string;
         metadata?: Record<string, unknown>;
         timestamp?: number;
@@ -2280,6 +2281,8 @@ describe('WorkerManager', () => {
         | undefined;
       if (continuation?.approvalId === 'approval-graph-worker-1') {
         sawContinuation = true;
+        expect(message.channel).toBe('web');
+        expect(message.surfaceId).toBe('surface-1');
         expect(message.metadata?.workerSuspension).toBeTruthy();
         return {
           content: 'The delegated worker resumed from graph suspension state.',
@@ -2377,7 +2380,7 @@ describe('WorkerManager', () => {
         userId: 'tester',
         principalId: 'tester',
         principalRole: 'owner',
-        channel: 'web',
+        channel: 'web:surface:surface-1',
         surfaceId: 'surface-1',
         content: 'Draft an Outlook email to alex@example.com.',
         metadata: repoGroundedCodingMetadata(),
@@ -2400,6 +2403,11 @@ describe('WorkerManager', () => {
     });
 
     const pending = pendingActionStore.findActiveByApprovalId('approval-graph-worker-1');
+    expect(pending?.scope).toMatchObject({
+      userId: 'tester',
+      channel: 'web',
+      surfaceId: 'surface-1',
+    });
     expect(pending?.resume).toMatchObject({
       kind: 'execution_graph',
       payload: {

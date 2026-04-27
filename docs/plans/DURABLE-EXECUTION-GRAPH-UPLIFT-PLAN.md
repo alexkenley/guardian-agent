@@ -114,6 +114,23 @@ Checkpoint after the chat-continuation approval-resume ownership cleanup:
 - Full `npm test` passed after the payload-dispatch extraction: 310 files, 3299 tests.
 - `npm run build` passed after the payload-dispatch extraction.
 
+Checkpoint after the provider-provenance and delegated approval-scope cleanup:
+
+- Response-source metadata assembly now has one shared builder used by direct reasoning, the live tool loop, and brokered worker sessions. Selected execution profile metadata is still preserved, but the final response metadata now reports the actual provider/model returned by the runtime, including provider fallback and resolved provider aliases.
+- Direct reasoning now carries the successful provider response source out of the reasoning loop, so OpenRouter alias resolution such as selected `moonshotai/kimi-k2.6` returning `moonshotai/kimi-k2.6-20260420` is visible in response metadata instead of being overwritten by the configured alias.
+- Shared structured tool-call recovery now handles provider-tokenized tool calls such as `<|tool_call_begin|> functions.fs_write:0 <|tool_call_argument_begin|> {...}`. This fixed the live approval case where Kimi emitted a tokenized tool call as assistant text and no approval was created.
+- Delegated worker approval pending actions now scope to the origin channel/surface from delegation metadata instead of the internal surface-qualified conversation-history channel. The worker session key remains internal, but `/api/chat/pending-action?channel=web&surfaceId=...` now finds the blocked approval, and approval continuation resumes on the origin channel.
+- Focused coverage passed for the provenance and recovery changes: `npx vitest run src/runtime/direct-reasoning-mode.test.ts`, `npx vitest run src/runtime/chat-agent/live-tool-loop-controller.test.ts`, `npx vitest run src/worker/worker-session.test.ts src/worker/worker-llm-loop.test.ts src/runtime/execution-graph/delegated-worker-node.test.ts`, and `npx vitest run src/util/structured-json.test.ts src/runtime/chat-agent/live-tool-loop-controller.test.ts src/runtime/chat-agent/tool-loop-runtime.test.ts src/worker/worker-llm-loop.test.ts`.
+- Focused delegated approval-scope coverage passed: `npx vitest run src/supervisor/worker-manager.test.ts src/runtime/chat-agent/approval-orchestration.test.ts src/runtime/chat-agent/orchestration-state.test.ts src/util/structured-json.test.ts` reported 69 passing tests.
+- `npm run check` passed after the cleanup.
+- Full `npm test` passed after the cleanup: 310 files, 3301 tests.
+- `npm run build` passed after the cleanup.
+- The actual app was rebuilt, restarted with `scripts/start-dev-windows.ps1 -StartOnly`, and `GET http://localhost:3000/api/status` confirmed the live API was running.
+- Live OpenRouter API sweep proved exact-answer provider metadata (`live-exact-prov-84e21390`), fresh-surface isolation (`live-fresh-84e21390`), same-surface continuity (`live-cont-store-84e21390` / `live-cont-recall-84e21390`), direct-reasoning resolved provider metadata (`live-direct-reason-84e21390`), and security refusal without secret leakage (`live-security-refusal-5e889a6d`).
+- Live approval continuity replay with request id `live-approval-write-49686870` temporarily set `fs_write` to manual, created pending action `e38a39ca-8622-42f0-bb84-5286ef73c3ec` on origin `{ channel: "web", surfaceId: "codex-live-approval-49686870" }`, approved `599f9d17-ceac-419e-9b88-1cb20f60fd15` through `/api/tools/approvals/decision`, wrote the exact marker, cleared the pending action, and restored policy to `auto`.
+- OpenRouter delegated tool prompts currently hit an account/provider limit in the live environment (`402 Prompt tokens limit exceeded: 9084 > 2147`) and correctly fall through the configured provider chain. This is not a Kimi response-quality or guardrail issue; it is provider/account capacity plus runtime fallback behavior.
+- Ollama Cloud simple managed-cloud exact-answer replay passed with request id `live-ollama-exact-e64747a0` on `ollama-cloud-direct` / `minimax-m2.1` without fallback. The `ollama-cloud-tools` / `glm-4.7` approval replay did not enter the delegated tool loop because Intent Gateway fell back to `route=unknown` and the model returned pseudo-call text; treat that as provider/profile verification work, not a routing keyword workaround.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.

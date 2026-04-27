@@ -1,4 +1,6 @@
+import type { ChatResponse } from '../llm/types.js';
 import { formatProviderTierLabel, getProviderLocality, getProviderTier } from '../llm/provider-metadata.js';
+import type { SelectedExecutionProfile } from './execution-profiles.js';
 
 export interface ResponseUsageMetadata {
   promptTokens: number;
@@ -53,6 +55,91 @@ function formatProviderName(providerName: string): string {
 
 function normalizeProviderIdentity(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function readResponseProviderName(response: ChatResponse | undefined): string {
+  if (!response || typeof response !== 'object') return '';
+  const value = (response as unknown as Record<string, unknown>).providerName;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readResponseProviderLocality(response: ChatResponse | undefined): 'local' | 'external' | undefined {
+  if (!response || typeof response !== 'object') return undefined;
+  const value = (response as unknown as Record<string, unknown>).providerLocality;
+  return value === 'local' || value === 'external' ? value : undefined;
+}
+
+export function buildChatResponseSourceMetadata(input: {
+  response?: ChatResponse;
+  selectedExecutionProfile?: Pick<
+    SelectedExecutionProfile,
+    'providerLocality' | 'providerModel' | 'providerName' | 'providerTier' | 'providerType'
+  > | null;
+  providerName?: string;
+  providerLocality?: 'local' | 'external';
+  usedFallback?: boolean;
+  notice?: string;
+  durationMs?: number;
+}): ResponseSourceMetadata | undefined {
+  const executionProfile = input.selectedExecutionProfile;
+  const actualProviderName = input.providerName?.trim() || readResponseProviderName(input.response);
+  const actualProviderIdentity = normalizeProviderIdentity(actualProviderName);
+  const selectedProviderIdentity = normalizeProviderIdentity(executionProfile?.providerName);
+  const selectedProviderTypeIdentity = normalizeProviderIdentity(executionProfile?.providerType);
+  const useSelectedExecutionProfile = !!executionProfile
+    && (
+      !actualProviderName
+      || actualProviderIdentity === selectedProviderIdentity
+      || actualProviderIdentity === selectedProviderTypeIdentity
+    );
+  const usedProviderFallback = !!executionProfile
+    && !!actualProviderIdentity
+    && !useSelectedExecutionProfile;
+  const providerName = useSelectedExecutionProfile
+    ? executionProfile.providerType
+    : (actualProviderName || executionProfile?.providerType || '');
+  const providerProfileName = useSelectedExecutionProfile
+    && executionProfile.providerName !== executionProfile.providerType
+    ? executionProfile.providerName
+    : undefined;
+  const locality = input.providerLocality
+    ?? readResponseProviderLocality(input.response)
+    ?? (useSelectedExecutionProfile
+      ? executionProfile?.providerLocality
+      : getProviderLocalityFromName(providerName));
+  if (!locality) return undefined;
+  const providerTier = useSelectedExecutionProfile
+    ? executionProfile.providerTier
+    : (getProviderTier(providerName) ?? (locality === 'local' ? 'local' : undefined));
+  const model = input.response?.model?.trim() || executionProfile?.providerModel?.trim() || '';
+  const usage = input.response?.usage;
+  return {
+    locality,
+    ...(providerName ? { providerName } : {}),
+    ...(providerProfileName ? { providerProfileName } : {}),
+    ...(providerTier ? { providerTier } : {}),
+    ...(model ? { model } : {}),
+    usedFallback: input.usedFallback === true || usedProviderFallback,
+    ...(input.notice ? { notice: input.notice } : {}),
+    ...(typeof input.durationMs === 'number' && Number.isFinite(input.durationMs)
+      ? { durationMs: Math.max(0, input.durationMs) }
+      : {}),
+    ...(usage
+      ? {
+          usage: {
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            totalTokens: usage.totalTokens,
+            ...(typeof usage.cacheCreationTokens === 'number'
+              ? { cacheCreationTokens: usage.cacheCreationTokens }
+              : {}),
+            ...(typeof usage.cacheReadTokens === 'number'
+              ? { cacheReadTokens: usage.cacheReadTokens }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function formatProviderProfileName(providerName: string | undefined, providerProfileName: string | undefined): string {

@@ -61,6 +61,36 @@ describe('structured-json', () => {
     ]);
   });
 
+  it('recovers provider tokenized tool calls from assistant text', () => {
+    const recovered = recoverToolCallsFromStructuredText(
+      [
+        'I will create that now.',
+        '<|tool_calls_section_begin|>',
+        '<|tool_call_begin|> functions.fs_write:0 <|tool_call_argument_begin|>',
+        '{"path":"S:\\\\Development\\\\GuardianAgent\\\\tmp\\\\live-approval.txt","content":"APPROVAL-LIVE-27491"}',
+        '<|tool_call_end|>',
+        '<|tool_calls_section_end|>',
+      ].join(' '),
+      [{ name: 'fs_write' }, { name: 'fs_read' }],
+    );
+
+    expect(recovered).toMatchObject({
+      flags: ['provider_tool_tokens'],
+      confidence: 'medium',
+      repaired: true,
+    });
+    expect(recovered?.toolCalls).toEqual([
+      {
+        id: 'recovered-tool-call-1',
+        name: 'fs_write',
+        arguments: JSON.stringify({
+          path: 'S:\\Development\\GuardianAgent\\tmp\\live-approval.txt',
+          content: 'APPROVAL-LIVE-27491',
+        }),
+      },
+    ]);
+  });
+
   it('normalizes malformed tool-call names that were serialized as JSON wrappers', () => {
     const normalized = normalizeToolCallsForExecution(
       [

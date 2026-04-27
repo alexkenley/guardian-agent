@@ -244,6 +244,114 @@ describe('direct reasoning mode', () => {
     });
   });
 
+  it('reports the actual provider response model for direct reasoning metadata', async () => {
+    let callNumber = 0;
+    const resolvedModel = 'moonshotai/kimi-k2.6-20260420';
+    const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      callNumber += 1;
+      const attribution = {
+        providerName: 'openrouter-direct',
+        providerLocality: 'external' as const,
+      };
+      if (callNumber === 1) {
+        return {
+          ...chatResponse({
+            finishReason: 'tool_calls',
+            model: resolvedModel,
+            toolCalls: [
+              {
+                id: 'call-search',
+                name: 'fs_search',
+                arguments: JSON.stringify({ query: 'direct reasoning response source', mode: 'content' }),
+              },
+            ],
+          }),
+          ...attribution,
+        } as ChatResponse;
+      }
+      if ((options?.tools?.length ?? 0) === 0) {
+        return {
+          ...chatResponse({
+            content: 'Grounded synthesis cites src/runtime/direct-reasoning-mode.ts from the observed evidence.',
+            model: resolvedModel,
+            usage: {
+              promptTokens: 120,
+              completionTokens: 20,
+              totalTokens: 140,
+            },
+          }),
+          ...attribution,
+        } as ChatResponse;
+      }
+      return {
+        ...chatResponse({
+          content: 'The relevant implementation is src/runtime/direct-reasoning-mode.ts.',
+          model: resolvedModel,
+        }),
+        ...attribution,
+      } as ChatResponse;
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        query: 'direct reasoning response source',
+        matches: [
+          {
+            path: 'src/runtime/direct-reasoning-mode.ts',
+            line: 369,
+            snippet: 'export async function handleDirectReasoningMode(',
+          },
+        ],
+      },
+    }));
+
+    const result = await handleDirectReasoningMode({
+      message: 'Inspect direct reasoning response source metadata. Do not edit anything.',
+      gateway: gateway({
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Find direct reasoning metadata code.',
+            expectedToolCategories: ['search'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Answer from repo evidence.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile({
+        providerName: 'openrouter-direct',
+        providerType: 'openrouter',
+        providerModel: 'moonshotai/kimi-k2.6',
+        fallbackProviderOrder: ['openrouter-direct'],
+      }),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+    }, {
+      chat,
+      executeTool,
+    });
+
+    expect(result.metadata?.responseSource).toMatchObject({
+      locality: 'external',
+      providerName: 'openrouter',
+      providerProfileName: 'openrouter-direct',
+      providerTier: 'managed_cloud',
+      model: resolvedModel,
+      usedFallback: false,
+      usage: {
+        promptTokens: 120,
+        completionTokens: 20,
+        totalTokens: 140,
+      },
+    });
+    expect((result.metadata?.responseSource as { model?: string }).model).not.toBe('moonshotai/kimi-k2.6');
+  });
+
   it('does not select brokered direct reasoning when planned evidence requires web search', () => {
     expect(shouldHandleDirectReasoningMode({
       gateway: gateway({

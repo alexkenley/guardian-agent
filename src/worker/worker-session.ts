@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { UserMessage } from '../agent/types.js';
-import { getProviderTier } from '../llm/provider-metadata.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { ContentTrustLevel, ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import {
@@ -9,6 +8,7 @@ import {
 } from '../runtime/pending-approval-copy.js';
 import { sanitizePendingActionPrompt } from '../runtime/pending-actions.js';
 import {
+  buildChatResponseSourceMetadata,
   buildLocalModelTooComplicatedMessage,
   isLocalToolCallParseError,
   shouldBypassLocalModelComplexityGuard,
@@ -1277,10 +1277,6 @@ function buildExecutionProfileResponseSource(
   };
 }
 
-function normalizeProviderIdentity(value: string | undefined): string {
-  return (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-}
-
 function buildChatResponseSource(
   response: BrokeredChatResponse,
   executionProfile: SelectedExecutionProfile | null | undefined,
@@ -1289,42 +1285,14 @@ function buildChatResponseSource(
     notice?: string;
   },
 ): ResponseSourceMetadata | undefined {
-  if (response.providerLocality !== 'local' && response.providerLocality !== 'external') {
-    return undefined;
-  }
-  const actualProviderName = typeof response.providerName === 'string'
-    ? response.providerName.trim()
-    : '';
-  const actualProviderIdentity = normalizeProviderIdentity(actualProviderName);
-  const selectedProviderIdentity = normalizeProviderIdentity(executionProfile?.providerName);
-  const selectedProviderTypeIdentity = normalizeProviderIdentity(executionProfile?.providerType);
-  const useSelectedExecutionProfile = !!executionProfile
-    && (
-      !actualProviderName
-      || actualProviderIdentity === selectedProviderIdentity
-      || actualProviderIdentity === selectedProviderTypeIdentity
-    );
-  const usedProviderFallback = !!executionProfile
-    && !!actualProviderIdentity
-    && !useSelectedExecutionProfile;
-  const providerName = useSelectedExecutionProfile
-    ? executionProfile.providerType
-    : actualProviderName;
-  const providerProfileName = useSelectedExecutionProfile
-    && executionProfile.providerName !== executionProfile.providerType
-    ? executionProfile.providerName
-    : undefined;
-  return {
-    locality: response.providerLocality,
-    ...(providerName ? { providerName } : {}),
-    ...(providerProfileName ? { providerProfileName } : {}),
-    ...((useSelectedExecutionProfile ? executionProfile.providerTier : getProviderTier(providerName))
-      ? { providerTier: (useSelectedExecutionProfile ? executionProfile.providerTier : getProviderTier(providerName)) }
-      : {}),
-    ...(response.model?.trim() ? { model: response.model.trim() } : {}),
-    usedFallback: options.usedFallback || usedProviderFallback,
-    ...(options.notice ? { notice: options.notice } : {}),
-  };
+  return buildChatResponseSourceMetadata({
+    response,
+    selectedExecutionProfile: executionProfile,
+    providerName: response.providerName,
+    providerLocality: response.providerLocality,
+    usedFallback: options.usedFallback,
+    notice: options.notice,
+  });
 }
 
 function createPlannerPauseControl(result: unknown): PlanExecutionPauseControl {

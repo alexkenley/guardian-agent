@@ -7,7 +7,8 @@ export type StructuredJsonRepairFlag =
   | 'trailing_commas'
   | 'python_literals'
   | 'single_quotes'
-  | 'control_chars';
+  | 'control_chars'
+  | 'provider_tool_tokens';
 
 export interface StructuredJsonParseResult<T = unknown> {
   value: T;
@@ -101,9 +102,6 @@ export function recoverToolCallsFromStructuredText(
   content: string,
   availableTools: ReadonlyArray<Pick<ToolDefinition, 'name'>>,
 ): RecoveredToolCallSet | null {
-  const parsed = parseStructuredJsonValueDetailed(content);
-  if (!parsed) return null;
-
   const toolNames = new Set(
     availableTools
       .map((tool) => tool.name.trim())
@@ -111,8 +109,15 @@ export function recoverToolCallsFromStructuredText(
   );
   if (toolNames.size === 0) return null;
 
+  const parsed = parseStructuredJsonValueDetailed(content);
+  if (!parsed) {
+    return recoverProviderTokenToolCalls(content, toolNames);
+  }
+
   const normalizedCalls = normalizeRecoveredToolCalls(parsed.value, toolNames);
-  if (normalizedCalls.length === 0) return null;
+  if (normalizedCalls.length === 0) {
+    return recoverProviderTokenToolCalls(content, toolNames);
+  }
 
   return {
     toolCalls: normalizedCalls.map((call, index) => ({
@@ -376,6 +381,57 @@ function normalizeRecoveredToolCalls(
   }
 
   return recovered;
+}
+
+function recoverProviderTokenToolCalls(
+  content: string,
+  allowedToolNames: ReadonlySet<string>,
+): RecoveredToolCallSet | null {
+  if (!content.includes('<|tool_call_begin|>') || !content.includes('<|tool_call_argument_begin|>')) {
+    return null;
+  }
+
+  const recovered: Array<{ name: string; arguments: string }> = [];
+  const callPattern = /<\|tool_call_begin\|>\s*(?:functions\.)?([A-Za-z0-9_.-]+)(?::\d+)?\s*<\|tool_call_argument_begin\|>/g;
+  let match: RegExpExecArray | null;
+  while ((match = callPattern.exec(content)) !== null) {
+    const rawName = match[1]?.trim() ?? '';
+    const name = normalizeProviderTokenToolName(rawName);
+    if (!name || !allowedToolNames.has(name)) continue;
+
+    const argsStart = callPattern.lastIndex;
+    const argsEnd = findProviderTokenToolCallEnd(content, argsStart);
+    const argsText = content.slice(argsStart, argsEnd).trim();
+    const parsedArgs = parseStructuredJsonValueDetailed(argsText);
+    if (!parsedArgs) continue;
+    recovered.push({
+      name,
+      arguments: serializeRecoveredToolArguments(parsedArgs.value),
+    });
+  }
+
+  if (recovered.length === 0) return null;
+  return {
+    toolCalls: recovered.map((call, index) => ({
+      id: `recovered-tool-call-${index + 1}`,
+      name: call.name,
+      arguments: call.arguments,
+    })),
+    flags: ['provider_tool_tokens'],
+    confidence: 'medium',
+    repaired: true,
+  };
+}
+
+function normalizeProviderTokenToolName(rawName: string): string {
+  return rawName.trim().replace(/^functions\./, '');
+}
+
+function findProviderTokenToolCallEnd(content: string, startIndex: number): number {
+  const endPattern = /<\|tool_call_end\|>|<\|tool_calls_section_end\|>|<\|tool_call_begin\|>/g;
+  endPattern.lastIndex = startIndex;
+  const endMatch = endPattern.exec(content);
+  return endMatch?.index ?? content.length;
 }
 
 function normalizeToolCallForExecution(

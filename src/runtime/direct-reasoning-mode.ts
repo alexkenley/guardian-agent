@@ -42,6 +42,10 @@ import {
 import { deriveAnswerConstraints } from './intent/request-patterns.js';
 import { hasRequiredWritePlannedStep } from './intent/planned-steps.js';
 import { normalizeIntentGatewayRepairText } from './intent/text.js';
+import {
+  buildChatResponseSourceMetadata,
+  type ResponseSourceMetadata,
+} from './model-routing-ux.js';
 import { isReadLikeOperation } from './orchestration-role-contracts.js';
 
 export interface DirectReasoningTraceContext {
@@ -110,6 +114,7 @@ export interface DirectReasoningLoopResult {
   artifactIds: string[];
   executionGraphArtifacts?: ExecutionArtifact[];
   synthesized: boolean;
+  responseSource?: ResponseSourceMetadata;
 }
 
 interface DirectReasoningEvidenceEntry {
@@ -490,6 +495,7 @@ export async function handleDirectReasoningMode(
       ...(input.returnExecutionGraphArtifacts && loopResult.executionGraphArtifacts
         ? { executionGraphArtifacts: loopResult.executionGraphArtifacts }
         : {}),
+      ...(loopResult.responseSource ? { responseSource: loopResult.responseSource } : {}),
       ...(qualityNotes.length > 0 ? { qualityNotes } : {}),
     },
   };
@@ -514,6 +520,18 @@ export async function executeDirectReasoningLoop(input: {
   let turns = 0;
   let noEvidenceRetryUsed = false;
   let weakEvidenceRetryUsed = false;
+  let responseSource: ResponseSourceMetadata | undefined;
+  const rememberResponseSource = (response: ChatResponse | null | undefined): void => {
+    if (!response) return;
+    const source = buildChatResponseSourceMetadata({
+      response,
+      selectedExecutionProfile: input.input.selectedExecutionProfile,
+      usedFallback: false,
+    });
+    if (source) {
+      responseSource = source;
+    }
+  };
   const evidence: DirectReasoningEvidenceEntry[] = [];
   const artifactState: DirectReasoningArtifactState = {
     context: input.graphEmitter?.context ?? input.input.graphContext ?? buildDirectReasoningGraphContext({
@@ -602,6 +620,7 @@ export async function executeDirectReasoningLoop(input: {
         break;
       }
     }
+    rememberResponseSource(chatResponse);
     if (chatResponse && chatResponseAttempt === 1) {
       recordDirectReasoningLlmCall(input, 'completed', {
         phase: 'exploration',
@@ -816,6 +835,7 @@ export async function executeDirectReasoningLoop(input: {
         artifactCount: synthesisArtifacts.length,
       });
       if (synthesisContent.trim()) {
+        rememberResponseSource(finalResponse);
         const missingCoverageFiles = findMissingDirectReasoningSynthesisCoverageFiles({
           content: synthesisContent,
           evidence,
@@ -868,6 +888,7 @@ export async function executeDirectReasoningLoop(input: {
           });
           if (revisionResponse?.content?.trim()) {
             synthesisContent = revisionResponse.content;
+            rememberResponseSource(revisionResponse);
           }
           recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_synthesis_coverage_revision', {
             route: input.input.gateway?.decision.route,
@@ -1010,6 +1031,7 @@ export async function executeDirectReasoningLoop(input: {
           ? { executionGraphArtifacts: artifactState.artifacts.map(cloneExecutionArtifact) }
           : {}),
         synthesized,
+        ...(responseSource ? { responseSource } : {}),
       }
     : null;
 }

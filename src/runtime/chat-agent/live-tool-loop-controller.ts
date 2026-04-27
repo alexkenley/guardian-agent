@@ -12,7 +12,6 @@ import {
   toString,
 } from '../../chat-agent-helpers.js';
 import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider } from '../../llm/types.js';
-import { getProviderTier } from '../../llm/provider-metadata.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 import type { ContentTrustLevel } from '../../tools/types.js';
 import { isDirectMemorySaveRequest } from '../../util/memory-intent.js';
@@ -36,7 +35,10 @@ import type { SecondBrainService } from '../second-brain/second-brain-service.js
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type { PendingActionRecord } from '../pending-actions.js';
-import type { ResponseSourceMetadata } from '../model-routing-ux.js';
+import {
+  buildChatResponseSourceMetadata,
+  type ResponseSourceMetadata,
+} from '../model-routing-ux.js';
 import { isPhantomPendingApprovalMessage } from '../pending-approval-copy.js';
 import type { ChatWithRoutingMetadataResult } from './provider-fallback.js';
 import { chatWithAlternateProvider as chatWithAlternateProviderHelper } from './provider-fallback.js';
@@ -188,52 +190,15 @@ export async function runLiveToolLoopController(
     usedFallback: boolean;
     notice?: string;
     durationMs?: number;
-  }): ResponseSourceMetadata => {
-    const selectedExecutionProfile = input.selectedExecutionProfile;
-    const actualProviderName = metadataInput.providerName.trim();
-    const useSelectedExecutionProfile = !!selectedExecutionProfile
-      && (
-        !actualProviderName
-        || actualProviderName === selectedExecutionProfile.providerName
-        || actualProviderName === selectedExecutionProfile.providerType
-      );
-    const providerName = useSelectedExecutionProfile
-      ? selectedExecutionProfile.providerType
-      : actualProviderName;
-    const providerProfileName = useSelectedExecutionProfile
-      && selectedExecutionProfile.providerName !== selectedExecutionProfile.providerType
-      ? selectedExecutionProfile.providerName
-      : undefined;
-    return {
-      locality: metadataInput.locality,
-      ...(providerName ? { providerName } : {}),
-      ...(providerProfileName ? { providerProfileName } : {}),
-      ...((useSelectedExecutionProfile ? selectedExecutionProfile.providerTier : getProviderTier(providerName))
-        ? { providerTier: (useSelectedExecutionProfile ? selectedExecutionProfile.providerTier : getProviderTier(providerName)) }
-        : {}),
-      ...(metadataInput.response.model?.trim() ? { model: metadataInput.response.model.trim() } : {}),
-      usedFallback: metadataInput.usedFallback,
-      ...(metadataInput.notice ? { notice: metadataInput.notice } : {}),
-      ...(typeof metadataInput.durationMs === 'number' && Number.isFinite(metadataInput.durationMs)
-        ? { durationMs: Math.max(0, metadataInput.durationMs) }
-        : {}),
-      ...(metadataInput.response.usage
-        ? {
-            usage: {
-              promptTokens: metadataInput.response.usage.promptTokens,
-              completionTokens: metadataInput.response.usage.completionTokens,
-              totalTokens: metadataInput.response.usage.totalTokens,
-              ...(typeof metadataInput.response.usage.cacheCreationTokens === 'number'
-                ? { cacheCreationTokens: metadataInput.response.usage.cacheCreationTokens }
-                : {}),
-              ...(typeof metadataInput.response.usage.cacheReadTokens === 'number'
-                ? { cacheReadTokens: metadataInput.response.usage.cacheReadTokens }
-                : {}),
-            },
-          }
-        : {}),
-    };
-  };
+  }): ResponseSourceMetadata | undefined => buildChatResponseSourceMetadata({
+    response: metadataInput.response,
+    selectedExecutionProfile: input.selectedExecutionProfile,
+    providerName: metadataInput.providerName,
+    providerLocality: metadataInput.locality,
+    usedFallback: metadataInput.usedFallback,
+    notice: metadataInput.notice,
+    durationMs: metadataInput.durationMs,
+  });
 
   const gwsProvider = input.enabledManagedProviders?.has('gws')
     && (directIntentDecision?.route === 'workspace_task' || directIntentDecision?.route === 'email_task')
