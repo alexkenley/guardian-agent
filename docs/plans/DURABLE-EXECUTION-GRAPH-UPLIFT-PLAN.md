@@ -993,6 +993,15 @@ Status:
 - Delegated worker job metadata now carries the same durable execution graph reference so operator job views can correlate delegated work with timeline graph events.
 - Refactor target: remove the interim delegated retry/handoff paths as part of the slice that makes delegated workers graph node runners.
 
+Live API checkpoint after the broad capability smoke pass:
+
+- `scripts/start-dev-windows.ps1 -StartOnly` was running the real app at `http://localhost:3000`; `GET /api/status` returned `status=running`.
+- `/api/message` exact-answer smoke passed with Ollama Cloud managed-cloud routing (`ollama_cloud`, `ollama-cloud-direct`, `minimax-m2.1`, no fallback) after OpenRouter delegated requests hit account/context limits rather than model-quality or guardrail failures.
+- Direct tool API smoke passed after deferred discovery through `find_tools`: `web_fetch` on `https://example.com`, DuckDuckGo `web_search`, Playwright-backed `browser_navigate` and `browser_read`, `automation_list`, and `memory_save`.
+- `memory_search` was proven with the correct split search contract (`scope=persistent`, `persistentScope=global`) and found the smoke marker written by `memory_save`.
+- Second Brain mutating tools behaved as expected: `second_brain_note_upsert` and `second_brain_note_delete` returned pending approvals, approval decisions executed the tools, the note was visible after approve, and the cleanup delete removed it.
+- Smoke artifacts were written under `tmp/live-api-sweep/` and intentionally not tracked. Remaining live-smoke expansion should cover natural-language automation authoring/control, web UI approval rendering, multi-domain delegated requests, and longer graph-timeline observability once the next cleanup slice lands.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
