@@ -1934,6 +1934,121 @@ describe('direct reasoning mode', () => {
     ))).toBe(true);
   });
 
+  it('expands strict file-path synthesis through concrete imports from already-read evidence', async () => {
+    let synthesisCallCount = 0;
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        const toolResultCount = messages.filter((message) => message.role === 'tool').length;
+        if (toolResultCount === 0) {
+          return chatResponse({
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'broad-search',
+                name: 'fs_search',
+                arguments: JSON.stringify({ path: 'src/supervisor', query: 'delegated worker', mode: 'content' }),
+              },
+            ],
+          });
+        }
+        if (toolResultCount === 1) {
+          return chatResponse({
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'read-worker-manager',
+                name: 'fs_read',
+                arguments: JSON.stringify({ path: 'src/supervisor/worker-manager.ts' }),
+              },
+            ],
+          });
+        }
+        return chatResponse({ content: 'src/agent/orchestration.ts' });
+      }
+      synthesisCallCount += 1;
+      expect(messages.map((message) => message.content).join('\n')).toContain('src/runtime/execution-graph/delegated-worker-retry.ts');
+      return chatResponse({ content: 'src/runtime/execution-graph/delegated-worker-retry.ts' });
+    });
+    const contentByPath: Record<string, string> = {
+      'src/supervisor/worker-manager.ts': [
+        "import { appendDelegatedRetrySection, buildDelegatedRetryableFailure } from '../runtime/execution-graph/delegated-worker-retry.js';",
+        'function retryDelegatedWorker() { return buildDelegatedRetryableFailure(decision, envelope); }',
+      ].join('\n'),
+      'src/runtime/execution-graph/delegated-worker-retry.ts': [
+        'export function buildDelegatedRetryableFailure() { return null; }',
+        'export function appendDelegatedRetrySection() { return []; }',
+        'export function shouldRetryDelegatedAnswerSynthesisOnSameProfile() { return true; }',
+      ].join('\n'),
+    };
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'fs_read') {
+        const path = String(args.path ?? '');
+        const content = contentByPath[path] ?? '';
+        return {
+          success: true,
+          status: 'succeeded',
+          output: { path, bytes: content.length, content },
+        };
+      }
+      const query = String(args.query ?? '');
+      const matches: Array<{ relativePath: string; matchType: string; snippet?: string }> = [];
+      if (query === 'delegated worker') {
+        matches.push({
+          relativePath: 'worker-manager.ts',
+          matchType: 'content',
+          snippet: 'function retryDelegatedWorker() { return buildDelegatedRetryableFailure(decision, envelope); }',
+        });
+      }
+      if (query === 'delegated-worker-retry.js' || query === 'delegated-worker-retry') {
+        matches.push({
+          relativePath: 'src/runtime/execution-graph/delegated-worker-retry.ts',
+          matchType: 'name',
+          snippet: 'delegated-worker-retry.ts',
+        });
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        output: { query, matches, truncated: false },
+      };
+    });
+    const traceEntries: Array<Record<string, unknown>> = [];
+    const request = 'Inspect this repo and tell me which files implement delegated worker retry policy. Do not edit anything. Reply with only comma-separated relative file paths.';
+
+    const result = await handleDirectReasoningMode({
+      message: request,
+      gateway: gateway({
+        operation: 'inspect',
+        resolvedContent: request,
+        requireExactFileReferences: true,
+      }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      maxTurns: 3,
+    }, {
+      chat,
+      executeTool,
+      trace: {
+        record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
+      },
+    });
+
+    expect(result.content).toBe('src/runtime/execution-graph/delegated-worker-retry.ts');
+    expect(synthesisCallCount).toBe(1);
+    expect(executeTool).toHaveBeenCalledWith('fs_search', expect.objectContaining({
+      path: 'src',
+      query: 'delegated-worker-retry',
+      mode: 'content',
+    }), expect.any(Object));
+    expect(executeTool).toHaveBeenCalledWith('fs_read', expect.objectContaining({
+      path: 'src/runtime/execution-graph/delegated-worker-retry.ts',
+    }), expect.any(Object));
+    expect(traceEntries.some((entry) => (
+      entry.stage === 'direct_reasoning_evidence_hydration'
+      && (entry.details as Record<string, unknown> | undefined)?.phase === 'expansion_search_started'
+    ))).toBe(true);
+  });
+
   it('completes directly evidenced web-page consumers without requiring gateway exact-file flags', async () => {
     let noToolCallCount = 0;
     const chat = vi.fn(async (_messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {

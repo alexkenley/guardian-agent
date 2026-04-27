@@ -198,6 +198,13 @@ Checkpoint after the automation-control routing and direct-rendering cleanup:
 - `npm run check`, `npm test` (311 files / 3329 tests), and `npm run build` passed after the cleanup.
 - Live `/api/message` replay on the rebuilt app with request id `codex-strict-paths-fix2-839125` and request-scoped Ollama Cloud managed-cloud profile `ollama-cloud` / `gpt-oss:120b` returned exactly `src/runtime/execution-graph/delegated-worker-retry.ts` for the strict comma-separated delegated retry-policy repo-inspection prompt. Trace/context assembly stayed on the current repo request, direct reasoning ran in brokered read-only mode, and no stale credential-refusal content leaked into the turn.
 
+> Checkpoint after strict direct-reasoning evidence hydration cleanup:
+
+- Direct Reasoning Mode now runs the existing evidence-hydration pass before grounded synthesis for strict comma-separated exact-file requests even when exploration produced premature final text. The hydration pass no longer exits early when all currently searched files have already been read, so it can follow concrete imports and other code references from those already-read artifacts.
+- This cleanup does not add keyword routing, request stop-word filtering, or request-derived search-query generation. The earlier experimental request-token search approach was removed before commit; the retained behavior is evidence expansion from typed brokered `fs_search` / `fs_read` artifacts.
+- Focused coverage passed: `npx vitest run src/runtime/direct-reasoning-mode.test.ts` reported 31 passing tests. `npm run check` and `npm run build` passed after the cleanup.
+- Live `/api/message` replay on the rebuilt app with request id `live-strict-import-expand-6a24012c` and request-scoped Ollama Cloud managed-cloud profile `ollama-cloud` / `gpt-oss:120b` returned exactly `src/runtime/execution-graph/delegated-worker-retry.ts` for the strict comma-separated delegated retry-policy repo-inspection prompt. Trace showed direct reasoning, evidence hydration, grounded synthesis, deterministic coverage revision, and no provider fallback.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.

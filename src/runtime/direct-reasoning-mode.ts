@@ -759,7 +759,12 @@ export async function executeDirectReasoningLoop(input: {
   }
 
   let synthesized = false;
-  if (directReasoningHasUsefulEvidence(evidence) && !finalContent.trim()) {
+  const shouldHydrateEvidence = directReasoningHasUsefulEvidence(evidence)
+    && (
+      !finalContent.trim()
+      || shouldHydrateDirectReasoningEvidenceBeforeGroundedSynthesis(input.input, evidence, finalContent)
+    );
+  if (shouldHydrateEvidence) {
     const remainingForHydrationMs = maxTotalTimeMs - (now() - startedAt);
     if (remainingForHydrationMs > FINAL_RESPONSE_RESERVE_MS + 1_000) {
       toolCallCount += await hydrateDirectReasoningEvidenceFromSearch({
@@ -1257,30 +1262,28 @@ async function hydrateDirectReasoningEvidenceFromSearch(input: {
     DIRECT_REASONING_MAX_AUTO_EVIDENCE_READS,
   );
 
-  if (candidates.length === 0) {
-    return 0;
-  }
-
-  recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_hydration', {
-    phase: 'auto_read_started',
-    turn: input.turn,
-    candidateCount: candidates.length,
-    candidates: candidates.map((candidate) => ({
-      file: candidate.file,
-      score: directReasoningAutoEvidenceFileScore(candidate),
-      searchCount: candidate.searchCount,
-      listCount: candidate.listCount,
-      referenceCount: candidate.referenceCount,
-      symbolCount: candidate.symbols.size,
-    })),
-  });
-
   let hydrated = 0;
-  hydrated += await hydrateDirectReasoningCandidateReads({
-    ...input,
-    candidates,
-    idPrefix: 'auto-read',
-  });
+  if (candidates.length > 0) {
+    recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_hydration', {
+      phase: 'auto_read_started',
+      turn: input.turn,
+      candidateCount: candidates.length,
+      candidates: candidates.map((candidate) => ({
+        file: candidate.file,
+        score: directReasoningAutoEvidenceFileScore(candidate),
+        searchCount: candidate.searchCount,
+        listCount: candidate.listCount,
+        referenceCount: candidate.referenceCount,
+        symbolCount: candidate.symbols.size,
+      })),
+    });
+
+    hydrated += await hydrateDirectReasoningCandidateReads({
+      ...input,
+      candidates,
+      idPrefix: 'auto-read',
+    });
+  }
 
   if (hasSufficientDirectReasoningHydratedCoverage(input.evidence)) {
     recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_hydration', {
@@ -1529,13 +1532,25 @@ function hasSufficientDirectReasoningHydratedCoverage(evidence: DirectReasoningE
   return readPrimary.length >= 6;
 }
 
+function shouldHydrateDirectReasoningEvidenceBeforeGroundedSynthesis(
+  input: DirectReasoningInput,
+  _evidence: DirectReasoningEvidenceEntry[],
+  _finalContent: string,
+): boolean {
+  if (!directReasoningRequiresImplementationFileCoverage(input)) {
+    return false;
+  }
+  return directReasoningRequestsCommaSeparatedFilePaths(input);
+}
+
 function shouldExpandDirectReasoningEvidenceFromFile(file: string): boolean {
   return file.startsWith('web/public/js/pages/')
     || file.startsWith('web/public/js/components/')
     || file === 'web/public/js/chat-panel.js'
     || file === 'web/public/js/chat-run-tracking.js'
     || file === 'src/runtime/run-timeline.ts'
-    || file.startsWith('src/runtime/execution-graph/');
+    || file.startsWith('src/runtime/execution-graph/')
+    || (file.startsWith('src/') && !file.startsWith('src/runtime/intent/'));
 }
 
 function directReasoningExpansionSearchRoot(file: string): string {
