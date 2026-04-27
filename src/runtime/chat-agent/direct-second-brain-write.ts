@@ -54,6 +54,75 @@ interface DirectSecondBrainMutationExecutor<TFocusState> {
   ): Promise<string | { content: string; metadata?: Record<string, unknown> }>;
 }
 
+function sentenceCaseSecondBrainTitle(value: string): string {
+  const trimmed = value.trim();
+  return trimmed ? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}` : '';
+}
+
+function stripSecondBrainTitleTemporalText(value: string): string {
+  let next = value.trim();
+  next = next.replace(/^(?:me|myself)\b\s*/i, '');
+  next = next.replace(/^(?:(?:for|on|by|around|at)\s+)?(?:today|tomorrow|tonight|yesterday)\b\s*/i, '');
+  next = next.replace(/^(?:(?:for|on|by|around|at)\s+)?(?:next|this)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b\s*/i, '');
+  next = next.replace(/^(?:(?:for|on|by|around|at)\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b\s*/i, '');
+  next = next.replace(/^(?:at|around|by)?\s*(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m?\.?)?|\d{1,2}:\d{2}|noon|midnight)\b\s*/i, '');
+  next = next.replace(/^(?:to|for)\s+/i, '');
+  next = next.replace(/^(?:an?|the)\s+/i, '');
+  next = next.replace(/\s+\b(?:today|tomorrow|tonight|yesterday)\b.*$/i, '');
+  next = next.replace(/\s+\b(?:next|this)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b.*$/i, '');
+  next = next.replace(/\s+\bat\s+(?!(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m?\.?)?|\d{1,2}:\d{2}|noon|midnight)\b).+$/i, '');
+  next = next.replace(/^[,.;:\s]+|[,.;:\s]+$/g, '');
+  return sentenceCaseSecondBrainTitle(next);
+}
+
+function inferCalendarCreateTitle(
+  requestText: string,
+  normalize: (text: string) => string,
+): string {
+  const collapsed = normalize(requestText);
+  if (!collapsed) return '';
+  const candidates: string[] = [];
+  for (const match of collapsed.matchAll(/\bfor\s+(.+?)(?=\s+\bfor\b|$|[!?])/gi)) {
+    if (match[1]?.trim()) candidates.push(match[1].trim());
+  }
+  for (const match of collapsed.matchAll(/\bto\s+(.+?)(?=$|[!?])/gi)) {
+    if (match[1]?.trim()) candidates.push(match[1].trim());
+  }
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = stripSecondBrainTitleTemporalText(candidates[index]);
+    if (candidate && !/^(?:me|myself)$/i.test(candidate) && candidate.length >= 3) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+function inferTaskCreateTitle(
+  requestText: string,
+  normalize: (text: string) => string,
+): string {
+  const collapsed = normalize(requestText);
+  if (!collapsed) return '';
+  const candidates: string[] = [];
+  for (const match of collapsed.matchAll(/\bto\s+(.+?)(?=$|[!?])/gi)) {
+    if (match[1]?.trim()) candidates.push(match[1].trim());
+  }
+  for (const match of collapsed.matchAll(/\btask\s+(?:for|to)\s+(.+?)(?=$|[!?])/gi)) {
+    if (match[1]?.trim()) candidates.push(match[1].trim());
+  }
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = stripSecondBrainTitleTemporalText(candidates[index]);
+    if (candidate && !/^(?:me|myself)$/i.test(candidate) && candidate.length >= 3) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+function isPossessiveQuoteFragmentTitle(value: string): boolean {
+  return /^(?:s|t)\s+\S/i.test(value.trim());
+}
+
 export async function tryDirectSecondBrainWrite<TFocusState>(input: {
   secondBrainService?: Pick<
     SecondBrainService,
@@ -192,7 +261,11 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
 
       switch (input.decision.operation) {
         case 'create': {
-          const title = input.extractNamedTitle(requestText);
+          const extractedTitle = input.extractNamedTitle(requestText);
+          const inferredTitle = inferTaskCreateTitle(requestText, input.collapseWhitespace);
+          const title = extractedTitle && !isPossessiveQuoteFragmentTitle(extractedTitle)
+            ? extractedTitle
+            : inferredTitle;
           if (!title) {
             return 'To create a local task, I need the task title.';
           }
@@ -326,7 +399,11 @@ export async function tryDirectSecondBrainWrite<TFocusState>(input: {
 
       switch (input.decision.operation) {
         case 'create': {
-          const title = input.extractNamedTitle(requestText);
+          const extractedTitle = input.extractNamedTitle(requestText);
+          const inferredTitle = inferCalendarCreateTitle(requestText, input.collapseWhitespace);
+          const title = extractedTitle && !isPossessiveQuoteFragmentTitle(extractedTitle)
+            ? extractedTitle
+            : inferredTitle;
           if (!title) {
             return 'To create a local calendar event, I need the event title.';
           }

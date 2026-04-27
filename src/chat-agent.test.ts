@@ -7022,6 +7022,130 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
   });
 
+  it('formats direct Second Brain approval results for dashboard approval decisions', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-second-brain-dashboard-approval.test.sqlite',
+      retentionDays: 30,
+      now: () => 1_710_000_000_000,
+    });
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      continuityThreadStore,
+    );
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-second-brain-dashboard-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve note save',
+        approvalIds: ['approval-dashboard-1'],
+      },
+      intent: {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        originalUserContent: 'Create a note that says: "Second Brain dashboard approval smoke test note."',
+        entities: {
+          secondBrainMutationApproval: {
+            itemType: 'note',
+            action: 'create',
+          },
+        },
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+    const updateDirectContinuationState = vi.spyOn(agent as any, 'updateDirectContinuationState');
+
+    const result = agent.formatApprovalDecisionResultResponse(
+      pendingAction,
+      {
+        success: true,
+        approved: true,
+        executionSucceeded: true,
+        message: "Tool 'second_brain_note_upsert' completed.",
+        job: {
+          id: 'job-second-brain-dashboard-1',
+          toolName: 'second_brain_note_upsert',
+          risk: 'mutating',
+          origin: 'assistant',
+          argsPreview: '{"title":"Smoke Test Note"}',
+          status: 'succeeded',
+          createdAt: 1,
+          requiresApproval: true,
+        },
+        result: {
+          success: true,
+          status: 'succeeded',
+          message: "Tool 'second_brain_note_upsert' completed.",
+          output: {
+            id: 'note-dashboard-1',
+            title: 'Dashboard Smoke Test Note',
+          },
+        },
+      },
+      {
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+    );
+
+    expect(result?.content).toBe('Note created: Dashboard Smoke Test Note');
+    expect(updateDirectContinuationState).toHaveBeenCalledWith(
+      'owner',
+      'web',
+      'owner',
+      expect.objectContaining({
+        kind: 'second_brain_focus',
+        payload: expect.objectContaining({
+          activeItemType: 'note',
+          itemType: 'note',
+          focusId: 'note-dashboard-1',
+        }),
+      }),
+    );
+  });
+
   it('resumes approved coding-backend runs with backend response-source metadata', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

@@ -281,6 +281,15 @@ export interface ChatAgentClassDeps {
 
 export interface ChatAgentPublicApi extends BaseAgent {
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null;
+  formatApprovalDecisionResultResponse(
+    pendingAction: PendingActionRecord | null,
+    approvalResult?: ToolApprovalDecisionResult,
+    scope?: {
+      userId: string;
+      channel: string;
+      surfaceId?: string;
+    },
+  ): { content: string; metadata?: Record<string, unknown> } | null;
   syncPendingApprovalsFromExecutorForScope(args: {
     userId: string;
     channel: string;
@@ -3575,6 +3584,26 @@ interface DegradedDirectIntentResponseInput {
 
   takeApprovalFollowUp(approvalId: string, decision: 'approved' | 'denied'): string | null {
     return this.approvalState.takeApprovalFollowUp(approvalId, decision);
+  }
+
+  formatApprovalDecisionResultResponse(
+    pendingAction: PendingActionRecord | null,
+    approvalResult?: ToolApprovalDecisionResult,
+    scope?: {
+      userId: string;
+      channel: string;
+      surfaceId?: string;
+    },
+  ): { content: string; metadata?: Record<string, unknown> } | null {
+    if (!pendingAction) return null;
+    const response = this.formatResolvedApprovalResultResponse(pendingAction, approvalResult);
+    if (!response) return null;
+    return this.normalizeContinuationResponse(
+      response,
+      scope?.userId ?? pendingAction.scope.userId,
+      scope?.channel ?? pendingAction.scope.channel,
+      scope?.surfaceId ?? pendingAction.scope.surfaceId,
+    );
   }
 
   syncPendingApprovalsFromExecutorForScope(args: {

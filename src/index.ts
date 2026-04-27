@@ -1762,6 +1762,25 @@ function buildDashboardCallbacks(
       }
     }
     let displayMessage: string | undefined;
+    if (!allowContinuation && !continuedResponse && input.decision === 'approved' && pendingActionForApproval) {
+      const scopedAgent = chatAgents.get(pendingActionForApproval.scope.agentId);
+      const continuationAgents = scopedAgent ? [scopedAgent] : [...chatAgents.values()];
+      for (const agent of continuationAgents) {
+        const resolvedResponse = agent.formatApprovalDecisionResultResponse(
+          pendingActionForApproval,
+          result,
+          {
+            userId: pendingActionForApproval.scope.userId,
+            channel: pendingActionForApproval.scope.channel,
+            surfaceId: input.surfaceId ?? pendingActionForApproval.scope.surfaceId,
+          },
+        );
+        if (resolvedResponse) {
+          displayMessage = resolvedResponse.content;
+          break;
+        }
+      }
+    }
     if (!allowContinuation && !continuedResponse) {
       for (const agent of chatAgents.values()) {
         const followUp = agent.takeApprovalFollowUp(input.approvalId, input.decision);
