@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   inferAutomationControlOperation,
   inferAutomationOutputOperation,
+  inferAutomationReadView,
+  isExplicitAutomationAuthoringRequest,
   isExplicitAutomationControlRequest,
   isExplicitAutomationOutputRequest,
 } from './automation.js';
@@ -18,6 +20,21 @@ describe('automation intent entity resolver', () => {
     const content = 'Disable the Harbor launch automation. Relevant skills when useful: security-response-automation.';
     expect(isExplicitAutomationControlRequest(content)).toBe(true);
     expect(inferAutomationControlOperation(content)).toBe('toggle');
+  });
+
+  it('treats automation count/list requests with safety negations as read-only control', () => {
+    const content = 'List how many automations are currently configured. Reply in one short sentence and do not create, update, run, or delete anything.';
+    expect(isExplicitAutomationControlRequest(content)).toBe(true);
+    expect(isExplicitAutomationAuthoringRequest(content)).toBe(false);
+    expect(inferAutomationControlOperation(content)).toBe('read');
+  });
+
+  it('infers count view for automation read requests without changing the route', () => {
+    expect(inferAutomationReadView(
+      'List how many automations are currently configured. Do not create anything.',
+      'automation_control',
+      'read',
+    )).toBe('count');
   });
 
   it('still detects explicit automation output analysis requests after removing injected skill hints', () => {

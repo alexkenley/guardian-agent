@@ -116,6 +116,30 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual([]);
   });
 
+  it('keeps answer-only repaired automation-control reads on the direct control path', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'automation_control',
+        operation: 'read',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'answer',
+            summary: 'List how many automations are currently configured.',
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Reply in one short sentence and do not mutate anything.',
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual(['automation_control']);
+  });
+
   it('defers multi-action Second Brain plans to full orchestration', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

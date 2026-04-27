@@ -69,6 +69,7 @@ interface AutomationControlIntent {
   operation: 'delete' | 'toggle' | 'run' | 'inspect' | 'read' | 'clone' | 'update' | 'unknown';
   automationName?: string;
   newAutomationName?: string;
+  readView?: 'catalog' | 'count';
   enabled?: boolean;
   turnRelation?: IntentGatewayDecision['turnRelation'];
 }
@@ -130,7 +131,7 @@ export async function tryAutomationControlPreRoute(
   );
 
   if (intent.operation === 'inspect' || intent.operation === 'read') {
-    const listWindow = !selected
+    const listWindow = !selected && intent.readView !== 'count'
       ? resolveAutomationCatalogListWindow(catalog, params.continuityThread, intent, params.message.content)
       : null;
     const result = withAutomationCatalogContinuation(
@@ -141,6 +142,7 @@ export async function tryAutomationControlPreRoute(
           catalogLookup.error,
           selection,
           intent.automationName,
+          intent.readView,
           listWindow ?? undefined,
         ),
       },
@@ -273,6 +275,7 @@ function resolveDecisionBackedIntent(
     operation: operation as AutomationControlIntent['operation'],
     automationName: decision.entities.automationName,
     newAutomationName: decision.entities.newAutomationName,
+    readView: decision.entities.automationReadView,
     ...(typeof enabled === 'boolean'
       ? { enabled }
       : {}),
@@ -298,6 +301,7 @@ function renderAutomationInspectCopy(
   error?: string,
   selection?: SavedAutomationCatalogSelection | null,
   requestedName?: string,
+  readView?: AutomationControlIntent['readView'],
   listWindow?: PagedListWindow,
 ): string {
   const lines: string[] = [];
@@ -336,7 +340,13 @@ function renderAutomationInspectCopy(
   if (catalog.length === 0) {
     return error
       ? `I could not inspect the automation catalog right now: ${error}`
-      : 'There are no automations in the catalog.';
+      : readView === 'count'
+        ? 'There are 0 automations currently configured.'
+        : 'There are no automations in the catalog.';
+  }
+
+  if (readView === 'count') {
+    return `There are ${catalog.length} automations currently configured.`;
   }
 
   const sortedCatalog = [...catalog].sort((left, right) => {

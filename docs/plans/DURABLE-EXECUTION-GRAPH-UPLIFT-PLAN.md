@@ -131,12 +131,27 @@ Checkpoint after the provider-provenance and delegated approval-scope cleanup:
 - OpenRouter delegated tool prompts currently hit an account/provider limit in the live environment (`402 Prompt tokens limit exceeded: 9084 > 2147`) and correctly fall through the configured provider chain. This is not a Kimi response-quality or guardrail issue; it is provider/account capacity plus runtime fallback behavior.
 - Ollama Cloud simple managed-cloud exact-answer replay passed with request id `live-ollama-exact-e64747a0` on `ollama-cloud-direct` / `minimax-m2.1` without fallback. The `ollama-cloud-tools` / `glm-4.7` approval replay did not enter the delegated tool loop because Intent Gateway fell back to `route=unknown` and the model returned pseudo-call text; treat that as provider/profile verification work, not a routing keyword workaround.
 
+Checkpoint after the automation-control routing and direct-rendering cleanup:
+
+- Automation control entity resolution now treats read-only list/count requests with safety negations such as "do not create, update, run, or delete" as read-only control, not automation authoring ambiguity.
+- Answer-only `automation_control` read plans now remain on the direct `automation_control` candidate path. Mixed automation evidence plus answer-synthesis plans still defer to the worker/delegated path so direct control and delegated synthesis do not overlap.
+- The Intent Gateway contract now carries `automationReadView` for automation-control read/inspect requests. The direct automation-control renderer uses `automationReadView=count` to return only the configured automation count and avoids creating paged-list continuation state for that count-only response.
+- The automation entity resolver can infer `automationReadView=count` from the source request when a weaker classifier emits only a repaired route/operation and omits the structured entity. This is entity extraction after the gateway route is known, not pre-gateway route inference.
+- Focused coverage passed for the cleanup: `npx vitest run src/runtime/automation-control-prerouter.test.ts src/runtime/intent/route-entity-resolution.test.ts src/runtime/intent/entity-resolvers/automation.test.ts src/runtime/intent/capability-resolver.test.ts src/runtime/direct-intent-routing.test.ts src/runtime/intent/intent-route-clarification.test.ts src/runtime/chat-agent/direct-automation.test.ts src/runtime/chat-agent/direct-route-orchestration.test.ts` reported 95 passing tests.
+- `npm run check` passed after the cleanup.
+- Full `npm test` passed after the cleanup: 310 files, 3309 tests.
+- `npm run build` passed after the cleanup.
+- The actual app was rebuilt and restarted, and `GET http://localhost:3000/api/status` confirmed the live API was running.
+- Live OpenRouter API replay with request id `nl-automation-count-openrouter-a2c703cf` and request-scoped `openrouter-direct` metadata returned exactly `There are 38 automations currently configured.`, reported `responseSource.providerProfileName=openrouter-direct`, `providerTier=managed_cloud`, `usedFallback=false`, and the routing trace showed `automationReadView=count` with direct `automation_control`.
+- Live Ollama Cloud provider override was recognized for `ollama-cloud-direct` / `minimax-m2.1`, but the provider lane was slow and produced route-only/weak structured output for this automation-control prompt. Treat that as provider/profile suitability and latency work; the app-side fallback entity resolver now covers the omitted count view once the route/operation are repaired.
+
 Known remaining problems and risks:
 
 - The app API and web UI approval paths are now proven for a harmless policy-gated write. Remaining approval work is ownership cleanup, not first-proof validation.
 - Approval/resume ownership is narrower after the latest cleanup, but payload-specific chat continuation executors and suspended tool-loop replay still need graph-native node equivalents before the remaining replay payload can be deleted.
 - Delegated graph ownership is narrower after the latest cleanup, but delegated worker dispatch, task-contract verification policy, retry budgeting, and recovery-advisor invocation are still coordinated from `WorkerManager`. Continue moving those decisions into graph node/controller boundaries before deleting old side channels.
 - Provider alias drift for compact dated OpenRouter snapshots is now covered in the delegated verifier. Remaining provider risk is broader fallback/profile ownership cleanup, not this known `moonshotai/kimi-k2.6` alias mismatch.
+- Provider/profile suitability remains uneven across managed-cloud profiles: OpenRouter Kimi handled this automation-control path correctly; Ollama Cloud `minimax-m2.1` proved request-scoped provider selection but was too slow/weakly structured for the same live prompt in this environment.
 - The unstructured intent repair path has been retired. Prose-only classifier responses now remain unavailable gateway records so fallback passes, structured recovery, or clarification own recovery; there is no raw-text post-gateway route inference path.
 - Startup in this operator environment still reports a local control-plane integrity warning for `scheduled-tasks.json`; that is host runtime state, not a code regression from this slice.
 

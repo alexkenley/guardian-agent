@@ -64,6 +64,8 @@ describe('intent-route-clarification', () => {
         route: 'automation_control',
         confidence: 'medium',
         turnRelation: 'new_request',
+        operation: 'update',
+        resolution: 'ready',
       },
       mode: 'primary',
     })).toMatchObject({
@@ -75,6 +77,20 @@ describe('intent-route-clarification', () => {
     });
   });
 
+  it('does not ask for automation confirmation when a ready read request contains safety negations', () => {
+    expect(deriveIntentRouteClarification({
+      content: 'List how many automations are currently configured. Reply in one short sentence and do not create, update, run, or delete anything.',
+      decision: {
+        route: 'automation_control',
+        confidence: 'high',
+        turnRelation: 'new_request',
+        operation: 'read',
+        resolution: 'ready',
+      },
+      mode: 'confirmation',
+    })).toBeNull();
+  });
+
   it('does not ask for automation confirmation when run behavior describes a new automation', () => {
     expect(deriveIntentRouteClarification({
       content: 'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
@@ -82,6 +98,8 @@ describe('intent-route-clarification', () => {
         route: 'automation_authoring',
         confidence: 'medium',
         turnRelation: 'new_request',
+        operation: 'create',
+        resolution: 'ready',
       },
       mode: 'primary',
     })).toBeNull();
@@ -94,6 +112,8 @@ describe('intent-route-clarification', () => {
         route: 'automation_control',
         confidence: 'medium',
         turnRelation: 'follow_up',
+        operation: 'update',
+        resolution: 'ready',
       },
       mode: 'primary',
     })).toBeNull();

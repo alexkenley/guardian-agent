@@ -10,7 +10,7 @@ import {
   isExplicitWorkspaceScopedRepoWorkRequest,
 } from './request-patterns.js';
 import { normalizeIntentGatewayRepairText } from './text.js';
-import type { IntentGatewayDecision, IntentGatewayRecord, IntentGatewayRoute } from './types.js';
+import type { IntentGatewayDecision, IntentGatewayOperation, IntentGatewayRecord, IntentGatewayRoute } from './types.js';
 
 const AUTOMATION_NOUN_PATTERN = /\b(?:automation|automations|workflow|workflows|scheduled automation|scheduled task|assistant automation)\b/;
 const AUTOMATION_CREATE_PATTERN = /\b(?:create|build|set up|setup|make|configure|automate|save)\b/;
@@ -39,7 +39,8 @@ export interface IntentRouteClarification {
 
 export function deriveIntentRouteClarification(input: {
   content: string;
-  decision: Pick<IntentGatewayDecision, 'route' | 'confidence' | 'turnRelation'>;
+  decision: Pick<IntentGatewayDecision, 'route' | 'confidence' | 'turnRelation'>
+    & Partial<Pick<IntentGatewayDecision, 'operation' | 'resolution'>>;
   mode?: IntentGatewayRecord['mode'];
 }): IntentRouteClarification | null {
   if (input.decision.turnRelation === 'clarification_answer' || input.decision.turnRelation === 'correction') {
@@ -92,13 +93,19 @@ function deriveCodingScopeClarification(
 
 function deriveAutomationClarification(
   normalized: string,
-  decision: Pick<IntentGatewayDecision, 'route' | 'confidence'>,
+  decision: Pick<IntentGatewayDecision, 'route' | 'confidence'>
+    & Partial<Pick<IntentGatewayDecision, 'operation' | 'resolution'>>,
   mode: IntentGatewayRecord['mode'] | undefined,
 ): IntentRouteClarification | null {
   if (decision.route !== 'automation_authoring' && decision.route !== 'automation_control') {
     return null;
   }
   if (!AUTOMATION_NOUN_PATTERN.test(normalized)) {
+    return null;
+  }
+  if (decision.route === 'automation_control'
+    && decision.resolution !== 'needs_clarification'
+    && isReadOnlyAutomationControlOperation(decision.operation)) {
     return null;
   }
 
@@ -152,6 +159,15 @@ function deriveAutomationClarification(
     ],
     candidateRoutes: ['automation_authoring', 'automation_control'],
   };
+}
+
+function isReadOnlyAutomationControlOperation(
+  operation: IntentGatewayOperation | undefined,
+): boolean {
+  return operation === 'read'
+    || operation === 'search'
+    || operation === 'inspect'
+    || operation === 'navigate';
 }
 
 function deriveUiVsBrowserClarification(

@@ -1,10 +1,11 @@
-import type { IntentGatewayOperation } from '../types.js';
+import type { IntentGatewayOperation, IntentGatewayRoute } from '../types.js';
 import { collapseIntentGatewayWhitespace } from '../text.js';
 
 const AUTOMATION_AUTHORING_VERB_PATTERN = /\b(?:create|build|set up|setup|make|configure|schedule|automate|turn into|save)\b/i;
 const AUTOMATION_AUTHORING_NOUN_PATTERN = /\b(?:automation|automations|workflow|workflows|playbook|playbooks|pipeline|pipelines|scheduled automation|scheduled automations|scheduled task|scheduled tasks|assistant automation|assistant automations|assistant task|assistant tasks)\b/i;
 const AUTOMATION_AUTHORING_WORKFLOW_HINT_PATTERN = /\b(?:deterministic scheduled automation|deterministic workflow|step[- ]based workflow|fixed tool steps|do not create an assistant automation|don't create an assistant automation|do not create a scheduled assistant task|don't create a scheduled assistant task)\b/i;
 const AUTOMATION_CONTROL_VERB_PATTERN = /\b(?:disable|enable|run|inspect|show|read|delete|remove|rename|edit|update|change|modify|clone|list)\b/i;
+const AUTOMATION_COUNT_VIEW_PATTERN = /\b(?:how many|number of|count(?:ed|ing)?|total)\b/i;
 const AUTOMATION_OUTPUT_ANALYSIS_PATTERN = /\b(analy[sz]e|summari[sz]e|explain|review|compare|investigate|interpret|what did(?:\s+it)?\s+find)\b/i;
 const AUTOMATION_OUTPUT_CONTEXT_PATTERN = /\b(output|outputs|result|results|findings|history|timeline|step output|run output)\b/i;
 const INJECTED_SKILL_CATALOG_PATTERN = /\brelevant skills(?: when useful)?:[\s\S]*$/i;
@@ -25,13 +26,18 @@ export function isExplicitAutomationAuthoringRequest(content: string | undefined
 export function isExplicitAutomationControlRequest(content: string | undefined): boolean {
   const normalized = normalizeAutomationIntentSource(content);
   if (!normalized) return false;
+  if (isExplicitAutomationOutputRequest(normalized)) return false;
+  const inferredOperation = inferAutomationControlOperation(normalized);
+  const mentionsAutomation = /\bautomation\b/i.test(normalized) || /\bautomations\b/i.test(normalized);
+  if (mentionsAutomation && isReadOnlyAutomationControlOperation(inferredOperation)) {
+    return true;
+  }
   if (/\b(?:what|which|kind|kinds|sort|sorts|examples?|capabilities?|support|supported|how)\b/i.test(normalized)) {
     return false;
   }
   if (/\bcreate\b/i.test(normalized)) return false;
-  if (isExplicitAutomationOutputRequest(normalized)) return false;
   if (!AUTOMATION_CONTROL_VERB_PATTERN.test(normalized)) return false;
-  return /\bautomation\b/i.test(normalized) || /\bautomations\b/i.test(normalized);
+  return mentionsAutomation;
 }
 
 export function isExplicitAutomationOutputRequest(content: string | undefined): boolean {
@@ -55,13 +61,46 @@ export function inferAutomationControlOperation(
   }
   const normalized = normalizeAutomationIntentSource(content).toLowerCase();
   if (!normalized) return 'unknown';
-  if (/\b(?:disable|enable)\b/.test(normalized)) return 'toggle';
-  if (/\b(?:run)\b/.test(normalized)) return 'run';
-  if (/\b(?:inspect|show|read|list)\b/.test(normalized)) return 'read';
-  if (/\b(?:delete|remove)\b/.test(normalized)) return 'delete';
-  if (/\b(?:rename|edit|update|change|modify)\b/.test(normalized)) return 'update';
-  if (/\bclone\b/.test(normalized)) return 'clone';
+  const inferred = inferFirstAutomationControlOperation(normalized);
+  if (inferred) return inferred;
   return 'unknown';
+}
+
+export function inferAutomationReadView(
+  content: string | undefined,
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+): 'catalog' | 'count' | undefined {
+  if (route !== 'automation_control') return undefined;
+  if (operation !== 'read' && operation !== 'inspect' && operation !== 'search') return undefined;
+  const normalized = normalizeAutomationIntentSource(content);
+  if (!normalized) return undefined;
+  if (!/\bautomations?\b/i.test(normalized)) return undefined;
+  if (AUTOMATION_COUNT_VIEW_PATTERN.test(normalized)) return 'count';
+  return undefined;
+}
+
+function isReadOnlyAutomationControlOperation(operation: IntentGatewayOperation): boolean {
+  return operation === 'read' || operation === 'inspect' || operation === 'search';
+}
+
+function inferFirstAutomationControlOperation(content: string): IntentGatewayOperation | undefined {
+  const candidates: Array<{ operation: IntentGatewayOperation; index: number; order: number }> = [];
+  ([
+    ['toggle', /\b(?:disable|enable)\b/],
+    ['run', /\brun\b/],
+    ['read', /\b(?:inspect|show|read|list)\b/],
+    ['delete', /\b(?:delete|remove)\b/],
+    ['update', /\b(?:rename|edit|update|change|modify)\b/],
+    ['clone', /\bclone\b/],
+  ] as const).forEach(([operation, pattern], order) => {
+    const match = pattern.exec(content);
+    if (typeof match?.index === 'number') {
+      candidates.push({ operation, index: match.index, order });
+    }
+  });
+  candidates.sort((left, right) => left.index - right.index || left.order - right.order);
+  return candidates[0]?.operation;
 }
 
 export function inferAutomationEnabledState(content: string | undefined): boolean | undefined {

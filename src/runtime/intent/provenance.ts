@@ -8,6 +8,7 @@ import type {
 const ENTITY_KEYS = [
   'automationName',
   'newAutomationName',
+  'automationReadView',
   'manualOnly',
   'scheduled',
   'enabled',
@@ -58,6 +59,7 @@ export function normalizeIntentGatewayProvenanceSource(
     case 'resolver.email':
     case 'resolver.coding':
     case 'resolver.personal_assistant':
+    case 'resolver.automation':
     case 'resolver.provider_config':
     case 'resolver.tool_inventory':
     case 'resolver.clarification':

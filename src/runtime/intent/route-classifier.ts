@@ -139,6 +139,10 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       newAutomationName: {
         type: 'string',
       },
+      automationReadView: {
+        type: 'string',
+        enum: ['catalog', 'count'],
+      },
       manualOnly: {
         type: 'boolean',
       },
@@ -289,6 +293,8 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: prior assistant just created "It Should Check Account" and the user says "Rename that automation to WHM Social Check Disk Quota." -> route=automation_control, turnRelation=follow_up, operation=update, automationName="It Should Check Account", newAutomationName="WHM Social Check Disk Quota".',
   'Example: "Edit the WHM Social Check Disk Quota automation and make it run daily at 9:00 AM." -> route=automation_control, operation=update, automationName="WHM Social Check Disk Quota".',
   'Example: "List my automations." -> route=automation_control, operation=read.',
+  'For automation_control read/inspect requests, set automationReadView=count when the user asks for only the number/count/how many automations, otherwise set automationReadView=catalog for catalog/list output.',
+  'Example: "How many automations are configured?" -> route=automation_control, operation=read, automationReadView=count.',
   'For automation_control list/read/inspect requests, use planned read/search evidence with expectedToolCategories=["automation_list"]; if the user asks for a prose suggestion, comparison, or recommendation after that evidence, use a separate kind=answer step rather than kind=write.',
   'Example: "Find any automations or routines related to approval, routing, or code review, then suggest one useful automation I could create. Do not create it yet." -> route=general_assistant, operation=search, executionClass=tool_orchestration, requiresToolSynthesis=true, preferredAnswerPath=tool_loop, planned_steps=[{kind="read", expectedToolCategories=["automation_list"]}, {kind="read", expectedToolCategories=["second_brain_routine_list","second_brain_routine_catalog"]}, {kind="answer", dependsOn=["step_1","step_2"]}].',
   'Example: prior assistant just created "Weekday Outlook Inbox Summary" and the user says "Disable that automation." -> route=automation_control, turnRelation=follow_up, operation=toggle, automationName="Weekday Outlook Inbox Summary", enabled=false.',
@@ -423,6 +429,7 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct provider CRUD. Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, or personal retrieval across email/docs/calendar/notes.',
   'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with route=personal_assistant_task, personalItemType=calendar, and calendarTarget=local.',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
+  'For automation_control read/inspect requests, set automationReadView=count when the user asks only for the number/count/how many automations; otherwise set automationReadView=catalog.',
   'Do not use automation_control for explicit built-in tool execution requests or direct tool names such as whm_status, vercel_status, aws_status, gcp_status, azure_status, or cf_status. If the user explicitly names a built-in tool, set entities.toolName to that exact tool name.',
   'Prefer coding_session_control over coding_task when the user asks which workspace is active, lists sessions, switches workspaces, attaches, detaches, or creates a session.',
   'Requests to inspect, explain, review, or plan changes against specific repo files, diffs, PRs, patches, or source paths are coding_task.',

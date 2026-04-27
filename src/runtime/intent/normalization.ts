@@ -209,6 +209,26 @@ export function normalizeUiSurface(
   }
 }
 
+export function normalizeAutomationReadView(
+  value: unknown,
+): IntentGatewayEntities['automationReadView'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'catalog':
+    case 'list':
+    case 'full':
+    case 'summary':
+      return 'catalog';
+    case 'count':
+    case 'number':
+    case 'total':
+      return 'count';
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeCodeSessionResource(
   value: unknown,
 ): IntentGatewayEntities['codeSessionResource'] | undefined {

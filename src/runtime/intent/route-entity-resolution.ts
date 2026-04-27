@@ -26,6 +26,7 @@ import {
 import { isExplicitProviderConfigRequest } from './entity-resolvers/provider-config.js';
 import {
   normalizeCalendarTarget,
+  normalizeAutomationReadView,
   normalizeCalendarWindowDays,
   normalizeCodingBackend,
   normalizeCodeSessionResource,
@@ -41,6 +42,7 @@ import type {
   IntentGatewayProvenanceSource,
   IntentGatewayRepairContext,
 } from './types.js';
+import { inferAutomationReadView } from './entity-resolvers/automation.js';
 
 export interface IntentGatewayEntityResolution {
   entities: IntentGatewayEntities;
@@ -75,6 +77,18 @@ export function resolveIntentGatewayEntities(
     ? parsed.newAutomationName.trim()
     : undefined;
   if (newAutomationName) provenance.newAutomationName = classifierSource;
+  const parsedAutomationReadView = shouldKeepAutomationEntities(route, uiSurface)
+    ? normalizeAutomationReadView(parsed.automationReadView)
+    : undefined;
+  const automationReadView = parsedAutomationReadView
+    ?? (shouldKeepAutomationEntities(route, uiSurface)
+      ? inferAutomationReadView(rawSourceContent, route, operation)
+      : undefined);
+  if (automationReadView) {
+    provenance.automationReadView = parsedAutomationReadView
+      ? classifierSource
+      : 'resolver.automation';
+  }
   const manualOnly = typeof parsed.manualOnly === 'boolean' ? parsed.manualOnly : undefined;
   if (typeof manualOnly === 'boolean') provenance.manualOnly = classifierSource;
   const scheduled = typeof parsed.scheduled === 'boolean' ? parsed.scheduled : undefined;
@@ -274,6 +288,7 @@ export function resolveIntentGatewayEntities(
   const entities = {
     ...(automationName ? { automationName } : {}),
     ...(newAutomationName ? { newAutomationName } : {}),
+    ...(automationReadView ? { automationReadView } : {}),
     ...(typeof manualOnly === 'boolean' ? { manualOnly } : {}),
     ...(typeof scheduled === 'boolean' ? { scheduled } : {}),
     ...(typeof enabled === 'boolean' ? { enabled } : {}),

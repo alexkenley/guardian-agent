@@ -203,6 +203,32 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('keeps answer-only repaired automation-control reads on the direct control candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'automation_control',
+        operation: 'read',
+        confidence: 'low',
+        plannedSteps: [
+          {
+            kind: 'answer',
+            summary: 'List how many automations are currently configured.',
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Reply in one short sentence and do not mutate anything.',
+            required: true,
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual(['automation_control']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('does not direct-dispatch multi-step personal plans that include other domains', () => {
     const gateway = mockGateway({
       route: 'personal_assistant_task',

@@ -130,7 +130,15 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
   }
 
   if (decision.route === 'automation_control') {
-    return requiredSteps.some((step) => {
+    const nonAnswerSteps = requiredSteps.filter((step) => step.kind !== 'answer');
+    if (nonAnswerSteps.length <= 0) {
+      return false;
+    }
+    if (isReadOnlyAutomationControlOperation(decision.operation)
+      && nonAnswerSteps.length < requiredSteps.length) {
+      return true;
+    }
+    return nonAnswerSteps.some((step) => {
       const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
       return categories.length <= 0
         || categories.some((category) => !isAutomationDirectCategory(category));
@@ -161,6 +169,13 @@ function isAutomationDirectCategory(category: string): boolean {
   if (normalized === 'automation' || normalized === 'scheduled_email_automation') return true;
   if (normalized.startsWith('automation_')) return true;
   return getBuiltinToolCategory(normalized) === 'automation';
+}
+
+function isReadOnlyAutomationControlOperation(operation: IntentGatewayDecision['operation']): boolean {
+  return operation === 'read'
+    || operation === 'inspect'
+    || operation === 'search'
+    || operation === 'navigate';
 }
 
 function dedupeCandidates(

@@ -78,6 +78,7 @@ export type IntentGatewayProvenanceSource =
   | 'resolver.email'
   | 'resolver.coding'
   | 'resolver.personal_assistant'
+  | 'resolver.automation'
   | 'resolver.provider_config'
   | 'resolver.tool_inventory'
   | 'resolver.clarification'
@@ -108,6 +109,7 @@ export interface IntentGatewayPlannedStep {
 export interface IntentGatewayEntities {
   automationName?: string;
   newAutomationName?: string;
+  automationReadView?: 'catalog' | 'count';
   manualOnly?: boolean;
   scheduled?: boolean;
   enabled?: boolean;

@@ -151,6 +151,68 @@ describe('tryAutomationControlPreRoute', () => {
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
+  it('returns only the automation count when the gateway asks for count view', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [
+              {
+                id: 'weekday-outlook-inbox-summary',
+                name: 'Weekday Outlook Inbox Summary',
+                kind: 'assistant_task',
+                enabled: true,
+                task: {
+                  id: 'weekday-outlook-inbox-summary',
+                  name: 'Weekday Outlook Inbox Summary',
+                  type: 'agent',
+                  target: 'default',
+                  enabled: true,
+                },
+              },
+              {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                kind: 'workflow',
+                enabled: true,
+                workflow: {
+                  id: 'browser-read-smoke',
+                  name: 'Browser Read Smoke',
+                  enabled: true,
+                  mode: 'sequential',
+                  steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+                },
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'List how many automations are currently configured. Reply in one short sentence.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'read',
+        summary: 'Count and report the number of currently configured automations.',
+        entities: { automationReadView: 'count' },
+      },
+    });
+
+    expect(result?.content).toBe('There are 2 automations currently configured.');
+    expect(result?.metadata?.continuationState).toBeNull();
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
   it('lists the next page when a follow-up asks for additional automations', async () => {
     const automations = Array.from({ length: 45 }, (_, index) => {
       const ordinal = index + 1;

@@ -2,6 +2,32 @@ import { describe, expect, it } from 'vitest';
 import { resolveIntentGatewayEntities } from './route-entity-resolution.js';
 
 describe('resolveIntentGatewayEntities', () => {
+  it('preserves automation read view for automation-control count requests', () => {
+    const result = resolveIntentGatewayEntities(
+      { automationReadView: 'count' },
+      { sourceContent: 'How many automations are configured?' },
+      'automation_control',
+      'read',
+      'classifier.primary',
+    );
+
+    expect(result.entities.automationReadView).toBe('count');
+    expect(result.provenance?.automationReadView).toBe('classifier.primary');
+  });
+
+  it('infers automation count read view when classifier omits it', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'List how many automations are currently configured.' },
+      'automation_control',
+      'read',
+      'classifier.route_only_fallback',
+    );
+
+    expect(result.entities.automationReadView).toBe('count');
+    expect(result.provenance?.automationReadView).toBe('resolver.automation');
+  });
+
   it('marks provider inventory requests as config-surface general assistant work', () => {
     expect(resolveIntentGatewayEntities(
       {},
