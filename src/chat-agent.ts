@@ -39,7 +39,6 @@ import {
 import {
   formatCodingBackendApprovalResult,
 } from './runtime/chat-agent/coding-backend-approval-result.js';
-import type { DirectCodingBackendDeps } from './runtime/chat-agent/direct-coding-backend.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
@@ -78,10 +77,10 @@ import {
 } from './runtime/chat-agent/direct-route-orchestration.js';
 import {
   buildChatDirectRouteHandlers,
+  buildChatDirectCodingRouteDeps,
   buildDirectCodingTaskResumer,
   tryDirectChatCodeSessionControl,
   type ChatDirectCodingRouteDeps,
-  type DirectCodeSessionControlDeps,
 } from './runtime/chat-agent/direct-route-handlers.js';
 import {
   attachPreRoutedIntentGatewayMetadata,
@@ -131,7 +130,6 @@ import {
   stripDirectContinuationStateMetadata,
 } from './runtime/chat-agent/direct-continuation-state.js';
 import {
-  ensureExplicitCodingTaskWorkspaceTarget as ensureExplicitCodingTaskWorkspaceTargetHelper,
   handleCodeSessionAttach as handleCodeSessionAttachHelper,
 } from './runtime/chat-agent/code-session-control.js';
 import {
@@ -1194,6 +1192,39 @@ interface DegradedDirectIntentResponseInput {
       pendingAction,
       excludeExecutionId: executionIdentity.executionId,
     });
+    const buildCodingRoutes = (): ChatDirectCodingRouteDeps => buildChatDirectCodingRouteDeps({
+      agentId: this.id,
+      tools: this.tools,
+      codeSessionStore: this.codeSessionStore,
+      parsePendingActionUserKey: (key) => this.parsePendingActionUserKey(key),
+      recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
+      getPendingApprovalIds: (userId, channel, surfaceId) => this.getPendingApprovalIds(userId, channel, surfaceId),
+      setPendingApprovals: (key, ids, surfaceId, nowMs) => this.setPendingApprovals(key, ids, surfaceId, nowMs),
+      syncPendingApprovalsFromExecutor: (
+        sourceUserId,
+        sourceChannel,
+        targetUserId,
+        targetChannel,
+        surfaceId,
+        originalUserContent,
+      ) => this.syncPendingApprovalsFromExecutor(
+        sourceUserId,
+        sourceChannel,
+        targetUserId,
+        targetChannel,
+        surfaceId,
+        originalUserContent,
+      ),
+      setPendingApprovalAction: (userId, channel, surfaceId, actionInput) => this.setPendingApprovalAction(
+        userId,
+        channel,
+        surfaceId,
+        actionInput,
+      ),
+      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
+      completePendingAction: (actionId) => this.completePendingAction(actionId),
+      onMessage: (nextMessage, nextCtx) => this.onMessage(nextMessage, nextCtx),
+    });
     const workspaceSwitchContinuation = await tryHandleWorkspaceSwitchContinuationHelper({
       message,
       ctx,
@@ -1364,7 +1395,7 @@ interface DegradedDirectIntentResponseInput {
         }
         return clarificationResponse;
       }
-      const explicitWorkspaceTarget = await this.ensureExplicitCodingTaskWorkspaceTarget({
+      const explicitWorkspaceTarget = await buildCodingRoutes().backendDeps.ensureExplicitCodingTaskWorkspaceTarget({
         message,
         ctx,
         decision: earlyGateway?.decision,
@@ -1551,7 +1582,7 @@ interface DegradedDirectIntentResponseInput {
           message,
           ctx,
           decision: earlyGateway.decision,
-          codingRoutes: this.buildDirectCodingRouteDeps(),
+          codingRoutes: buildCodingRoutes(),
         });
         if (sessionControlResult) {
           return buildScopedDirectIntentResponse({
@@ -1841,7 +1872,7 @@ interface DegradedDirectIntentResponseInput {
         providerOrder,
       ),
       executeStoredFilesystemSave: (input) => this.executeStoredFilesystemSave(input),
-      codingRoutes: this.buildDirectCodingRouteDeps(),
+      codingRoutes: buildCodingRoutes(),
     });
     const directIntentResponse = await runDirectRouteOrchestration({
       skipDirectTools,
@@ -2913,36 +2944,16 @@ interface DegradedDirectIntentResponseInput {
     });
   }
 
-  private async executeDirectCodeSessionTool(
-    toolName: string,
-    args: Record<string, unknown>,
+  private async handleCodeSessionAttach(
     message: UserMessage,
     ctx: AgentContext,
-  ): Promise<Record<string, unknown>> {
-    return this.tools!.executeModelTool(
-      toolName,
-      args,
-      {
-        origin: 'assistant',
-        agentId: this.id,
-        userId: message.userId,
-        surfaceId: message.surfaceId,
-        principalId: message.principalId ?? message.userId,
-        principalRole: message.principalRole,
-        channel: message.channel,
-        requestId: message.id,
-        agentContext: { checkAction: ctx.checkAction },
-      },
-    );
-  }
-
-  private buildDirectCodingBackendDeps(): DirectCodingBackendDeps {
-    return {
+    target: string,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const codingRoutes = buildChatDirectCodingRouteDeps({
       agentId: this.id,
       tools: this.tools,
       codeSessionStore: this.codeSessionStore,
       parsePendingActionUserKey: (key) => this.parsePendingActionUserKey(key),
-      ensureExplicitCodingTaskWorkspaceTarget: (nextInput) => this.ensureExplicitCodingTaskWorkspaceTarget(nextInput),
       recordIntentRoutingTrace: (stage, traceInput) => this.recordIntentRoutingTrace(stage, traceInput),
       getPendingApprovalIds: (userId, channel, surfaceId) => this.getPendingApprovalIds(userId, channel, surfaceId),
       setPendingApprovals: (key, ids, surfaceId, nowMs) => this.setPendingApprovals(key, ids, surfaceId, nowMs),
@@ -2967,84 +2978,13 @@ interface DegradedDirectIntentResponseInput {
         surfaceId,
         actionInput,
       ),
-    };
-  }
-
-  private buildDirectCodeSessionControlDeps(): DirectCodeSessionControlDeps {
-    return {
-      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
-        toolName,
-        args,
-        message,
-        ctx,
-      ),
-      getCodeSessionManagedSandboxes: this.tools?.getCodeSessionManagedSandboxStatus
-        ? (sessionId, ownerUserId) => this.tools!.getCodeSessionManagedSandboxStatus({ sessionId, ownerUserId })
-        : undefined,
       getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
       completePendingAction: (actionId) => this.completePendingAction(actionId),
-      onMessage: (message, ctx) => this.onMessage(message, ctx),
-    };
-  }
-
-  private buildDirectCodingRouteDeps(): ChatDirectCodingRouteDeps {
-    return {
-      backendDeps: this.buildDirectCodingBackendDeps(),
-      sessionControlDeps: this.buildDirectCodeSessionControlDeps(),
-    };
-  }
-
-  private async ensureExplicitCodingTaskWorkspaceTarget(input: {
-    message: UserMessage;
-    ctx: AgentContext;
-    decision?: IntentGatewayDecision;
-    currentSession?: CodeSessionRecord | null;
-    codeContext?: { workspaceRoot: string; sessionId?: string };
-  }): Promise<
-    | {
-        status: 'unchanged';
-      }
-    | {
-        status: 'switched';
-        currentSession: CodeSessionRecord | null;
-        codeContext: { workspaceRoot: string; sessionId: string };
-        switchResponse: { content: string; metadata: Record<string, unknown> };
-      }
-    | {
-        status: 'blocked';
-        response: { content: string; metadata?: Record<string, unknown> };
-      }
-  > {
-    return ensureExplicitCodingTaskWorkspaceTargetHelper({
-      toolsEnabled: this.tools?.isEnabled() === true,
-      codeSessionStore: this.codeSessionStore,
-      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
-        toolName,
-        args,
-        message,
-        ctx,
-      ),
-      ...input,
+      onMessage: (nextMessage, nextCtx) => this.onMessage(nextMessage, nextCtx),
     });
-  }
-
-  private async handleCodeSessionAttach(
-    message: UserMessage,
-    ctx: AgentContext,
-    target: string,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const backendDeps = this.buildDirectCodingBackendDeps();
     return handleCodeSessionAttachHelper({
-      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
-        toolName,
-        args,
-        message,
-        ctx,
-      ),
-      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
-      completePendingAction: (actionId) => this.completePendingAction(actionId),
-      resumeCodingTask: buildDirectCodingTaskResumer(backendDeps),
-      onMessage: (message, ctx) => this.onMessage(message, ctx),
+      ...codingRoutes.sessionControlDeps,
+      resumeCodingTask: buildDirectCodingTaskResumer(codingRoutes.backendDeps),
       message,
       ctx,
       target,

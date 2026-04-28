@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import {
+  buildChatDirectCodingRouteDeps,
   buildChatDirectRouteHandlers,
   type ChatDirectCodingRouteDeps,
 } from './direct-route-handlers.js';
@@ -99,6 +100,73 @@ function providerDecision(): IntentGatewayDecision {
 }
 
 describe('chat direct route handlers', () => {
+  it('builds coding route dependencies with brokered tool authority metadata', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      output: { currentSessionId: 'code-1' },
+    }));
+    const getCodeSessionManagedSandboxStatus = vi.fn(() => ({
+      sessionId: 'code-1',
+      sandboxes: [],
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+      getApprovalSummaries: vi.fn(() => new Map()),
+      getCodeSessionManagedSandboxStatus,
+    } as never;
+    const checkAction = vi.fn();
+    const deps = buildChatDirectCodingRouteDeps({
+      agentId: 'chat',
+      tools,
+      codeSessionStore: { getSession: vi.fn(() => null), listSessionsForUser: vi.fn(() => []) },
+      parsePendingActionUserKey: vi.fn(() => ({ userId: 'owner', channel: 'web' })),
+      recordIntentRoutingTrace: vi.fn(),
+      getPendingApprovalIds: vi.fn(() => []),
+      setPendingApprovals: vi.fn(),
+      syncPendingApprovalsFromExecutor: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: null })),
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      onMessage: vi.fn(async () => ({ content: 'fallback' })),
+    });
+
+    await deps.sessionControlDeps.executeDirectCodeSessionTool(
+      'code_session_current',
+      {},
+      {
+        ...originalMessage,
+        id: 'request-1',
+        surfaceId: 'surface-1',
+        principalId: 'principal-1',
+        principalRole: 'owner',
+      },
+      { checkAction } as unknown as AgentContext,
+    );
+    const sandboxStatus = deps.sessionControlDeps.getCodeSessionManagedSandboxes?.('code-1', 'owner');
+
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'code_session_current',
+      {},
+      expect.objectContaining({
+        origin: 'assistant',
+        agentId: 'chat',
+        userId: 'owner',
+        surfaceId: 'surface-1',
+        principalId: 'principal-1',
+        principalRole: 'owner',
+        channel: 'web',
+        requestId: 'request-1',
+        agentContext: { checkAction },
+      }),
+    );
+    expect(sandboxStatus).toEqual({ sessionId: 'code-1', sandboxes: [] });
+    expect(getCodeSessionManagedSandboxStatus).toHaveBeenCalledWith({
+      sessionId: 'code-1',
+      ownerUserId: 'owner',
+    });
+  });
+
   it('wires personal assistant routing through shared Second Brain dependencies', async () => {
     const getOverview = vi.fn(() => ({
       nextEvent: null,

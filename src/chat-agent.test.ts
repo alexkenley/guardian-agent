@@ -12,10 +12,8 @@ import { attachPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from '
 import { recordChatContinuationGraphApproval } from './runtime/chat-agent/chat-continuation-graph.js';
 import { buildToolLoopContinuationPayload, readToolLoopContinuationPayload } from './runtime/chat-agent/tool-loop-continuation.js';
 import { tryDirectAutomationControl } from './runtime/chat-agent/direct-automation.js';
-import {
-  tryDirectCodingBackendDelegation,
-  type DirectCodingBackendDeps,
-} from './runtime/chat-agent/direct-coding-backend.js';
+import { tryDirectCodingBackendDelegation } from './runtime/chat-agent/direct-coding-backend.js';
+import { buildChatDirectCodingRouteDeps } from './runtime/chat-agent/direct-route-handlers.js';
 import { resolveConversationHistoryChannel } from './runtime/channel-surface-ids.js';
 import { tryDirectGoogleWorkspaceRead } from './runtime/chat-agent/direct-mailbox-runtime.js';
 import {
@@ -114,13 +112,12 @@ function tryAgentDirectSecondBrainWrite(
   );
 }
 
-function directCodingBackendDepsForAgent(agent: any): DirectCodingBackendDeps {
-  return {
+function directCodingBackendDepsForAgent(agent: any) {
+  return buildChatDirectCodingRouteDeps({
     agentId: agent.id,
     tools: agent.tools,
     codeSessionStore: agent.codeSessionStore,
     parsePendingActionUserKey: (key) => agent.parsePendingActionUserKey(key),
-    ensureExplicitCodingTaskWorkspaceTarget: (input) => agent.ensureExplicitCodingTaskWorkspaceTarget(input),
     recordIntentRoutingTrace: (stage, input) => agent.recordIntentRoutingTrace(stage, input),
     getPendingApprovalIds: (userId, channel, surfaceId) => agent.getPendingApprovalIds(userId, channel, surfaceId),
     setPendingApprovals: (key, ids, surfaceId, nowMs) => agent.setPendingApprovals(key, ids, surfaceId, nowMs),
@@ -145,7 +142,10 @@ function directCodingBackendDepsForAgent(agent: any): DirectCodingBackendDeps {
       surfaceId,
       actionInput,
     ),
-  };
+    getActivePendingAction: (userId, channel, surfaceId) => agent.getActivePendingAction(userId, channel, surfaceId),
+    completePendingAction: (actionId) => agent.completePendingAction(actionId),
+    onMessage: (nextMessage, nextCtx) => agent.onMessage(nextMessage, nextCtx),
+  }).backendDeps;
 }
 
 function tryAgentDirectCodingBackendDelegation(

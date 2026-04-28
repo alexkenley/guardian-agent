@@ -1,12 +1,22 @@
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../../llm/types.js';
+import type { ToolExecutor } from '../../tools/executor.js';
+import type { CodeSessionStore } from '../code-sessions.js';
 import type { ConversationKey, ConversationService } from '../conversation.js';
 import type { ContinuityThreadRecord } from '../continuity-threads.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
+import type { IntentRoutingTraceStage } from '../intent-routing-trace.js';
+import type {
+  PendingActionApprovalSummary,
+  PendingActionRecord,
+} from '../pending-actions.js';
 import {
+  ensureExplicitCodingTaskWorkspaceTarget,
   tryDirectCodeSessionControlFromGateway,
   type CodeSessionControlDeps,
+  type CodeSessionToolExecutor,
   type CodingTaskResumer,
+  type OnMessageFn,
 } from './code-session-control.js';
 import { tryDirectAutomationAuthoring, tryDirectAutomationControl, tryDirectAutomationOutput, tryDirectBrowserAutomation } from './direct-automation.js';
 import {
@@ -30,6 +40,7 @@ import type { DirectIntentHandlerMap } from './direct-route-orchestration.js';
 import { tryDirectFilesystemIntent } from './direct-route-runtime.js';
 import { tryDirectWebSearch } from './direct-web-search.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
+import type { PendingActionSetResult } from './orchestration-state.js';
 import type { StoredToolLoopSanitizedResult } from './tool-loop-runtime.js';
 
 type DirectCodeContext = {
@@ -42,6 +53,70 @@ export type DirectCodeSessionControlDeps = Omit<CodeSessionControlDeps, 'resumeC
 export interface ChatDirectCodingRouteDeps {
   backendDeps: DirectCodingBackendDeps;
   sessionControlDeps: DirectCodeSessionControlDeps;
+}
+
+type DirectCodingRouteTools = Pick<
+  ToolExecutor,
+  'isEnabled' | 'executeModelTool' | 'getApprovalSummaries' | 'getCodeSessionManagedSandboxStatus'
+> | null | undefined;
+
+export interface BuildChatDirectCodingRouteDepsInput {
+  agentId: string;
+  tools?: DirectCodingRouteTools;
+  codeSessionStore?: Pick<CodeSessionStore, 'getSession' | 'listSessionsForUser'> | null;
+  parsePendingActionUserKey: (userKey: string) => { userId: string; channel: string };
+  recordIntentRoutingTrace: (
+    stage: IntentRoutingTraceStage,
+    input: {
+      message?: UserMessage;
+      requestId?: string;
+      details?: Record<string, unknown>;
+      contentPreview?: string;
+    },
+  ) => void;
+  getPendingApprovalIds: (userId: string, channel: string, surfaceId?: string) => string[];
+  setPendingApprovals: (
+    userKey: string,
+    ids: string[],
+    surfaceId?: string,
+    nowMs?: number,
+  ) => void;
+  syncPendingApprovalsFromExecutor: (
+    sourceUserId: string,
+    sourceChannel: string,
+    targetUserId: string,
+    targetChannel: string,
+    surfaceId?: string,
+    originalUserContent?: string,
+  ) => void;
+  setPendingApprovalAction: (
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+      resume?: PendingActionRecord['resume'];
+      codeSessionId?: string;
+    },
+  ) => PendingActionSetResult;
+  getActivePendingAction: (
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+  ) => PendingActionRecord | null;
+  completePendingAction: (actionId: string) => void;
+  onMessage: OnMessageFn;
 }
 
 export interface BuildChatDirectRouteHandlersInput {
@@ -91,6 +166,61 @@ export function buildDirectCodingTaskResumer(
     },
     backendDeps,
   );
+}
+
+function buildDirectCodeSessionToolExecutor(
+  input: Pick<BuildChatDirectCodingRouteDepsInput, 'agentId' | 'tools'>,
+): CodeSessionToolExecutor {
+  return (toolName, args, message, ctx) => input.tools!.executeModelTool(
+    toolName,
+    args,
+    {
+      origin: 'assistant',
+      agentId: input.agentId,
+      userId: message.userId,
+      surfaceId: message.surfaceId,
+      principalId: message.principalId ?? message.userId,
+      principalRole: message.principalRole,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    },
+  );
+}
+
+export function buildChatDirectCodingRouteDeps(
+  input: BuildChatDirectCodingRouteDepsInput,
+): ChatDirectCodingRouteDeps {
+  const executeDirectCodeSessionTool = buildDirectCodeSessionToolExecutor(input);
+  const backendDeps: DirectCodingBackendDeps = {
+    agentId: input.agentId,
+    tools: input.tools,
+    codeSessionStore: input.codeSessionStore,
+    parsePendingActionUserKey: input.parsePendingActionUserKey,
+    ensureExplicitCodingTaskWorkspaceTarget: (nextInput) => ensureExplicitCodingTaskWorkspaceTarget({
+      toolsEnabled: input.tools?.isEnabled() === true,
+      codeSessionStore: input.codeSessionStore,
+      executeDirectCodeSessionTool,
+      ...nextInput,
+    }),
+    recordIntentRoutingTrace: input.recordIntentRoutingTrace,
+    getPendingApprovalIds: input.getPendingApprovalIds,
+    setPendingApprovals: input.setPendingApprovals,
+    syncPendingApprovalsFromExecutor: input.syncPendingApprovalsFromExecutor,
+    setPendingApprovalAction: input.setPendingApprovalAction,
+  };
+  return {
+    backendDeps,
+    sessionControlDeps: {
+      executeDirectCodeSessionTool,
+      getCodeSessionManagedSandboxes: input.tools?.getCodeSessionManagedSandboxStatus
+        ? (sessionId, ownerUserId) => input.tools!.getCodeSessionManagedSandboxStatus!({ sessionId, ownerUserId })
+        : undefined,
+      getActivePendingAction: input.getActivePendingAction,
+      completePendingAction: input.completePendingAction,
+      onMessage: input.onMessage,
+    },
+  };
 }
 
 export function tryDirectChatCodeSessionControl(input: {
