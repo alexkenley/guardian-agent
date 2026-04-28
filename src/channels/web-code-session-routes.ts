@@ -47,6 +47,9 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+const WEB_CODE_USER_ID = 'web-user';
+const WEB_CODE_CHANNEL = 'web';
+
 function readSurfaceIdFromSearchParams(url: URL): string | undefined {
   return trimOptionalString(url.searchParams.get('surfaceId'));
 }
@@ -66,12 +69,10 @@ export async function handleWebCodeSessionRoutes(
       return true;
     }
     const principal = context.resolveRequestPrincipal(req);
-    const userId = url.searchParams.get('userId') || 'web-user';
-    const channel = url.searchParams.get('channel') || 'web';
     sendJSON(res, 200, dashboard.onCodeSessionsList({
-      userId,
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel,
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
     }));
     return true;
@@ -99,9 +100,9 @@ export async function handleWebCodeSessionRoutes(
     const principal = context.resolveRequestPrincipal(req);
     try {
       const result = dashboard.onCodeSessionCreate({
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         title: parsed.title!,
         workspaceRoot: parsed.workspaceRoot!,
@@ -134,9 +135,9 @@ export async function handleWebCodeSessionRoutes(
     const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; surfaceId?: string };
     const principal = context.resolveRequestPrincipal(req);
     const result = dashboard.onCodeSessionDetach({
-      userId: parsed.userId || 'web-user',
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel: parsed.channel || 'web',
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
     });
     sendJSON(res, 200, result);
@@ -157,9 +158,9 @@ export async function handleWebCodeSessionRoutes(
     };
     const principal = context.resolveRequestPrincipal(req);
     const result = dashboard.onCodeSessionSetReferences({
-      userId: parsed.userId || 'web-user',
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel: parsed.channel || 'web',
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       referencedSessionIds: Array.isArray(parsed.referencedSessionIds)
         ? parsed.referencedSessionIds.filter((value): value is string => typeof value === 'string')
@@ -183,9 +184,9 @@ export async function handleWebCodeSessionRoutes(
     };
     const principal = context.resolveRequestPrincipal(req);
     const result = dashboard.onCodeSessionSetTarget({
-      userId: parsed.userId || 'web-user',
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel: parsed.channel || 'web',
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       targetSessionId: trimOptionalString(parsed.targetSessionId) ?? null,
     });
@@ -207,9 +208,9 @@ export async function handleWebCodeSessionRoutes(
     const principal = context.resolveRequestPrincipal(req);
     const result = dashboard.onCodeSessionAttach({
       sessionId,
-      userId: parsed.userId || 'web-user',
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel: parsed.channel || 'web',
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       mode: trimOptionalString(parsed.mode) as CodeSessionAttachmentMode | undefined,
     });
@@ -245,10 +246,10 @@ export async function handleWebCodeSessionRoutes(
         sessionId,
         approvalId,
         decision: parsed.decision,
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
         principalRole: principal.principalRole,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         reason: trimOptionalString(parsed.reason),
       });
@@ -282,8 +283,8 @@ export async function handleWebCodeSessionRoutes(
     const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
     const result = dashboard.onCodeSessionResetConversation({
       sessionId,
-      userId: parsed.userId || 'web-user',
-      channel: parsed.channel || 'web',
+      userId: WEB_CODE_USER_ID,
+      channel: WEB_CODE_CHANNEL,
     });
     sendJSON(res, 200, result);
     return true;
@@ -299,14 +300,12 @@ export async function handleWebCodeSessionRoutes(
     }
     const sessionId = decodeURIComponent(codeSessionTimelineMatch[1]);
     const principal = context.resolveRequestPrincipal(req);
-    const userId = url.searchParams.get('userId') || 'web-user';
-    const channel = url.searchParams.get('channel') || 'web';
     const limit = Number.parseInt(url.searchParams.get('limit') || '12', 10);
     const result = dashboard.onCodeSessionTimeline({
       sessionId,
-      userId,
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel,
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
       limit: Number.isFinite(limit) ? limit : 12,
     });
@@ -328,13 +327,11 @@ export async function handleWebCodeSessionRoutes(
     }
     const sessionId = decodeURIComponent(codeSessionSandboxesMatch[1]);
     const principal = context.resolveRequestPrincipal(req);
-    const userId = url.searchParams.get('userId') || 'web-user';
-    const channel = url.searchParams.get('channel') || 'web';
     const result = await dashboard.onCodeSessionSandboxes({
       sessionId,
-      userId,
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel,
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
     });
     if (!result) {
@@ -368,9 +365,9 @@ export async function handleWebCodeSessionRoutes(
     try {
       const result = await dashboard.onCodeSessionSandboxCreate({
         sessionId,
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         targetId: trimOptionalString(parsed.targetId),
         profileId: trimOptionalString(parsed.profileId),
@@ -415,9 +412,9 @@ export async function handleWebCodeSessionRoutes(
       const result = await dashboard.onCodeSessionSandboxDelete({
         sessionId,
         leaseId,
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, 200, result);
@@ -458,9 +455,9 @@ export async function handleWebCodeSessionRoutes(
       const result = await dashboard.onCodeSessionSandboxStop({
         sessionId,
         leaseId,
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, 200, result);
@@ -493,9 +490,9 @@ export async function handleWebCodeSessionRoutes(
       const result = await dashboard.onCodeSessionSandboxStart({
         sessionId,
         leaseId,
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       });
       sendJSON(res, 200, result);
@@ -517,14 +514,12 @@ export async function handleWebCodeSessionRoutes(
         sendJSON(res, 404, { error: 'Not available' });
         return true;
       }
-      const userId = url.searchParams.get('userId') || 'web-user';
-      const channel = url.searchParams.get('channel') || 'web';
       const historyLimit = Number.parseInt(url.searchParams.get('historyLimit') || '120', 10);
       const result = dashboard.onCodeSessionGet({
         sessionId,
-        userId,
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel,
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
         historyLimit: Number.isFinite(historyLimit) ? historyLimit : 120,
       });
@@ -555,9 +550,9 @@ export async function handleWebCodeSessionRoutes(
       };
       const result = dashboard.onCodeSessionUpdate({
         sessionId,
-        userId: parsed.userId || 'web-user',
+        userId: WEB_CODE_USER_ID,
         principalId: principal.principalId,
-        channel: parsed.channel || 'web',
+        channel: WEB_CODE_CHANNEL,
         surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         title: trimOptionalString(parsed.title),
         workspaceRoot: trimOptionalString(parsed.workspaceRoot),
@@ -584,9 +579,9 @@ export async function handleWebCodeSessionRoutes(
       try {
         const result = await dashboard.onCodeSessionDelete({
           sessionId,
-          userId: parsed.userId || 'web-user',
+          userId: WEB_CODE_USER_ID,
           principalId: principal.principalId,
-          channel: parsed.channel || 'web',
+          channel: WEB_CODE_CHANNEL,
           surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
         });
         sendJSON(res, result.success ? 200 : 404, result);
@@ -617,13 +612,11 @@ export async function handleWebCodeSessionRoutes(
     }
     const sessionId = decodeURIComponent(codeSessionStructureMatch[1]);
     const principal = context.resolveRequestPrincipal(req);
-    const userId = url.searchParams.get('userId') || 'web-user';
-    const channel = url.searchParams.get('channel') || 'web';
     const snapshot = dashboard.onCodeSessionGet({
       sessionId,
-      userId,
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel,
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(readSurfaceIdFromSearchParams(url)),
       historyLimit: 1,
     });
@@ -694,9 +687,9 @@ export async function handleWebCodeSessionRoutes(
     };
     const snapshot = dashboard.onCodeSessionGet({
       sessionId,
-      userId: parsed.userId || 'web-user',
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel: parsed.channel || 'web',
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       historyLimit: 1,
     });

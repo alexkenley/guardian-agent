@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile, readdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import type { PrincipalRole } from '../tools/types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
@@ -27,6 +26,37 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+const WEB_CODE_USER_ID = 'web-user';
+const WEB_CODE_CHANNEL = 'web';
+
+type DashboardCodeSessionSnapshot = NonNullable<ReturnType<NonNullable<DashboardCallbacks['onCodeSessionGet']>>>;
+
+function getWebCodeSessionSnapshot(
+  context: WebCodeWorkspaceRoutesContext,
+  input: { sessionId?: string; surfaceId?: string },
+): { success: true; snapshot: DashboardCodeSessionSnapshot } | { success: false; status: number; error: string } {
+  const sessionId = trimOptionalString(input.sessionId);
+  if (!sessionId) {
+    return { success: false, status: 400, error: 'Code session is required' };
+  }
+  if (!context.dashboard.onCodeSessionGet) {
+    return { success: false, status: 404, error: 'Code sessions are not available' };
+  }
+  const principal = context.resolveRequestPrincipal(context.req);
+  const snapshot = context.dashboard.onCodeSessionGet({
+    sessionId,
+    userId: WEB_CODE_USER_ID,
+    principalId: principal.principalId,
+    channel: WEB_CODE_CHANNEL,
+    surfaceId: resolveWebSurfaceId(trimOptionalString(input.surfaceId)),
+    historyLimit: 1,
+  });
+  if (!snapshot) {
+    return { success: false, status: 404, error: 'Code session not found' };
+  }
+  return { success: true, snapshot };
+}
+
 export async function handleWebCodeWorkspaceRoutes(
   context: WebCodeWorkspaceRoutesContext,
 ): Promise<boolean> {
@@ -41,27 +71,17 @@ export async function handleWebCodeWorkspaceRoutes(
       channel?: string;
       surfaceId?: string;
     };
-    let targetPath = resolve(parsed.path || '.');
-    if (trimOptionalString(parsed.sessionId) && dashboard.onCodeSessionGet) {
-      const principal = context.resolveRequestPrincipal(req);
-      const snapshot = dashboard.onCodeSessionGet({
-        sessionId: parsed.sessionId!,
-        userId: parsed.userId || 'web-user',
-        principalId: principal.principalId,
-        channel: parsed.channel || 'web',
-        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
-        historyLimit: 1,
-      });
-      if (!snapshot) {
-        sendJSON(res, 404, { success: false, error: 'Code session not found' });
-        return true;
-      }
-      try {
-        targetPath = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.path, '.');
-      } catch (err) {
-        sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
-        return true;
-      }
+    const sessionLookup = getWebCodeSessionSnapshot(context, parsed);
+    if (!sessionLookup.success) {
+      sendJSON(res, sessionLookup.status, { success: false, error: sessionLookup.error });
+      return true;
+    }
+    let targetPath: string;
+    try {
+      targetPath = context.resolveCodeSessionPath(sessionLookup.snapshot.session.resolvedRoot, parsed.path, '.');
+    } catch (err) {
+      sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+      return true;
     }
     try {
       const entries = await readdir(targetPath, { withFileTypes: true });
@@ -91,27 +111,17 @@ export async function handleWebCodeWorkspaceRoutes(
       channel?: string;
       surfaceId?: string;
     };
-    let targetPath = resolve(parsed.path || '.');
-    if (trimOptionalString(parsed.sessionId) && dashboard.onCodeSessionGet) {
-      const principal = context.resolveRequestPrincipal(req);
-      const snapshot = dashboard.onCodeSessionGet({
-        sessionId: parsed.sessionId!,
-        userId: parsed.userId || 'web-user',
-        principalId: principal.principalId,
-        channel: parsed.channel || 'web',
-        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
-        historyLimit: 1,
-      });
-      if (!snapshot) {
-        sendJSON(res, 404, { success: false, error: 'Code session not found' });
-        return true;
-      }
-      try {
-        targetPath = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.path);
-      } catch (err) {
-        sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
-        return true;
-      }
+    const sessionLookup = getWebCodeSessionSnapshot(context, parsed);
+    if (!sessionLookup.success) {
+      sendJSON(res, sessionLookup.status, { success: false, error: sessionLookup.error });
+      return true;
+    }
+    let targetPath: string;
+    try {
+      targetPath = context.resolveCodeSessionPath(sessionLookup.snapshot.session.resolvedRoot, parsed.path);
+    } catch (err) {
+      sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+      return true;
     }
     const maxBytes = Math.max(1024, Math.min(500_000, Number(parsed.maxBytes) || 250_000));
     try {
@@ -141,27 +151,17 @@ export async function handleWebCodeWorkspaceRoutes(
       sendJSON(res, 400, { success: false, error: 'Missing content' });
       return true;
     }
-    let targetPath = resolve(parsed.path || '.');
-    if (trimOptionalString(parsed.sessionId) && dashboard.onCodeSessionGet) {
-      const principal = context.resolveRequestPrincipal(req);
-      const snapshot = dashboard.onCodeSessionGet({
-        sessionId: parsed.sessionId!,
-        userId: parsed.userId || 'web-user',
-        principalId: principal.principalId,
-        channel: parsed.channel || 'web',
-        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
-        historyLimit: 1,
-      });
-      if (!snapshot) {
-        sendJSON(res, 404, { success: false, error: 'Code session not found' });
-        return true;
-      }
-      try {
-        targetPath = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.path);
-      } catch (err) {
-        sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
-        return true;
-      }
+    const sessionLookup = getWebCodeSessionSnapshot(context, parsed);
+    if (!sessionLookup.success) {
+      sendJSON(res, sessionLookup.status, { success: false, error: sessionLookup.error });
+      return true;
+    }
+    let targetPath: string;
+    try {
+      targetPath = context.resolveCodeSessionPath(sessionLookup.snapshot.session.resolvedRoot, parsed.path);
+    } catch (err) {
+      sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+      return true;
     }
     try {
       const { writeFile } = await import('node:fs/promises');
@@ -184,32 +184,22 @@ export async function handleWebCodeWorkspaceRoutes(
       channel?: string;
       surfaceId?: string;
     };
-    let cwd = resolve(parsed.cwd || '.');
     let sessionPath = trimOptionalString(parsed.path);
-    if (trimOptionalString(parsed.sessionId) && dashboard.onCodeSessionGet) {
-      const principal = context.resolveRequestPrincipal(req);
-      const snapshot = dashboard.onCodeSessionGet({
-        sessionId: parsed.sessionId!,
-        userId: parsed.userId || 'web-user',
-        principalId: principal.principalId,
-        channel: parsed.channel || 'web',
-        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
-        historyLimit: 1,
-      });
-      if (!snapshot) {
-        sendJSON(res, 404, { success: false, error: 'Code session not found' });
-        return true;
+    const sessionLookup = getWebCodeSessionSnapshot(context, parsed);
+    if (!sessionLookup.success) {
+      sendJSON(res, sessionLookup.status, { success: false, error: sessionLookup.error });
+      return true;
+    }
+    let cwd: string;
+    try {
+      cwd = context.resolveCodeSessionPath(sessionLookup.snapshot.session.resolvedRoot, parsed.cwd, '.');
+      if (sessionPath) {
+        const resolvedPath = context.resolveCodeSessionPath(sessionLookup.snapshot.session.resolvedRoot, sessionPath);
+        sessionPath = context.toRelativeSessionPath(sessionLookup.snapshot.session.resolvedRoot, resolvedPath);
       }
-      try {
-        cwd = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.cwd, '.');
-        if (sessionPath) {
-          const resolvedPath = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, sessionPath);
-          sessionPath = context.toRelativeSessionPath(snapshot.session.resolvedRoot, resolvedPath);
-        }
-      } catch (err) {
-        sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
-        return true;
-      }
+    } catch (err) {
+      sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+      return true;
     }
     const args = ['diff'];
     if (parsed.staged) args.push('--staged');
@@ -241,13 +231,11 @@ export async function handleWebCodeWorkspaceRoutes(
   if (req.method === 'GET' && gitStatusMatch) {
     const sessionId = decodeURIComponent(gitStatusMatch[1]);
     const principal = context.resolveRequestPrincipal(req);
-    const userId = url.searchParams.get('userId') || 'web-user';
-    const channel = url.searchParams.get('channel') || 'web';
     const snapshot = dashboard.onCodeSessionGet?.({
       sessionId,
-      userId,
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel,
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(context.readSurfaceIdFromSearchParams(url)),
       historyLimit: 1,
     });
@@ -311,9 +299,9 @@ export async function handleWebCodeWorkspaceRoutes(
     const principal = context.resolveRequestPrincipal(req);
     const snapshot = dashboard.onCodeSessionGet?.({
       sessionId,
-      userId: parsed.userId || 'web-user',
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel: parsed.channel || 'web',
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
       historyLimit: 1,
     });
@@ -328,6 +316,14 @@ export async function handleWebCodeWorkspaceRoutes(
       sendJSON(res, 400, { success: false, error: `Invalid git action: ${action}` });
       return true;
     }
+    let gitPath = parsed.path || '.';
+    try {
+      const resolvedGitPath = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, gitPath, '.');
+      gitPath = context.toRelativeSessionPath(snapshot.session.resolvedRoot, resolvedGitPath) || '.';
+    } catch (err) {
+      sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+      return true;
+    }
     try {
       const { execFile } = await import('node:child_process');
       const run = (args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
@@ -339,10 +335,10 @@ export async function handleWebCodeWorkspaceRoutes(
       let result: { stdout: string; stderr: string; exitCode: number };
       switch (action) {
         case 'stage':
-          result = await run(['add', '--', parsed.path || '.']);
+          result = await run(['add', '--', gitPath]);
           break;
         case 'unstage':
-          result = await run(['reset', 'HEAD', '--', parsed.path || '.']);
+          result = await run(['reset', 'HEAD', '--', gitPath]);
           break;
         case 'commit':
           if (!parsed.message?.trim()) {
@@ -361,7 +357,7 @@ export async function handleWebCodeWorkspaceRoutes(
           result = await run(['fetch']);
           break;
         case 'discard':
-          result = await run(['checkout', '--', parsed.path || '.']);
+          result = await run(['checkout', '--', gitPath]);
           break;
         case 'init':
           result = await run(['init']);
@@ -381,13 +377,11 @@ export async function handleWebCodeWorkspaceRoutes(
   if (req.method === 'GET' && gitGraphMatch) {
     const sessionId = decodeURIComponent(gitGraphMatch[1]);
     const principal = context.resolveRequestPrincipal(req);
-    const userId = url.searchParams.get('userId') || 'web-user';
-    const channel = url.searchParams.get('channel') || 'web';
     const snapshot = dashboard.onCodeSessionGet?.({
       sessionId,
-      userId,
+      userId: WEB_CODE_USER_ID,
       principalId: principal.principalId,
-      channel,
+      channel: WEB_CODE_CHANNEL,
       surfaceId: resolveWebSurfaceId(context.readSurfaceIdFromSearchParams(url)),
       historyLimit: 1,
     });

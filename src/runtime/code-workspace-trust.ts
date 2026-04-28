@@ -167,7 +167,13 @@ export type CodeWorkspaceTrustFindingKind =
   | 'inline_exec'
   | 'network_fetch'
   | 'shell_launcher'
-  | 'native_av_detection';
+  | 'native_av_detection'
+  | 'privileged_client_secret'
+  | 'public_env_secret'
+  | 'hardcoded_fallback_secret'
+  | 'permissive_rls_policy'
+  | 'public_storage_bucket'
+  | 'unsigned_webhook_handler';
 
 export type CodeWorkspaceNativeProtectionStatus =
   | 'pending'
@@ -261,6 +267,46 @@ function isExecutableRepoFile(relativePath: string): boolean {
     || normalized.startsWith('.github/workflows/')
     || normalized.startsWith('.devcontainer/')
     || normalized.includes('/scripts/');
+}
+
+function isCodeFile(relativePath: string): boolean {
+  const extension = extname(relativePath).toLowerCase();
+  return [
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '.mjs',
+    '.cjs',
+    '.mts',
+    '.cts',
+    '.py',
+    '.go',
+    '.rs',
+    '.java',
+    '.kt',
+    '.rb',
+    '.php',
+    '.cs',
+    '.swift',
+  ].includes(extension);
+}
+
+function isClientExposedPath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/').toLowerCase();
+  const extension = extname(normalized);
+  return normalized.startsWith('web/public/')
+    || normalized.startsWith('public/')
+    || normalized.startsWith('src/client/')
+    || normalized.startsWith('src/components/')
+    || normalized.startsWith('src/pages/')
+    || normalized.startsWith('pages/')
+    || normalized.startsWith('app/')
+    || normalized.includes('/client/')
+    || normalized.includes('/components/')
+    || extension === '.tsx'
+    || extension === '.jsx'
+    || extension === '.html';
 }
 
 function toEvidence(match: RegExpMatchArray | null | undefined): string | undefined {
@@ -391,6 +437,107 @@ function scanPackageManifest(relativePath: string, content: string, context: Sca
   }
 }
 
+function scanCredentialAntiPatterns(relativePath: string, content: string, context: ScanContext): void {
+  const publicEnvMatch = content.match(/\b(?:NEXT_PUBLIC|VITE|PUBLIC|REACT_APP)_[A-Z0-9_]*(?:SECRET|TOKEN|PRIVATE|SERVICE[_-]?ROLE|PASSWORD|DATABASE|DB[_-]?URL|API[_-]?KEY|OPENAI|ANTHROPIC|AWS|STRIPE[_-]?SK|SENDGRID|TWILIO)[A-Z0-9_]*\b/i);
+  if (publicEnvMatch) {
+    pushFinding(context, {
+      severity: 'high',
+      kind: 'public_env_secret',
+      path: relativePath,
+      summary: 'Publicly bundled environment variable name appears to contain secret material.',
+      evidence: toEvidence(publicEnvMatch),
+    });
+  }
+
+  const serviceRoleMatch = content.match(/\b(?:SUPABASE_)?SERVICE[_-]?ROLE(?:_KEY)?\b|service[_-]?role/i);
+  if (serviceRoleMatch && /\b(?:supabase|createClient|NEXT_PUBLIC|VITE|REACT_APP|PUBLIC_)/i.test(content)) {
+    const clientExposed = isClientExposedPath(relativePath) || /\b(?:NEXT_PUBLIC|VITE|REACT_APP|PUBLIC_)/i.test(content);
+    pushFinding(context, {
+      severity: clientExposed ? 'high' : 'warn',
+      kind: 'privileged_client_secret',
+      path: relativePath,
+      summary: clientExposed
+        ? 'Privileged service-role credential appears in client-exposed code or public environment configuration.'
+        : 'Privileged service-role credential reference appears in repo code.',
+      evidence: toEvidence(serviceRoleMatch),
+    });
+  }
+
+  const fallbackPatterns = [
+    /\b(?:process\.env\.|import\.meta\.env\.)([A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PRIVATE)[A-Z0-9_]*)\s*(?:\|\||\?\?)\s*(['"`])([^'"`]{4,})\2/gi,
+    /\benviron\.get\(\s*(['"`])([A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PRIVATE)[A-Z0-9_]*)\1\s*,\s*(['"`])([^'"`]{4,})\3\s*\)/gi,
+  ];
+  for (const regex of fallbackPatterns) {
+    for (const match of content.matchAll(regex)) {
+      const fallback = match[3] || match[4] || '';
+      if (!/(?:secret|token|password|passwd|changeme|change-me|dev|test|example|placeholder|key)/i.test(fallback) && fallback.length < 16) {
+        continue;
+      }
+      pushFinding(context, {
+        severity: 'high',
+        kind: 'hardcoded_fallback_secret',
+        path: relativePath,
+        summary: 'Secret-like environment lookup has a hardcoded fallback value.',
+        evidence: toEvidence(match),
+      });
+      break;
+    }
+  }
+}
+
+function scanAuthorizationAntiPatterns(relativePath: string, content: string, context: ScanContext): void {
+  if (extname(relativePath).toLowerCase() !== '.sql') return;
+
+  const permissivePolicyMatch = content.match(/\b(?:create|alter)\s+policy\b[\s\S]{0,600}\b(?:using|with\s+check)\s*\(\s*(?:true|auth\.uid\(\)\s+is\s+not\s+null)\s*\)/i);
+  if (permissivePolicyMatch) {
+    pushFinding(context, {
+      severity: 'high',
+      kind: 'permissive_rls_policy',
+      path: relativePath,
+      summary: 'Supabase/Postgres policy appears permissive and may not enforce row ownership.',
+      evidence: toEvidence(permissivePolicyMatch),
+    });
+  }
+}
+
+function scanExposureAntiPatterns(relativePath: string, content: string, context: ScanContext): void {
+  const publicBucketMatch = content.match(/(?:storage\.buckets|createBucket|bucket|buckets)[\s\S]{0,240}\bpublic\b\s*[:=]\s*true/i)
+    || content.match(/\binsert\s+into\s+storage\.buckets\b[\s\S]{0,240}\btrue\b/i);
+  if (publicBucketMatch) {
+    pushFinding(context, {
+      severity: 'warn',
+      kind: 'public_storage_bucket',
+      path: relativePath,
+      summary: 'Storage bucket configuration appears to enable public access.',
+      evidence: toEvidence(publicBucketMatch),
+    });
+  }
+}
+
+function scanWebhookAntiPatterns(relativePath: string, content: string, context: ScanContext): void {
+  if (!isCodeFile(relativePath)) return;
+  const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
+  const mentionsWebhook = normalizedPath.includes('webhook') || /\bwebhooks?\b/i.test(content);
+  if (!mentionsWebhook) return;
+  const consumesBody = /\b(?:req\.body|request\.json\s*\(|request\.text\s*\(|await\s+.*\.json\s*\(|rawBody|bodyParser)\b/i.test(content);
+  if (!consumesBody) return;
+  const verifiesSignature = /\b(?:constructEvent|x-hub-signature|x-signature|stripe-signature|svix-signature|webhook-signature|createHmac|timingSafeEqual|verifyWebhook|verifySignature|signature)\b/i.test(content);
+  if (verifiesSignature) return;
+  pushFinding(context, {
+    severity: 'warn',
+    kind: 'unsigned_webhook_handler',
+    path: relativePath,
+    summary: 'Webhook-like handler consumes request body without an obvious signature verification check.',
+  });
+}
+
+function scanSaasAntiPatterns(relativePath: string, content: string, context: ScanContext): void {
+  scanCredentialAntiPatterns(relativePath, content, context);
+  scanAuthorizationAntiPatterns(relativePath, content, context);
+  scanExposureAntiPatterns(relativePath, content, context);
+  scanWebhookAntiPatterns(relativePath, content, context);
+}
+
 function scanFile(workspaceRoot: string, relativePath: string, context: ScanContext): void {
   if (context.filesScanned >= MAX_SCAN_FILES) {
     context.truncated = true;
@@ -414,6 +561,7 @@ function scanFile(workspaceRoot: string, relativePath: string, context: ScanCont
   scanPromptInjection(relativePath, content, context);
   scanExecutablePatterns(relativePath, content, context);
   scanPackageManifest(relativePath, content, context);
+  scanSaasAntiPatterns(relativePath, content, context);
 }
 
 function visitDirectory(workspaceRoot: string, absoluteDir: string, relativeDir: string, depth: number, context: ScanContext): void {

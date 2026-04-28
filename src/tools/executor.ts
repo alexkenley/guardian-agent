@@ -4649,6 +4649,14 @@ export class ToolExecutor {
       if (!command) {
         return 'command is required';
       }
+      const cwd = typeof args.cwd === 'string' ? args.cwd.trim() : '';
+      if (cwd) {
+        try {
+          await this.resolveAllowedPath(cwd, request);
+        } catch (err) {
+          return err instanceof Error ? err.message : 'Package install cwd is outside the allowed workspace paths.';
+        }
+      }
       const plannedInstall = parseManagedPackageInstallCommand(command);
       return plannedInstall.success ? null : (plannedInstall.error ?? 'Managed package install planning failed.');
     }

@@ -611,7 +611,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Package-manager command to run through the managed install path.' },
-          cwd: { type: 'string', description: 'Optional working directory for the install command. Unlike shell_safe, this is not limited to allowedPaths.' },
+          cwd: { type: 'string', description: 'Optional working directory for the install command. Must resolve inside the active workspace or configured allowed paths.' },
           allowCaution: { type: 'boolean', description: 'Proceed when the staged review result is caution. Blocked findings still stop the install.' },
         },
         required: ['command'],
@@ -620,12 +620,12 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
     async (args, request) => {
       const command = requireString(args.command, 'command').trim();
       const cwd = asString(args.cwd).trim() || undefined;
+      const resolvedCwd = cwd ? await context.resolveAllowedPath(cwd, request) : context.getEffectiveWorkspaceRoot(request);
 
       // Automatic tier promotion if a remote execution target is available
       if (context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
         const remoteTarget = await context.resolveRemoteExecutionTarget(undefined, command, request.codeContext?.workspaceRoot);
         if (remoteTarget) {
-          const resolvedCwd = cwd ? await context.resolveAllowedPath(cwd, request) : context.getEffectiveWorkspaceRoot(request);
           context.guardAction(request, 'execute_command', {
             command,
             cwd: resolvedCwd,
@@ -671,14 +671,14 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       const allowCaution = !!args.allowCaution;
       context.guardAction(request, 'execute_command', {
         command,
-        cwd,
+        cwd: resolvedCwd,
         managed: true,
         tool: 'package_install',
         allowCaution,
       });
       const result = await context.packageInstallTrust.runManagedInstall({
         command,
-        cwd,
+        cwd: resolvedCwd,
         allowCaution,
       });
       if (!result.success) {

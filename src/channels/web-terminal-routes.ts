@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import type { PrincipalRole } from '../tools/types.js';
-import { buildHardenedEnv } from '../sandbox/index.js';
 import type { DashboardCallbacks, SSEEvent } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
 import {
@@ -46,6 +46,78 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+const WEB_CODE_USER_ID = 'web-user';
+const WEB_CODE_CHANNEL = 'web';
+
+const TERMINAL_SAFE_ENV_NAMES = new Set([
+  'APPDATA',
+  'COLORTERM',
+  'ComSpec',
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'LOCALAPPDATA',
+  'Path',
+  'PATH',
+  'PATHEXT',
+  'ProgramData',
+  'ProgramFiles',
+  'ProgramFiles(x86)',
+  'PSModulePath',
+  'SHELL',
+  'SystemDrive',
+  'SystemRoot',
+  'TEMP',
+  'TERM',
+  'TMP',
+  'USER',
+  'USERNAME',
+  'USERPROFILE',
+  'WINDIR',
+  'windir',
+]);
+
+const SECRET_ENV_NAME_PATTERN = /(?:TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|COOKIE|BEARER|AUTH|SESSION|API[_-]?KEY|ACCESS[_-]?KEY|OPENAI|ANTHROPIC|AWS|AZURE|GOOGLE|GITHUB|GITLAB|NPM|SUPABASE|SERVICE[_-]?ROLE|STRIPE|SLACK|TWILIO|SENDGRID)/i;
+
+function addEnvIfSafe(target: Record<string, string>, source: NodeJS.ProcessEnv | Record<string, string | undefined>, name: string): void {
+  if (!TERMINAL_SAFE_ENV_NAMES.has(name) || SECRET_ENV_NAME_PATTERN.test(name)) return;
+  const value = source[name];
+  if (typeof value === 'string' && value) {
+    target[name] = value;
+  }
+}
+
+export function buildCodeTerminalEnv(
+  workspaceRoot: string,
+  launchEnv: Record<string, string | undefined> = {},
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of TERMINAL_SAFE_ENV_NAMES) {
+    addEnvIfSafe(env, process.env, name);
+  }
+  for (const name of Object.keys(launchEnv)) {
+    addEnvIfSafe(env, launchEnv, name);
+  }
+
+  const cacheRoot = resolve(workspaceRoot, '.guardianagent', 'cache');
+  env.HOME = workspaceRoot;
+  if (platform === 'win32') {
+    env.USERPROFILE = workspaceRoot;
+  }
+  env.npm_config_cache = resolve(cacheRoot, 'npm');
+  env.NPM_CONFIG_CACHE = resolve(cacheRoot, 'npm');
+  env.YARN_CACHE_FOLDER = resolve(cacheRoot, 'yarn');
+  env.PNPM_STORE_DIR = resolve(cacheRoot, 'pnpm');
+  env.PIP_CACHE_DIR = resolve(cacheRoot, 'pip');
+  env.UV_CACHE_DIR = resolve(cacheRoot, 'uv');
+  env.CARGO_HOME = resolve(cacheRoot, 'cargo');
+  env.RUSTUP_HOME = resolve(cacheRoot, 'rustup');
+  env.GOCACHE = resolve(cacheRoot, 'go-build');
+  env.GOMODCACHE = resolve(cacheRoot, 'go-mod');
+  return env;
+}
+
 function canAccessTerminal(
   req: IncomingMessage,
   session: WebTerminalSessionRecord,
@@ -81,30 +153,36 @@ export async function handleWebTerminalRoutes(
     };
     const platform = process.platform;
     const shellType = parsed.shell || getDefaultShellForPlatform(platform);
-    let requestedCwd = parsed.cwd || process.cwd();
-    let codeSessionId: string | null = null;
-    if (trimOptionalString(parsed.sessionId) && dashboard.onCodeSessionGet) {
-      const principal = context.resolveRequestPrincipal(req);
-      const snapshot = dashboard.onCodeSessionGet({
-        sessionId: parsed.sessionId!,
-        userId: parsed.userId || 'web-user',
-        principalId: principal.principalId,
-        channel: parsed.channel || 'web',
-        surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
-        historyLimit: 1,
-      });
-      if (!snapshot) {
-        sendJSON(res, 404, { success: false, error: 'Code session not found' });
-        return true;
-      }
-      try {
-        requestedCwd = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.cwd, '.');
-        codeSessionId = snapshot.session.id;
-      } catch (err) {
-        sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
-        return true;
-      }
+    const sessionId = trimOptionalString(parsed.sessionId);
+    if (!sessionId) {
+      sendJSON(res, 400, { success: false, error: 'Code session is required' });
+      return true;
     }
+    if (!dashboard.onCodeSessionGet) {
+      sendJSON(res, 404, { success: false, error: 'Code sessions are not available' });
+      return true;
+    }
+    const principal = context.resolveRequestPrincipal(req);
+    const snapshot = dashboard.onCodeSessionGet({
+      sessionId,
+      userId: WEB_CODE_USER_ID,
+      principalId: principal.principalId,
+      channel: WEB_CODE_CHANNEL,
+      surfaceId: resolveWebSurfaceId(trimOptionalString(parsed.surfaceId)),
+      historyLimit: 1,
+    });
+    if (!snapshot) {
+      sendJSON(res, 404, { success: false, error: 'Code session not found' });
+      return true;
+    }
+    let requestedCwd: string;
+    try {
+      requestedCwd = context.resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.cwd, '.');
+    } catch (err) {
+      sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+      return true;
+    }
+    const codeSessionId = snapshot.session.id;
     const launch = getPtyShellLaunch(shellType, platform, requestedCwd);
     const cols = Math.max(40, Math.min(240, Number(parsed.cols) || 120));
     const rows = Math.max(12, Math.min(120, Number(parsed.rows) || 30));
@@ -117,10 +195,7 @@ export async function handleWebTerminalRoutes(
         cols,
         rows,
         cwd: ptyCwd,
-        env: buildHardenedEnv({
-          ...process.env,
-          ...launch.env,
-        }),
+        env: buildCodeTerminalEnv(snapshot.session.resolvedRoot, launch.env, platform),
       });
       const session: WebTerminalSessionRecord = {
         id: terminalId,
