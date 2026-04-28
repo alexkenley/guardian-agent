@@ -93,14 +93,12 @@ import {
 } from '../runtime/execution-graph/delegated-worker-verification.js';
 import {
   buildDelegatedRetryableFailure,
-  buildDelegatedRetryAttemptPlan,
   isDelegatedAnswerSynthesisRetry,
   runDelegatedGroundedAnswerSynthesisRetry,
-  selectDelegatedRetryExecutionProfile,
   shouldAdoptDelegatedTaskContract,
-  shouldUseSameProfileDelegatedRetry,
   type DelegatedResultSufficiencyFailure,
 } from '../runtime/execution-graph/delegated-worker-retry.js';
+import { runDelegatedWorkerRetryInvocation } from '../runtime/execution-graph/delegated-worker-retry-invocation.js';
 import {
   buildWorkerSuspensionArtifact,
   readWorkerSuspensionArtifact,
@@ -1966,33 +1964,25 @@ export class WorkerManager {
       );
       let answerSynthesisFallback = buildAnswerSynthesisFallback();
       if (insufficiency) {
-        const retryProfile = shouldUseSameProfileDelegatedRetry(insufficiency, effectiveExecutionProfile)
-          ? effectiveExecutionProfile ?? null
-          : selectDelegatedRetryExecutionProfile({
-                config: this.runtime.getConfigSnapshot?.(),
-                orchestration: delegatedTarget.orchestration,
-                intentDecision: effectiveIntentDecision ?? undefined,
-                currentProfile: effectiveExecutionProfile,
-                insufficiency,
-              });
-        if (retryProfile) {
-          const retryPlan = buildDelegatedRetryAttemptPlan({
-            targetLabel: describeDelegatedTarget(delegatedTarget),
-            currentProfile: effectiveExecutionProfile,
-            retryProfile,
-            insufficiency,
-            codeSessionId: input.delegation?.codeSessionId,
-            baseSections: baseDispatchParams.additionalSections,
-            baseRecord: preRoutedGateway,
-            baseDecision: effectiveIntentDecision ?? undefined,
-            taskContract: effectiveTaskContract,
-          });
-          effectiveExecutionProfile = retryProfile;
-          effectiveInput = {
+        const retryInvocation = await runDelegatedWorkerRetryInvocation({
+          requestId,
+          taskRunId: delegatedTaskRunId,
+          targetLabel: describeDelegatedTarget(delegatedTarget),
+          currentRequest: input,
+          currentExecutionProfile: effectiveExecutionProfile,
+          config: this.runtime.getConfigSnapshot?.(),
+          orchestration: delegatedTarget.orchestration,
+          intentDecision: effectiveIntentDecision ?? undefined,
+          baseRecord: preRoutedGateway,
+          taskContract: effectiveTaskContract,
+          insufficiency,
+          codeSessionId: input.delegation?.codeSessionId,
+          baseSections: baseDispatchParams.additionalSections,
+          buildRetryRequest: ({ retryProfile, retryPlan }) => ({
             ...input,
-            ...(effectiveExecutionProfile === input.executionProfile
+            ...(retryProfile === input.executionProfile
               ? {}
-              : { executionProfile: effectiveExecutionProfile }),
+              : { executionProfile: retryProfile }),
             message: {
               ...input.message,
               metadata: attachPreRoutedIntentGatewayMetadata(
@@ -2000,73 +1990,92 @@ export class WorkerManager {
                 retryPlan.intentGatewayRecord,
               ),
             },
-          };
-          this.recordDelegatedWorkerTrace('delegated_worker_retrying', effectiveInput, delegatedTarget, {
-            requestId,
-            taskRunId: delegatedTaskRunId,
-            lifecycle: 'running',
-            workerId: worker.id,
-            taskContract: effectiveTaskContract,
-            additionalSections: retryPlan.additionalSections,
-            reason: retryPlan.detail,
-          });
-          this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
-            id: `delegated-worker:${delegatedJob.id}:retrying`,
-            kind: 'running',
-            requestId,
-            taskRunId: delegatedTaskRunId,
-            workerId: worker.id,
-            detail: retryPlan.detail,
-          });
-          this.runtime.auditLog.record({
-            type: 'broker_action',
-            severity: 'info',
-            agentId: input.agentId,
-            userId: input.userId,
-            channel: input.message.channel,
-            controller: 'WorkerManager',
-            details: buildDelegatedAuditDetails(effectiveInput, delegatedTarget, requestId, {
-              actionType: 'delegated_worker_retrying',
-              reason: insufficiency.retryReason,
-            }),
-          });
-          result = await this.dispatchToWorker(worker, {
+          }),
+          dispatchRetry: async ({ request, retryPlan, retryProfile }) => this.dispatchToWorker(worker, {
             ...baseDispatchParams,
-            message: effectiveInput.message,
-            systemPrompt: effectiveInput.systemPrompt,
-            history: effectiveInput.history,
-            knowledgeBases: effectiveInput.knowledgeBases ?? [],
-            activeSkills: effectiveInput.activeSkills ?? [],
-            toolContext: effectiveInput.toolContext ?? '',
-            runtimeNotices: effectiveInput.runtimeNotices ?? [],
+            message: request.message,
+            systemPrompt: request.systemPrompt,
+            history: request.history,
+            knowledgeBases: request.knowledgeBases ?? [],
+            activeSkills: request.activeSkills ?? [],
+            toolContext: request.toolContext ?? '',
+            runtimeNotices: request.runtimeNotices ?? [],
             additionalSections: retryPlan.additionalSections,
             executionProfile: retryProfile,
-            continuity: effectiveInput.continuity,
-            pendingAction: effectiveInput.pendingAction,
-            pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
-          });
-          const retryDrain = await drainDelegatedJobs();
-          if (retryDrain.inFlightRemaining > 0) {
-            this.recordDelegatedWorkerTrace('delegated_job_wait_expired', effectiveInput, delegatedTarget, {
+            continuity: request.continuity,
+            pendingAction: request.pendingAction,
+            pendingApprovalNotice: request.pendingApprovalNotice,
+          }),
+          drainPendingJobs: drainDelegatedJobs,
+          verifyRetryResult: async ({
+            request,
+            result: retryResult,
+            retryProfile,
+            taskContract,
+            jobDrain,
+          }) => runDelegatedWorkerVerificationCycle({
+            requestId,
+            taskRunId: delegatedTaskRunId,
+            metadata: retryResult.metadata,
+            intentDecision: effectiveIntentDecision ?? undefined,
+            executionProfile: retryProfile,
+            taskContract,
+            jobSnapshots: jobDrain.snapshots,
+            attemptLabel: 'retry',
+            drainPendingJobs: drainDelegatedJobs,
+            trace: (event) => this.recordDelegatedWorkerTrace(
+              event.stage,
+              request,
+              delegatedTarget,
+              event.details,
+            ),
+          }),
+          onRetrying: ({ request, retryPlan, insufficiency: retryInsufficiency }) => {
+            this.recordDelegatedWorkerTrace('delegated_worker_retrying', request, delegatedTarget, {
               requestId,
               taskRunId: delegatedTaskRunId,
               lifecycle: 'running',
+              workerId: worker.id,
               taskContract: effectiveTaskContract,
-              reason: `${retryDrain.inFlightRemaining} delegated job(s) remained in flight after ${retryDrain.waitedMs}ms drain (retry)`,
+              additionalSections: retryPlan.additionalSections,
+              reason: retryPlan.detail,
             });
-          }
-          verificationCycle = await runDelegatedWorkerVerificationCycle({
-            requestId,
-            taskRunId: delegatedTaskRunId,
-            metadata: result.metadata,
-            intentDecision: effectiveIntentDecision ?? undefined,
-            executionProfile: effectiveExecutionProfile,
-            taskContract: effectiveTaskContract,
-            jobSnapshots: retryDrain.snapshots,
-            attemptLabel: 'retry',
-            drainPendingJobs: drainDelegatedJobs,
-            trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
-          });
+            this.publishDelegatedWorkerProgress(request, delegatedTarget, {
+              id: `delegated-worker:${delegatedJob.id}:retrying`,
+              kind: 'running',
+              requestId,
+              taskRunId: delegatedTaskRunId,
+              workerId: worker.id,
+              detail: retryPlan.detail,
+            });
+            this.runtime.auditLog.record({
+              type: 'broker_action',
+              severity: 'info',
+              agentId: input.agentId,
+              userId: input.userId,
+              channel: input.message.channel,
+              controller: 'WorkerManager',
+              details: buildDelegatedAuditDetails(request, delegatedTarget, requestId, {
+                actionType: 'delegated_worker_retrying',
+                reason: retryInsufficiency.retryReason,
+              }),
+            });
+          },
+          onDrainWaitExpired: ({ request, jobDrain, taskContract }) => {
+            this.recordDelegatedWorkerTrace('delegated_job_wait_expired', request, delegatedTarget, {
+              requestId,
+              taskRunId: delegatedTaskRunId,
+              lifecycle: 'running',
+              taskContract,
+              reason: `${jobDrain.inFlightRemaining} delegated job(s) remained in flight after ${jobDrain.waitedMs}ms drain (retry)`,
+            });
+          },
+        });
+        if (retryInvocation) {
+          effectiveInput = retryInvocation.request;
+          effectiveExecutionProfile = retryInvocation.retryProfile;
+          result = retryInvocation.result;
+          verificationCycle = retryInvocation.verificationCycle;
           jobSnapshots = verificationCycle.jobSnapshots;
           verifiedResult = verificationCycle.verifiedResult;
           insufficiency = verificationCycle.insufficiency;
