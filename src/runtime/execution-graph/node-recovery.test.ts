@@ -8,8 +8,10 @@ import {
   buildRecoveryAdvisorGraphInput,
   buildRecoveryAdvisorLifecycleEvent,
   executeRecoveryProposalNode,
+  runRecoveryAdvisorGraph,
   type RecoveryNodeExecutionContext,
 } from './node-recovery.js';
+import type { ExecutionGraphEvent } from './graph-events.js';
 import type { ExecutionNode } from './types.js';
 
 describe('execution graph recovery node', () => {
@@ -160,6 +162,96 @@ describe('execution graph recovery node', () => {
     expect(JSON.stringify(result.events.map((event) => event.payload))).toContain('advisoryOnly');
   });
 
+  it('runs and persists the recovery advisor graph lifecycle in graph ownership', () => {
+    const context = buildRecoveryAdvisorGraphContext({
+      graphId: 'execution-graph:delegated-task:recovery',
+      executionId: 'delegated-task',
+      rootExecutionId: 'root-task',
+      requestId: 'request-1',
+      runId: 'request-1',
+      channel: 'web',
+      agentId: 'agent-1',
+      userId: 'user-1',
+    });
+    const createdGraphs: unknown[] = [];
+    const storedEvents: ExecutionGraphEvent[] = [];
+    const timelineEvents: ExecutionGraphEvent[] = [];
+    const artifacts: unknown[] = [];
+
+    const result = runRecoveryAdvisorGraph({
+      context,
+      intent: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'modify',
+        summary: 'Modify repository.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      securityContext: {
+        agentId: 'agent-1',
+        userId: 'user-1',
+        channel: 'web',
+      },
+      failureReason: 'Verifier rejected the delegated answer.',
+      candidate: {
+        reason: 'Retry the delegated worker once.',
+        actions: [{
+          kind: 'retry_node',
+          targetNodeId: context.failedNodeId,
+          retryBudget: 1,
+        }],
+      },
+      now: (() => {
+        let timestamp = 10_000;
+        return () => {
+          timestamp += 10;
+          return timestamp;
+        };
+      })(),
+      persistence: {
+        createGraph: (graph) => {
+          createdGraphs.push(graph);
+        },
+        appendEvent: (event) => {
+          storedEvents.push(event);
+        },
+        ingestEvent: (event) => {
+          timelineEvents.push(event);
+        },
+        writeArtifact: (artifact) => {
+          artifacts.push(artifact);
+        },
+      },
+    });
+
+    expect(result.status).toBe('proposed');
+    if (result.status !== 'proposed') {
+      throw new Error('expected recovery proposal');
+    }
+    expect(createdGraphs).toHaveLength(1);
+    expect(storedEvents.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'artifact_created',
+      'recovery_proposed',
+      'node_completed',
+      'graph_completed',
+    ]);
+    expect(timelineEvents.map((event) => event.eventId)).toEqual(storedEvents.map((event) => event.eventId));
+    expect(result.events.map((event) => event.eventId)).toEqual(storedEvents.map((event) => event.eventId));
+    expect(artifacts).toHaveLength(1);
+    expect(result.patch.operations).toEqual([{
+      kind: 'retry_node',
+      targetNodeId: context.failedNodeId,
+      retryBudget: 1,
+    }]);
+    expect(result.proposalArtifactId).toBe(result.proposalArtifact.artifactId);
+  });
+
   it('rejects unsafe or overbroad recovery actions without creating a proposal', () => {
     const failedNode = buildNode('mutate-1', 'mutate');
     const graph = {
@@ -203,6 +295,47 @@ describe('execution graph recovery node', () => {
 
     expect(unboundedRetry.status).toBe('rejected');
     expect(unboundedRetry.events.map((event) => event.kind)).not.toContain('recovery_proposed');
+  });
+
+  it('runs rejected recovery advisor lifecycle without writing a proposal artifact', () => {
+    const context = buildRecoveryAdvisorGraphContext({
+      graphId: 'execution-graph:delegated-task:recovery',
+      executionId: 'delegated-task',
+      rootExecutionId: 'root-task',
+      requestId: 'request-1',
+    });
+    const storedEvents: ExecutionGraphEvent[] = [];
+    const artifacts: unknown[] = [];
+
+    const result = runRecoveryAdvisorGraph({
+      context,
+      candidate: {
+        reason: 'Bypass recovery validation.',
+        actions: [{
+          kind: 'execute_tool',
+          targetNodeId: context.failedNodeId,
+          reason: 'Run a tool directly.',
+        }],
+      },
+      persistence: {
+        appendEvent: (event) => {
+          storedEvents.push(event);
+        },
+        writeArtifact: (artifact) => {
+          artifacts.push(artifact);
+        },
+      },
+    });
+
+    expect(result.status).toBe('rejected');
+    expect(storedEvents.map((event) => event.kind)).toEqual([
+      'graph_started',
+      'node_started',
+      'node_failed',
+      'graph_failed',
+    ]);
+    expect(artifacts).toHaveLength(0);
+    expect(result.events.map((event) => event.eventId)).toEqual(storedEvents.map((event) => event.eventId));
   });
 
   it('can propose a no-tools synthesis retry only when evidence artifacts exist', () => {

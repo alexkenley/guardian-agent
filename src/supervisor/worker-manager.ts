@@ -117,9 +117,7 @@ import {
 } from '../runtime/execution-graph/graph-controller.js';
 import {
   buildRecoveryAdvisorGraphContext,
-  buildRecoveryAdvisorGraphInput,
-  buildRecoveryAdvisorLifecycleEvent,
-  executeRecoveryProposalNode,
+  runRecoveryAdvisorGraph,
   type RecoveryGraphPatch,
 } from '../runtime/execution-graph/node-recovery.js';
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
@@ -1849,7 +1847,7 @@ export class WorkerManager {
       failedNodeId: `node:${input.taskRunId}:delegated_worker`,
       recoveryNodeId: `node:${input.taskRunId}:recover`,
     });
-    const recoveryProjection = buildRecoveryAdvisorGraphInput({
+    const recovery = runRecoveryAdvisorGraph({
       context: recoveryContext,
       intent: input.effectiveIntentDecision,
       securityContext: {
@@ -1866,61 +1864,23 @@ export class WorkerManager {
       },
       failureReason: input.verification.reasons[0],
       now,
-    });
-    if (recoveryProjection.graphInput) {
-      this.observability.executionGraphStore?.createGraph(recoveryProjection.graphInput);
-    }
-    let sequence = 0;
-    const emitRecoveryGraphEvent = (
-      kind: ExecutionGraphEvent['kind'],
-      payload: Record<string, unknown>,
-      eventKey: string,
-    ): ExecutionGraphEvent => {
-      sequence += 1;
-      const event = buildRecoveryAdvisorLifecycleEvent(recoveryContext, {
-        kind,
-        sequence,
-        timestamp: now(),
-        eventId: `${recoveryContext.graphId}:${eventKey}:${sequence}`,
-        payload,
-      });
-      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-      this.observability.executionGraphStore?.appendEvent(event);
-      return event;
-    };
-    const lifecycleEvents: ExecutionGraphEvent[] = [
-      emitRecoveryGraphEvent('graph_started', {
-        route: input.effectiveIntentDecision?.route,
-        operation: input.effectiveIntentDecision?.operation,
-        executionClass: input.effectiveIntentDecision?.executionClass,
-        controller: 'recovery_advisor',
-        failedNodeId: recoveryProjection.failedNode.nodeId,
-        advisoryOnly: true,
-      }, 'graph:started'),
-    ];
-    const recovery = executeRecoveryProposalNode({
-      graph: recoveryProjection.graph,
-      failedNode: recoveryProjection.failedNode,
-      context: {
-        ...recoveryProjection.recoveryNodeContext,
-        sequenceStart: sequence,
+      candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, recoveryContext.failedNodeId),
+      persistence: {
+        createGraph: (graphInput) => {
+          this.observability.executionGraphStore?.createGraph(graphInput);
+        },
+        ingestEvent: (event) => {
+          this.observability.runTimeline?.ingestExecutionGraphEvent(event);
+        },
+        appendEvent: (event) => {
+          this.observability.executionGraphStore?.appendEvent(event);
+        },
+        writeArtifact: (artifact) => {
+          this.observability.executionGraphStore?.writeArtifact(artifact);
+        },
       },
-      candidate: buildGraphRecoveryProposalCandidateFromAdvice(advice, recoveryProjection.failedNode.nodeId),
     });
-    for (const event of recovery.events) {
-      sequence = Math.max(sequence, event.sequence);
-      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-      this.observability.executionGraphStore?.appendEvent(event);
-    }
-    if (recovery.proposalArtifact) {
-      this.observability.executionGraphStore?.writeArtifact(recovery.proposalArtifact);
-    }
-    if (recovery.status !== 'proposed' || !recovery.proposalArtifact || !recovery.patch) {
-      lifecycleEvents.push(emitRecoveryGraphEvent('graph_failed', {
-        reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
-        failedNodeId: recoveryProjection.failedNode.nodeId,
-        advisoryOnly: true,
-      }, 'graph:failed'));
+    if (recovery.status !== 'proposed') {
       this.observability.intentRoutingTrace?.record({
         stage: 'recovery_advisor_rejected',
         requestId: input.requestId,
@@ -1938,12 +1898,6 @@ export class WorkerManager {
       });
       return null;
     }
-    lifecycleEvents.push(emitRecoveryGraphEvent('graph_completed', {
-      proposalArtifactId: recovery.proposalArtifact.artifactId,
-      failedNodeId: recoveryProjection.failedNode.nodeId,
-      actionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
-      advisoryOnly: true,
-    }, 'graph:completed'));
 
     this.observability.intentRoutingTrace?.record({
       stage: 'recovery_advisor_completed',
@@ -1958,7 +1912,7 @@ export class WorkerManager {
         ...(input.request.delegation?.rootExecutionId ? { rootExecutionId: input.request.delegation.rootExecutionId } : {}),
         taskExecutionId: input.taskRunId,
         adviceSource,
-        proposalArtifactId: recovery.proposalArtifact.artifactId,
+        proposalArtifactId: recovery.proposalArtifactId,
         recoveryActionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
         actionCount: advice.actions.length,
         actions: advice.actions.map((action) => ({
@@ -1971,10 +1925,9 @@ export class WorkerManager {
 
     return {
       graphId: recoveryContext.graphId,
-      proposalArtifactId: recovery.proposalArtifact.artifactId,
+      proposalArtifactId: recovery.proposalArtifactId,
       patch: recovery.patch,
-      events: [lifecycleEvents[0], ...recovery.events, lifecycleEvents[lifecycleEvents.length - 1]]
-        .filter((event): event is ExecutionGraphEvent => Boolean(event)),
+      events: recovery.events,
       adviceSource,
     };
   }

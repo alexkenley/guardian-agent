@@ -1230,7 +1230,8 @@ Status:
 
 - `node-recovery.ts` validates bounded advisory recovery proposals and emits recovery node events.
 - Delegated worker verification failures now persist advisory recovery graphs, terminal graph lifecycle events, and `RecoveryProposal` artifacts when the original request has an Intent Gateway decision.
-- Refactor target: migrate legacy recovery prompt/advice producers onto graph-native failed-node recovery and remove the old worker-manager recovery prompt sections in the same slice.
+- `node-recovery.ts` now owns recovery-advisor graph lifecycle execution through a graph-owned runner: graph shell creation, graph start/fail/complete events, recovery node execution, `RecoveryProposal` artifact persistence callbacks, and timeline/store event projection are no longer hand-built inline in `WorkerManager`.
+- Refactor target: migrate the remaining legacy recovery prompt/advice producers onto graph-native failed-node recovery and remove old worker-manager retry prompt sections in the same slice that proves their graph-native replacement.
 
 ### Phase 7: Decommission Interim Hybrid Manager Paths
 
@@ -1278,6 +1279,16 @@ Checkpoint after the live tool-loop no-tool gate cleanup:
 - Verification after this slice: focused Vitest for `live-tool-loop-controller` and `direct-reasoning-mode` passed; `node scripts/test-web-approvals.mjs` passed; `node scripts/test-code-ui-smoke.mjs` passed; `npm run check` passed; full `npm test` passed with 311 files and 3331 tests; `npm run build` passed.
 - Rebuilt app verification: `scripts/start-dev-windows.ps1 -StartOnly` ran the real app, `GET /api/status` returned `status=running`, provider/routing state exposed managed-cloud OpenRouter/NVIDIA/Ollama Cloud profiles, and `/api/message` exact-answer smoke passed with request-scoped Ollama Cloud routing (`requestId=live-toolgate-d7c7262a`, `ollama_cloud`, `ollama-cloud`, `gpt-oss:120b`, no fallback). OpenRouter remains configured but live OpenRouter proof is currently constrained by upstream account credits, so use Ollama Cloud for managed-cloud app sweeps until credits are restored.
 - Remaining live-smoke expansion is still natural-language automation authoring/control, multi-domain delegated requests, full web UI approval rendering in the browser, and longer graph-timeline observability.
+
+Checkpoint after the recovery-advisor graph lifecycle ownership cleanup:
+
+- `src/runtime/execution-graph/node-recovery.ts` now exposes `runRecoveryAdvisorGraph`, which owns the recovery-advisor graph lifecycle around bounded proposal validation. It creates the graph projection, emits graph start/fail/complete events, executes the recovery node, writes `RecoveryProposal` artifacts through callbacks, and projects events into the run timeline/store through callbacks.
+- `WorkerManager` still owns brokered recovery-advisor dispatch, proposal validation source selection, and routing traces, but it no longer constructs recovery graph nodes, lifecycle event ids, sequence state, proposal artifact writes, or timeline/store projection inline.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/node-recovery.test.ts src/supervisor/worker-manager.test.ts` reported 53 passing tests.
+- Full local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (312 files, 3383 tests).
+- The actual app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` returned `status=running`, and `GET http://localhost:3000/api/providers` exposed the configured managed-cloud Ollama Cloud/OpenRouter/NVIDIA profiles.
+- Live API spot checks passed without fallback: exact answer `recoverygraph-exact-42804` (`general_assistant`, `ollama-cloud-direct`, `minimax-m2.1`), repo-grounded symbol search `recoverygraph-repo-42804` (`coding_task`, `ollama-cloud-coding`, `glm-5.1`), automation listing `recoverygraph-auto-list-42804` (`automation_control`, `ollama-cloud-tools`, `glm-4.7`), and credential-disclosure refusal `recoverygraph-security-42804` (`security_task`, `ollama-cloud-direct`, `minimax-m2.1`, no raw secret-pattern match).
+- Recovery graph lifecycle was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check was a regression ladder for already-proven direct, coding, automation, and security paths; it did not force an artificial live recovery failure.
 
 ### Phase 8: Web UI And Operator Observability
 

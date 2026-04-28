@@ -155,6 +155,35 @@ export interface ExecuteRecoveryProposalNodeResult {
   rejectionReason?: string;
 }
 
+export interface RecoveryAdvisorGraphPersistence {
+  createGraph?: (graph: CreateExecutionGraphInput) => void;
+  appendEvent?: (event: ExecutionGraphEvent) => void;
+  ingestEvent?: (event: ExecutionGraphEvent) => void;
+  writeArtifact?: (artifact: ExecutionArtifact<RecoveryProposalContent>) => void;
+}
+
+export interface RunRecoveryAdvisorGraphInput extends BuildRecoveryAdvisorGraphInputOptions {
+  candidate?: RecoveryProposalCandidate | null;
+  maxActions?: number;
+  persistence?: RecoveryAdvisorGraphPersistence;
+}
+
+export type RunRecoveryAdvisorGraphResult =
+  | {
+      status: 'proposed';
+      graphId: string;
+      proposalArtifactId: string;
+      proposalArtifact: ExecutionArtifact<RecoveryProposalContent>;
+      patch: RecoveryGraphPatch;
+      events: ExecutionGraphEvent[];
+    }
+  | {
+      status: 'rejected';
+      graphId: string;
+      events: ExecutionGraphEvent[];
+      rejectionReason?: string;
+    };
+
 const MAX_RECOVERY_ACTIONS = 3;
 const MAX_RETRY_BUDGET = 3;
 const EVIDENCE_ARTIFACT_TYPES = new Set([
@@ -288,6 +317,105 @@ export function buildRecoveryAdvisorLifecycleEvent(
     ...(context.codeSessionId ? { codeSessionId: context.codeSessionId } : {}),
     payload: input.payload,
   });
+}
+
+export function runRecoveryAdvisorGraph(
+  input: RunRecoveryAdvisorGraphInput,
+): RunRecoveryAdvisorGraphResult {
+  const now = input.now ?? Date.now;
+  const projection = buildRecoveryAdvisorGraphInput({
+    context: input.context,
+    intent: input.intent,
+    securityContext: input.securityContext,
+    trigger: input.trigger,
+    failureReason: input.failureReason,
+    now,
+  });
+  if (projection.graphInput) {
+    input.persistence?.createGraph?.(projection.graphInput);
+  }
+
+  const events: ExecutionGraphEvent[] = [];
+  let sequence = 0;
+  const recordEvent = (event: ExecutionGraphEvent): void => {
+    events.push(event);
+    input.persistence?.ingestEvent?.(event);
+    input.persistence?.appendEvent?.(event);
+  };
+  const emitLifecycleEvent = (
+    kind: ExecutionGraphEvent['kind'],
+    payload: Record<string, unknown>,
+    eventKey: string,
+  ): ExecutionGraphEvent => {
+    sequence += 1;
+    const event = buildRecoveryAdvisorLifecycleEvent(input.context, {
+      kind,
+      sequence,
+      timestamp: now(),
+      eventId: `${input.context.graphId}:${eventKey}:${sequence}`,
+      payload,
+    });
+    recordEvent(event);
+    return event;
+  };
+
+  emitLifecycleEvent('graph_started', {
+    route: input.intent?.route,
+    operation: input.intent?.operation,
+    executionClass: input.intent?.executionClass,
+    controller: 'recovery_advisor',
+    failedNodeId: projection.failedNode.nodeId,
+    advisoryOnly: true,
+  }, 'graph:started');
+
+  const recovery = executeRecoveryProposalNode({
+    graph: projection.graph,
+    failedNode: projection.failedNode,
+    context: {
+      ...projection.recoveryNodeContext,
+      sequenceStart: sequence,
+    },
+    candidate: input.candidate,
+    maxActions: input.maxActions,
+  });
+  for (const event of recovery.events) {
+    sequence = Math.max(sequence, event.sequence);
+    recordEvent(event);
+  }
+
+  if (recovery.proposalArtifact) {
+    input.persistence?.writeArtifact?.(recovery.proposalArtifact);
+  }
+
+  if (recovery.status !== 'proposed' || !recovery.proposalArtifact || !recovery.patch) {
+    emitLifecycleEvent('graph_failed', {
+      reason: recovery.rejectionReason ?? 'graph_recovery_candidate_rejected',
+      failedNodeId: projection.failedNode.nodeId,
+      advisoryOnly: true,
+    }, 'graph:failed');
+    return {
+      status: 'rejected',
+      graphId: input.context.graphId,
+      events,
+      rejectionReason: recovery.rejectionReason,
+    };
+  }
+
+  emitLifecycleEvent('graph_completed', {
+    proposalArtifactId: recovery.proposalArtifact.artifactId,
+    failedNodeId: projection.failedNode.nodeId,
+    actionKinds: recovery.proposalArtifact.content.actions.map((action) => action.kind),
+    advisoryOnly: true,
+  }, 'graph:completed');
+
+  return {
+    status: 'proposed',
+    graphId: input.context.graphId,
+    proposalArtifactId: recovery.proposalArtifact.artifactId,
+    proposalArtifact: recovery.proposalArtifact,
+    patch: recovery.patch,
+    events,
+  };
 }
 
 export function executeRecoveryProposalNode(
