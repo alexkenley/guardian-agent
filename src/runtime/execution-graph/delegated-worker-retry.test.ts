@@ -10,16 +10,19 @@ import {
   appendDelegatedRetrySection,
   buildDelegatedGroundedAnswerEnvelope,
   buildDelegatedGroundedAnswerSynthesisMessages,
+  buildDelegatedRetryAttemptPlan,
   buildDelegatedRetryableFailure,
   buildDelegatedRetryDetail,
   buildDelegatedRetryIntentGatewayRecord,
   extractDelegatedEvidenceRefs,
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
+  isSameDelegatedExecutionProfile,
   isDelegatedToolEvidenceRetry,
   shouldAdoptDelegatedTaskContract,
   shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
+  shouldUseSameProfileDelegatedRetry,
 } from './delegated-worker-retry.js';
 
 describe('delegated worker retry graph policy', () => {
@@ -87,6 +90,84 @@ describe('delegated worker retry graph policy', () => {
     )).toContain('Retrying Workspace Explorer with openrouter / moonshotai/kimi-k2.6 in code session code-session-1 because required steps remain unsatisfied (answer)');
   });
 
+  it('builds retry attempt plans from verification policy without supervisor state', () => {
+    const profile = executionProfile();
+    const equivalentProfile = {
+      ...profile,
+      id: 'managed_cloud_tool_alias',
+    };
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        summary: 'Inspect graph retry behavior.',
+        steps: [
+          { stepId: 'read', kind: 'read', summary: 'Read retry policy.' },
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from retry evidence.' },
+        ],
+      }),
+      stepReceipts: [{
+        stepId: 'read',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-read'],
+        summary: 'Read retry policy.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+      evidenceReceipts: [{
+        receiptId: 'receipt-read',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['src/runtime/execution-graph/delegated-worker-retry.ts'],
+        summary: 'Read retry policy.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Evidence exists but the final answer is missing.'],
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['answer'],
+    }, envelope);
+    const baseRecord: IntentGatewayRecord = {
+      mode: 'confirmation',
+      available: true,
+      model: 'gateway-model',
+      latencyMs: 12,
+      decision: gatewayDecision(),
+    };
+
+    expect(shouldUseSameProfileDelegatedRetry(failure!, profile)).toBe(true);
+    expect(isSameDelegatedExecutionProfile(equivalentProfile, profile)).toBe(true);
+
+    const plan = buildDelegatedRetryAttemptPlan({
+      targetLabel: 'Workspace Explorer',
+      currentProfile: profile,
+      retryProfile: equivalentProfile,
+      insufficiency: failure!,
+      codeSessionId: 'code-session-1',
+      baseSections: [{ section: 'Base', mode: 'plain', content: 'Existing section.' }],
+      baseRecord,
+      baseDecision: undefined,
+      taskContract: envelope.taskContract,
+    });
+
+    expect(plan.usesSameProfile).toBe(true);
+    expect(plan.detail).toContain('Retrying Workspace Explorer with openrouter / moonshotai/kimi-k2.6 in code session code-session-1');
+    expect(plan.additionalSections).toHaveLength(2);
+    expect(plan.additionalSections[1]?.content).toContain('Retry this once now on the same execution profile');
+    expect(plan.intentGatewayRecord?.decision).toMatchObject({
+      route: 'coding_task',
+      operation: 'inspect',
+      summary: 'Inspect graph retry behavior.',
+      plannedSteps: [
+        { kind: 'read', summary: 'Read retry policy.' },
+        { kind: 'answer', summary: 'Answer from retry evidence.' },
+      ],
+    });
+  });
+
   it('keeps answer-only delegated retries on the managed-cloud profile when the plan omitted an answer step', () => {
     const envelope = delegatedEnvelope({
       taskContract: taskContract({
@@ -147,6 +228,7 @@ describe('delegated worker retry graph policy', () => {
     expect(failure?.unsatisfiedSteps).toEqual([]);
     expect(isDelegatedAnswerSynthesisRetry(failure!)).toBe(true);
     expect(shouldRetryDelegatedAnswerSynthesisOnSameProfile(failure!, executionProfile())).toBe(true);
+    expect(shouldUseSameProfileDelegatedRetry(failure!, executionProfile())).toBe(true);
   });
 
   it('owns grounded answer synthesis prompts and envelope repair outside WorkerManager', () => {
@@ -296,6 +378,7 @@ describe('delegated worker retry graph policy', () => {
 
     expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, executionProfile())).toBe(true);
     expect(isDelegatedToolEvidenceRetry(failure!)).toBe(true);
+    expect(shouldUseSameProfileDelegatedRetry(failure!, executionProfile())).toBe(false);
     expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, {
       ...executionProfile(),
       providerTier: 'frontier',

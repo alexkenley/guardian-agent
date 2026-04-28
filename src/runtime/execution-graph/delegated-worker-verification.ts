@@ -204,6 +204,36 @@ export function isDelegatedJobInFlight(status: string | undefined): boolean {
     || normalized === 'starting';
 }
 
+export function shouldExtendDelegatedEvidenceDrain(input: {
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  decision: VerificationDecision;
+  jobSnapshots: DelegatedJobSnapshot[];
+}): boolean {
+  if (!input.decision.retryable) return false;
+  if (!input.jobSnapshots.some((snapshot) => isDelegatedJobInFlight(snapshot.status))) {
+    return false;
+  }
+  const missingEvidenceKinds = input.decision.missingEvidenceKinds ?? [];
+  if (missingEvidenceKinds.some((kind) => kind !== 'answer')) {
+    return true;
+  }
+  const unsatisfiedStepIds = new Set(input.decision.unsatisfiedStepIds ?? []);
+  if (unsatisfiedStepIds.size === 0) {
+    return false;
+  }
+  return input.taskContract.plan.steps.some((step) => (
+    step.required !== false
+    && step.kind !== 'answer'
+    && unsatisfiedStepIds.has(step.stepId)
+  ));
+}
+
+export function isDelegatedWorkerBudgetExhausted(terminationReason: string | undefined): boolean {
+  return terminationReason === 'max_rounds'
+    || terminationReason === 'max_wall_clock'
+    || terminationReason === 'watchdog_kill';
+}
+
 function synthesizeDelegatedEvidenceReceiptsFromJobs(
   taskContract: DelegatedResultEnvelope['taskContract'],
   jobSnapshots: DelegatedJobSnapshot[],

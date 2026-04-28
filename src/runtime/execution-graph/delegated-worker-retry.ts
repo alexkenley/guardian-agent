@@ -352,6 +352,74 @@ export function buildDelegatedRetryDetail(
   return `Retrying ${targetLabel}${profileSuffix}${sessionSuffix} because ${insufficiency.retryReason}`;
 }
 
+export interface DelegatedRetryAttemptPlan {
+  executionProfile: SelectedExecutionProfile;
+  usesSameProfile: boolean;
+  detail: string;
+  additionalSections: PromptAssemblyAdditionalSection[];
+  intentGatewayRecord: IntentGatewayRecord | null;
+}
+
+export function shouldUseSameProfileDelegatedRetry(
+  insufficiency: DelegatedResultSufficiencyFailure,
+  currentProfile: SelectedExecutionProfile | undefined,
+): boolean {
+  return shouldRetryDelegatedAnswerSynthesisOnSameProfile(insufficiency, currentProfile)
+    || (
+      shouldRetryDelegatedCorrectivePassOnSameProfile(insufficiency, currentProfile)
+      && !isDelegatedToolEvidenceRetry(insufficiency)
+    );
+}
+
+export function buildDelegatedRetryAttemptPlan(input: {
+  targetLabel: string;
+  currentProfile: SelectedExecutionProfile | undefined;
+  retryProfile: SelectedExecutionProfile;
+  insufficiency: DelegatedResultSufficiencyFailure;
+  codeSessionId?: string;
+  baseSections: PromptAssemblyAdditionalSection[];
+  baseRecord: IntentGatewayRecord | null | undefined;
+  baseDecision: IntentGatewayDecision | undefined;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+}): DelegatedRetryAttemptPlan {
+  const usesSameProfile = isSameDelegatedExecutionProfile(input.retryProfile, input.currentProfile);
+  return {
+    executionProfile: input.retryProfile,
+    usesSameProfile,
+    detail: buildDelegatedRetryDetail(
+      input.targetLabel,
+      input.retryProfile,
+      input.insufficiency,
+      input.codeSessionId,
+    ),
+    additionalSections: appendDelegatedRetrySection(
+      input.baseSections,
+      input.insufficiency,
+      { sameProfile: usesSameProfile },
+    ),
+    intentGatewayRecord: buildDelegatedRetryIntentGatewayRecord({
+      baseRecord: input.baseRecord,
+      baseDecision: input.baseDecision,
+      taskContract: input.taskContract,
+    }),
+  };
+}
+
+export function isSameDelegatedExecutionProfile(
+  left: SelectedExecutionProfile | undefined,
+  right: SelectedExecutionProfile | undefined,
+): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const leftId = typeof left.id === 'string' ? left.id.trim() : '';
+  const rightId = typeof right.id === 'string' ? right.id.trim() : '';
+  if (leftId && rightId && leftId === rightId) return true;
+  return left.providerName === right.providerName
+    && left.providerModel === right.providerModel
+    && left.providerTier === right.providerTier
+    && left.providerLocality === right.providerLocality;
+}
+
 export function appendDelegatedRetrySection(
   sections: PromptAssemblyAdditionalSection[],
   insufficiency: DelegatedResultSufficiencyFailure,

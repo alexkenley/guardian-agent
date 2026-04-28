@@ -4,8 +4,10 @@ import type { DelegatedTaskContract } from '../execution/types.js';
 import type { WorkerExecutionMetadata } from '../worker-execution-metadata.js';
 import {
   buildSyntheticDelegatedEnvelopeFromJobs,
+  isDelegatedWorkerBudgetExhausted,
   isDelegatedJobInFlight,
   reconcileDelegatedEnvelopeWithJobSnapshots,
+  shouldExtendDelegatedEvidenceDrain,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
 } from './delegated-worker-verification.js';
@@ -134,6 +136,36 @@ describe('delegated worker verification graph policy', () => {
     expect(isDelegatedJobInFlight('queued')).toBe(true);
     expect(isDelegatedJobInFlight('running')).toBe(true);
     expect(isDelegatedJobInFlight('completed')).toBe(false);
+  });
+
+  it('owns extended evidence drain decisions from verification state', () => {
+    const taskContract = delegatedTaskContract();
+    expect(shouldExtendDelegatedEvidenceDrain({
+      taskContract,
+      decision: {
+        decision: 'insufficient',
+        reasons: ['Read evidence is still running.'],
+        retryable: true,
+        missingEvidenceKinds: ['repo_evidence'],
+        unsatisfiedStepIds: ['read', 'answer'],
+      },
+      jobSnapshots: [{ id: 'job-1', toolName: 'fs_read', status: 'running' }],
+    })).toBe(true);
+
+    expect(shouldExtendDelegatedEvidenceDrain({
+      taskContract,
+      decision: {
+        decision: 'insufficient',
+        reasons: ['Only answer synthesis remains.'],
+        retryable: true,
+        missingEvidenceKinds: ['answer'],
+        unsatisfiedStepIds: ['answer'],
+      },
+      jobSnapshots: [{ id: 'job-2', toolName: 'fs_read', status: 'running' }],
+    })).toBe(false);
+
+    expect(isDelegatedWorkerBudgetExhausted('max_wall_clock')).toBe(true);
+    expect(isDelegatedWorkerBudgetExhausted('provider_error')).toBe(false);
   });
 });
 

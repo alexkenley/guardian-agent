@@ -86,22 +86,21 @@ import {
   resolveDelegatedWorkerLifecycle,
 } from '../runtime/execution-graph/delegated-worker-handoff.js';
 import {
+  isDelegatedWorkerBudgetExhausted,
   isDelegatedJobInFlight,
+  shouldExtendDelegatedEvidenceDrain,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
 } from '../runtime/execution-graph/delegated-worker-verification.js';
 import {
-  appendDelegatedRetrySection,
   buildDelegatedGroundedAnswerEnvelope,
   buildDelegatedGroundedAnswerSynthesisMessages,
   buildDelegatedRetryableFailure,
-  buildDelegatedRetryDetail,
-  buildDelegatedRetryIntentGatewayRecord,
+  buildDelegatedRetryAttemptPlan,
   isDelegatedAnswerSynthesisRetry,
   isDelegatedToolEvidenceRetry,
   shouldAdoptDelegatedTaskContract,
-  shouldRetryDelegatedCorrectivePassOnSameProfile,
-  shouldRetryDelegatedAnswerSynthesisOnSameProfile,
+  shouldUseSameProfileDelegatedRetry,
   type DelegatedResultSufficiencyFailure,
 } from '../runtime/execution-graph/delegated-worker-retry.js';
 import {
@@ -2297,14 +2296,7 @@ export class WorkerManager {
       }
       let answerSynthesisFallback = buildAnswerSynthesisFallback();
       if (insufficiency) {
-        const shouldUseSameProfileRetry = shouldRetryDelegatedAnswerSynthesisOnSameProfile(
-          insufficiency,
-          effectiveExecutionProfile,
-        ) || shouldRetryDelegatedCorrectivePassOnSameProfile(
-          insufficiency,
-          effectiveExecutionProfile,
-        ) && !isDelegatedToolEvidenceRetry(insufficiency);
-        const retryProfile = shouldUseSameProfileRetry
+        const retryProfile = shouldUseSameProfileDelegatedRetry(insufficiency, effectiveExecutionProfile)
           ? effectiveExecutionProfile ?? null
           : selectDelegatedRetryExecutionProfile(
                 this.runtime,
@@ -2314,24 +2306,18 @@ export class WorkerManager {
                 insufficiency,
               );
         if (retryProfile) {
-          const retryUsesSameProfile = isSameExecutionProfile(retryProfile, effectiveExecutionProfile);
-          const retryDetail = buildDelegatedRetryDetail(
-            describeDelegatedTarget(delegatedTarget),
+          const retryPlan = buildDelegatedRetryAttemptPlan({
+            targetLabel: describeDelegatedTarget(delegatedTarget),
+            currentProfile: effectiveExecutionProfile,
             retryProfile,
             insufficiency,
-            input.delegation?.codeSessionId,
-          );
-          const retryAdditionalSections = appendDelegatedRetrySection(
-            baseDispatchParams.additionalSections,
-            insufficiency,
-            { sameProfile: retryUsesSameProfile },
-          );
-          effectiveExecutionProfile = retryProfile;
-          const retryGatewayRecord = buildDelegatedRetryIntentGatewayRecord({
+            codeSessionId: input.delegation?.codeSessionId,
+            baseSections: baseDispatchParams.additionalSections,
             baseRecord: preRoutedGateway,
             baseDecision: effectiveIntentDecision ?? undefined,
             taskContract: effectiveTaskContract,
           });
+          effectiveExecutionProfile = retryProfile;
           effectiveInput = {
             ...input,
             ...(effectiveExecutionProfile === input.executionProfile
@@ -2341,7 +2327,7 @@ export class WorkerManager {
               ...input.message,
               metadata: attachPreRoutedIntentGatewayMetadata(
                 input.message.metadata,
-                retryGatewayRecord,
+                retryPlan.intentGatewayRecord,
               ),
             },
           };
@@ -2351,8 +2337,8 @@ export class WorkerManager {
             lifecycle: 'running',
             workerId: worker.id,
             taskContract: effectiveTaskContract,
-            additionalSections: retryAdditionalSections,
-            reason: retryDetail,
+            additionalSections: retryPlan.additionalSections,
+            reason: retryPlan.detail,
           });
           this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, {
             id: `delegated-worker:${delegatedJob.id}:retrying`,
@@ -2360,7 +2346,7 @@ export class WorkerManager {
             requestId,
             taskRunId: delegatedTaskRunId,
             workerId: worker.id,
-            detail: retryDetail,
+            detail: retryPlan.detail,
           });
           this.runtime.auditLog.record({
             type: 'broker_action',
@@ -2383,7 +2369,7 @@ export class WorkerManager {
             activeSkills: effectiveInput.activeSkills ?? [],
             toolContext: effectiveInput.toolContext ?? '',
             runtimeNotices: effectiveInput.runtimeNotices ?? [],
-            additionalSections: retryAdditionalSections,
+            additionalSections: retryPlan.additionalSections,
             executionProfile: retryProfile,
             continuity: effectiveInput.continuity,
             pendingAction: effectiveInput.pendingAction,
@@ -4623,36 +4609,6 @@ async function awaitExtendedDelegatedEvidenceDrain(input: {
   };
 }
 
-function shouldExtendDelegatedEvidenceDrain(input: {
-  taskContract: DelegatedResultEnvelope['taskContract'];
-  decision: VerificationDecision;
-  jobSnapshots: DelegatedJobSnapshot[];
-}): boolean {
-  if (!input.decision.retryable) return false;
-  if (!input.jobSnapshots.some((snapshot) => isDelegatedJobInFlight(snapshot.status))) {
-    return false;
-  }
-  const missingEvidenceKinds = input.decision.missingEvidenceKinds ?? [];
-  if (missingEvidenceKinds.some((kind) => kind !== 'answer')) {
-    return true;
-  }
-  const unsatisfiedStepIds = new Set(input.decision.unsatisfiedStepIds ?? []);
-  if (unsatisfiedStepIds.size === 0) {
-    return false;
-  }
-  return input.taskContract.plan.steps.some((step) => (
-    step.required !== false
-    && step.kind !== 'answer'
-    && unsatisfiedStepIds.has(step.stepId)
-  ));
-}
-
-function isDelegatedWorkerBudgetExhausted(terminationReason: string | undefined): boolean {
-  return terminationReason === 'max_rounds'
-    || terminationReason === 'max_wall_clock'
-    || terminationReason === 'watchdog_kill';
-}
-
 async function awaitPendingDelegatedJobs(
   tools: ToolExecutor,
   requestId: string,
@@ -4837,21 +4793,6 @@ function selectDelegatedRetryExecutionProfile(
     mode: currentProfile?.routingMode,
   });
   return escalated ?? currentProfile ?? null;
-}
-
-function isSameExecutionProfile(
-  left: SelectedExecutionProfile | undefined,
-  right: SelectedExecutionProfile | undefined,
-): boolean {
-  if (!left || !right) return false;
-  if (left === right) return true;
-  const leftId = typeof left.id === 'string' ? left.id.trim() : '';
-  const rightId = typeof right.id === 'string' ? right.id.trim() : '';
-  if (leftId && rightId && leftId === rightId) return true;
-  return left.providerName === right.providerName
-    && left.providerModel === right.providerModel
-    && left.providerTier === right.providerTier
-    && left.providerLocality === right.providerLocality;
 }
 
 function readDelegatedAgentId(metadata: Record<string, unknown> | undefined): string | undefined {
