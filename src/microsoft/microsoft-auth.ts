@@ -85,6 +85,7 @@ export class MicrosoftAuth {
       scope: [...allScopes].join(' '),
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
+      prompt: 'select_account',
       state,
     });
 

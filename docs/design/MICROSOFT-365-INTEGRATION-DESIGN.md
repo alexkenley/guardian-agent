@@ -123,6 +123,8 @@ Follows the exact same flow as `GoogleAuth`:
 
 The app registration should use **"Any Entra ID directory + personal Microsoft accounts"** (`common` tenant) for broadest compatibility. Users with personal Outlook.com/Hotmail accounts get mail, calendar, contacts, and OneDrive. Organizational accounts additionally get Teams, SharePoint, etc.
 
+The interactive OAuth authorize request includes `prompt=select_account` so Microsoft shows an account picker instead of silently reusing the first cached work or school session. Operators can also set Tenant ID to `consumers` for personal Microsoft accounts only, `organizations` for work or school accounts only, or a specific tenant ID/domain when the app registration is bound to a known organization.
+
 ### Scopes
 
 Minimal scopes per service, matching Google's approach:
@@ -370,12 +372,12 @@ assistant:
 
 ### Step 2: Enter Client ID
 - Text input for Application (client) ID
-- Optional text input for Tenant ID (defaults to `common`)
+- Optional text input for Tenant ID (defaults to `common`; also accepts `consumers`, `organizations`, or a specific tenant ID/domain)
 - Save → stores in config
 
 ### Step 3: Connect Microsoft
 - Service checkboxes (Mail, Calendar, OneDrive, Contacts)
-- Click "Connect Microsoft" → opens browser for consent
+- Click "Connect Microsoft" → opens browser with Microsoft account selection for consent
 - OAuth PKCE flow completes → tokens stored encrypted
 - Auto-enables `microsoft.enabled` in config
 

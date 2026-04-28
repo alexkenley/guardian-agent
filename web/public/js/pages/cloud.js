@@ -1646,10 +1646,12 @@ function createMicrosoft365Panel() {
             </li>
             <li style="margin-bottom:0.3rem;">
               <strong>Enter Client ID:</strong>
-              Paste the Application (client) ID below. Optionally set a Tenant ID (defaults to <code style="${inlineCode}">common</code>).
+              Paste the Application (client) ID below. Tenant ID accepts <code style="${inlineCode}">common</code>,
+              <code style="${inlineCode}">organizations</code>, <code style="${inlineCode}">consumers</code>, or a specific tenant ID.
+              Use <code style="${inlineCode}">consumers</code> when you only want personal Microsoft accounts.
             </li>
             <li>
-              <strong>Connect:</strong> Select services below and click <strong>Connect Microsoft</strong>. A browser window opens for consent.
+              <strong>Connect:</strong> Select services below and click <strong>Connect Microsoft</strong>. A browser window opens with Microsoft's account picker for consent.
             </li>
           </ol>
           <div class="cfg-form-grid" style="margin-bottom:0.5rem;">
@@ -1658,7 +1660,7 @@ function createMicrosoft365Panel() {
               <input type="text" id="m365-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="font-size:0.78rem;">
             </div>
             <div class="cfg-field">
-              <label style="font-size:0.72rem;">Tenant ID <span style="color:var(--text-muted);">(optional, defaults to "common")</span></label>
+              <label style="font-size:0.72rem;">Tenant ID <span style="color:var(--text-muted);">(common, organizations, consumers, or tenant ID)</span></label>
               <input type="text" id="m365-tenant-id" placeholder="common" style="font-size:0.78rem;">
             </div>
           </div>

@@ -833,8 +833,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Setup (3 Steps)',
                 items: [
                   'Step 1 — Register app: Go to the Microsoft Entra admin center (entra.microsoft.com). Click "New registration". Name it anything (e.g. "Guardian Agent"). Set supported account types to "Any Entra ID directory + personal Microsoft accounts". Under Redirect URI, select "Mobile and desktop applications" and enter http://localhost:18433/callback. Click Register. Then go to Authentication > Settings, enable "Allow public client flows", and click Save. Copy the Application (client) ID from the Overview page.',
-                  'Step 2 — Enter Client ID: In Guardian Agent, open Cloud > Connections > Microsoft 365. Paste the Application (client) ID. Optionally set a Tenant ID (defaults to `common` for broadest compatibility).',
-                  'Step 3 — Connect: Select the services you want (Mail, Calendar, OneDrive, Contacts). Click "Connect Microsoft". A browser window opens for consent. Approve access, and the connection is live immediately. If you close the auth window before finishing, Guardian resets the pending attempt so you can click Connect Microsoft again immediately.',
+                  'Step 2 — Enter Client ID: In Guardian Agent, open Cloud > Connections > Microsoft 365. Paste the Application (client) ID. Tenant ID defaults to `common`; use `consumers` for personal Microsoft accounts only, `organizations` for work or school accounts only, or a specific tenant ID/domain for a known organization.',
+                  'Step 3 — Connect: Select the services you want (Mail, Calendar, OneDrive, Contacts). Click "Connect Microsoft". A browser window opens with Microsoft account selection for consent. Approve access, and the connection is live immediately. If you close the auth window before finishing, Guardian resets the pending attempt so you can click Connect Microsoft again immediately.',
                 ],
               },
               {

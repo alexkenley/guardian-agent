@@ -140,6 +140,8 @@ describe('MicrosoftAuth', () => {
       expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'Starting a new OAuth flow.' }));
       expect(startServerSpy).toHaveBeenCalledOnce();
       expect(result.authUrl).toContain('/oauth2/v2.0/authorize?');
+      const authUrl = new URL(result.authUrl);
+      expect(authUrl.searchParams.get('prompt')).toBe('select_account');
     });
   });
 
