@@ -1,6 +1,11 @@
 import type { ChatMessage } from '../../llm/types.js';
+import type { GuardianAgentConfig } from '../../config/types.js';
 import type { PromptAssemblyAdditionalSection } from '../context-assembly.js';
-import type { SelectedExecutionProfile } from '../execution-profiles.js';
+import {
+  selectEscalatedDelegatedExecutionProfile,
+  selectManagedCloudSiblingDelegatedExecutionProfile,
+  type SelectedExecutionProfile,
+} from '../execution-profiles.js';
 import type {
   DelegatedResultEnvelope,
   ExecutionEvent,
@@ -17,6 +22,7 @@ import type {
   IntentGatewayRecord,
 } from '../intent-gateway.js';
 import { buildDelegatedExecutionMetadata } from '../execution/metadata.js';
+import type { OrchestrationRoleDescriptor } from '../orchestration-role-descriptors.js';
 
 export interface DelegatedResultSufficiencyFailure {
   decision: VerificationDecision;
@@ -82,6 +88,14 @@ export interface DelegatedGroundedAnswerSynthesisProgressEvent {
   detail: string;
 }
 
+export interface DelegatedRetryExecutionProfileSelectionInput {
+  config: GuardianAgentConfig | null | undefined;
+  orchestration?: OrchestrationRoleDescriptor | null;
+  intentDecision?: IntentGatewayDecision | null;
+  currentProfile?: SelectedExecutionProfile | null;
+  insufficiency?: DelegatedResultSufficiencyFailure | null;
+}
+
 const DELEGATED_EVIDENCE_REF_LIMIT = 8;
 const DELEGATED_EVIDENCE_PATH_PATTERN = /[A-Za-z]:(?:\\\\|\\|\/)[^"',\]\s}]+|(?:src|docs|web|scripts|config|tmp|policies|skills|native)(?:\\\\|\\|\/)[^"',\]\s}]+/gi;
 
@@ -110,6 +124,35 @@ export function shouldAdoptDelegatedTaskContract(
         || currentStep.summary !== step.summary;
     })
     || ((candidate.summary?.trim() ?? '') !== (current.summary?.trim() ?? ''));
+}
+
+export function selectDelegatedRetryExecutionProfile(
+  input: DelegatedRetryExecutionProfileSelectionInput,
+): SelectedExecutionProfile | null {
+  const currentProfile = input.currentProfile ?? null;
+  if (!input.config) return currentProfile;
+  if (input.insufficiency && isDelegatedToolEvidenceRetry(input.insufficiency)) {
+    const sibling = selectManagedCloudSiblingDelegatedExecutionProfile({
+      config: input.config,
+      currentProfile,
+      parentProfile: currentProfile,
+      gatewayDecision: input.intentDecision,
+      orchestration: input.orchestration,
+      mode: currentProfile?.routingMode,
+    });
+    if (sibling) {
+      return sibling;
+    }
+  }
+  const escalated = selectEscalatedDelegatedExecutionProfile({
+    config: input.config,
+    currentProfile,
+    parentProfile: currentProfile,
+    gatewayDecision: input.intentDecision,
+    orchestration: input.orchestration,
+    mode: currentProfile?.routingMode,
+  });
+  return escalated ?? currentProfile;
 }
 
 export function buildDelegatedRetryIntentGatewayRecord(input: {

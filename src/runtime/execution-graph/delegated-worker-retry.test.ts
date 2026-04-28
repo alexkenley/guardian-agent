@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../../config/types.js';
 import type { SelectedExecutionProfile } from '../execution-profiles.js';
 import type {
   DelegatedResultEnvelope,
@@ -20,6 +21,7 @@ import {
   isSameDelegatedExecutionProfile,
   isDelegatedToolEvidenceRetry,
   runDelegatedGroundedAnswerSynthesisRetry,
+  selectDelegatedRetryExecutionProfile,
   shouldAdoptDelegatedTaskContract,
   shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
@@ -167,6 +169,54 @@ describe('delegated worker retry graph policy', () => {
         { kind: 'answer', summary: 'Answer from retry evidence.' },
       ],
     });
+  });
+
+  it('selects retry profiles through graph policy without Runtime access', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          {
+            stepId: 'evidence',
+            kind: 'tool_call',
+            summary: 'Collect delegated tool evidence.',
+            expectedToolCategories: ['runtime_evidence'],
+          },
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from delegated evidence.' },
+        ],
+      }),
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Delegated worker stopped before satisfying the evidence step.'],
+      retryable: true,
+      missingEvidenceKinds: ['tool_call'],
+      unsatisfiedStepIds: ['evidence', 'answer'],
+      requiredNextAction: 'Complete the evidence step and answer.',
+    }, envelope);
+    const currentProfile = managedCloudCodingProfile();
+
+    const selected = selectDelegatedRetryExecutionProfile({
+      config: retryProfileConfig(),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      intentDecision: gatewayDecision(),
+      currentProfile,
+      insufficiency: failure,
+    });
+
+    expect(selected).toMatchObject({
+      providerName: 'ollama-cloud-tools',
+      providerTier: 'managed_cloud',
+      selectionSource: 'delegated_role',
+    });
+    expect(selectDelegatedRetryExecutionProfile({
+      config: null,
+      currentProfile,
+      insufficiency: failure,
+    })).toBe(currentProfile);
   });
 
   it('keeps answer-only delegated retries on the managed-cloud profile when the plan omitted an answer step', () => {
@@ -660,5 +710,69 @@ function executionProfile(): SelectedExecutionProfile {
     maxRuntimeNotices: 6,
     fallbackProviderOrder: [],
     reason: 'test',
+  };
+}
+
+function retryProfileConfig(): GuardianAgentConfig {
+  const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
+  config.llm = {
+    'ollama-cloud-coding': {
+      provider: 'ollama_cloud',
+      model: 'glm-5.1',
+      credentialRef: 'llm.ollama_cloud.coding',
+    },
+    'ollama-cloud-tools': {
+      provider: 'ollama_cloud',
+      model: 'qwen3:32b',
+      credentialRef: 'llm.ollama_cloud.tools',
+    },
+    anthropic: {
+      provider: 'anthropic',
+      model: 'claude-opus-4.6',
+      apiKey: 'test-key',
+    },
+  };
+  config.assistant.tools.preferredProviders = {
+    local: 'ollama',
+    managedCloud: 'ollama-cloud-coding',
+    frontier: 'anthropic',
+  };
+  config.assistant.tools.modelSelection = {
+    ...(config.assistant.tools.modelSelection || {}),
+    autoPolicy: 'balanced',
+    preferManagedCloudForLowPressureExternal: true,
+    preferFrontierForRepoGrounded: true,
+    preferFrontierForSecurity: true,
+    managedCloudRouting: {
+      enabled: true,
+      roleBindings: {
+        general: 'ollama-cloud-coding',
+        toolLoop: 'ollama-cloud-tools',
+        coding: 'ollama-cloud-coding',
+      },
+    },
+  };
+  return config;
+}
+
+function managedCloudCodingProfile(): SelectedExecutionProfile {
+  return {
+    id: 'managed_cloud_tool',
+    providerName: 'ollama-cloud-coding',
+    providerType: 'ollama_cloud',
+    providerModel: 'glm-5.1',
+    providerLocality: 'external',
+    providerTier: 'managed_cloud',
+    requestedTier: 'external',
+    preferredAnswerPath: 'tool_loop',
+    expectedContextPressure: 'medium',
+    contextBudget: 64_000,
+    toolContextMode: 'standard',
+    maxAdditionalSections: 3,
+    maxRuntimeNotices: 6,
+    fallbackProviderOrder: ['ollama-cloud-coding', 'ollama-cloud-tools', 'anthropic'],
+    reason: 'delegated coding role selected managed-cloud coding profile',
+    routingMode: 'auto',
+    selectionSource: 'delegated_role',
   };
 }

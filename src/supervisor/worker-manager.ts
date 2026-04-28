@@ -38,8 +38,6 @@ import type {
 } from '../runtime/context-assembly.js';
 import {
   resolveDelegatedExecutionDecision,
-  selectEscalatedDelegatedExecutionProfile,
-  selectManagedCloudSiblingDelegatedExecutionProfile,
   type SelectedExecutionProfile,
 } from '../runtime/execution-profiles.js';
 import {
@@ -95,8 +93,8 @@ import {
   buildDelegatedRetryableFailure,
   buildDelegatedRetryAttemptPlan,
   isDelegatedAnswerSynthesisRetry,
-  isDelegatedToolEvidenceRetry,
   runDelegatedGroundedAnswerSynthesisRetry,
+  selectDelegatedRetryExecutionProfile,
   shouldAdoptDelegatedTaskContract,
   shouldUseSameProfileDelegatedRetry,
   type DelegatedResultSufficiencyFailure,
@@ -1978,13 +1976,13 @@ export class WorkerManager {
       if (insufficiency) {
         const retryProfile = shouldUseSameProfileDelegatedRetry(insufficiency, effectiveExecutionProfile)
           ? effectiveExecutionProfile ?? null
-          : selectDelegatedRetryExecutionProfile(
-                this.runtime,
-                delegatedTarget,
-                effectiveIntentDecision ?? undefined,
-                effectiveExecutionProfile,
+          : selectDelegatedRetryExecutionProfile({
+                config: this.runtime.getConfigSnapshot?.(),
+                orchestration: delegatedTarget.orchestration,
+                intentDecision: effectiveIntentDecision ?? undefined,
+                currentProfile: effectiveExecutionProfile,
                 insufficiency,
-              );
+              });
         if (retryProfile) {
           const retryPlan = buildDelegatedRetryAttemptPlan({
             targetLabel: describeDelegatedTarget(delegatedTarget),
@@ -4421,39 +4419,6 @@ function buildDelegatedExecutionEventPreview(event: ExecutionEvent): string | un
   if (summary) return truncateInlineText(summary, 220);
   if (prompt) return truncateInlineText(prompt, 220);
   return undefined;
-}
-
-function selectDelegatedRetryExecutionProfile(
-  runtime: Runtime,
-  target: ResolvedDelegatedTargetMetadata,
-  intentDecision: IntentGatewayDecision | undefined,
-  currentProfile: SelectedExecutionProfile | undefined,
-  insufficiency?: DelegatedResultSufficiencyFailure,
-): SelectedExecutionProfile | null {
-  const config = runtime.getConfigSnapshot?.();
-  if (!config) return currentProfile ?? null;
-  if (insufficiency && isDelegatedToolEvidenceRetry(insufficiency)) {
-    const sibling = selectManagedCloudSiblingDelegatedExecutionProfile({
-      config,
-      currentProfile,
-      parentProfile: currentProfile,
-      gatewayDecision: intentDecision,
-      orchestration: target.orchestration,
-      mode: currentProfile?.routingMode,
-    });
-    if (sibling) {
-      return sibling;
-    }
-  }
-  const escalated = selectEscalatedDelegatedExecutionProfile({
-    config,
-    currentProfile,
-    parentProfile: currentProfile,
-    gatewayDecision: intentDecision,
-    orchestration: target.orchestration,
-    mode: currentProfile?.routingMode,
-  });
-  return escalated ?? currentProfile ?? null;
 }
 
 function readDelegatedAgentId(metadata: Record<string, unknown> | undefined): string | undefined {
