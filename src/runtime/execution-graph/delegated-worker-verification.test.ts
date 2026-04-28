@@ -3,10 +3,12 @@ import { buildDelegatedExecutionMetadata, buildDelegatedSyntheticEnvelope } from
 import type { DelegatedTaskContract } from '../execution/types.js';
 import type { WorkerExecutionMetadata } from '../worker-execution-metadata.js';
 import {
+  awaitDelegatedRequestJobDrain,
   buildSyntheticDelegatedEnvelopeFromJobs,
   finalizeDelegatedWorkerVerification,
   isDelegatedWorkerBudgetExhausted,
   isDelegatedJobInFlight,
+  listDelegatedRequestJobSnapshots,
   reconcileDelegatedEnvelopeWithJobSnapshots,
   runDelegatedEvidenceDrainExtension,
   runDelegatedWorkerVerificationCycle,
@@ -247,6 +249,52 @@ describe('delegated worker verification graph policy', () => {
     expect(isDelegatedJobInFlight('queued')).toBe(true);
     expect(isDelegatedJobInFlight('running')).toBe(true);
     expect(isDelegatedJobInFlight('completed')).toBe(false);
+  });
+
+  it('owns request-scoped delegated job snapshot listing and drain polling', async () => {
+    let calls = 0;
+    let nowMs = 0;
+
+    const snapshots = listDelegatedRequestJobSnapshots({
+      requestId: 'req-drain',
+      snapshotLimit: 1,
+      listJobs: (limit) => {
+        expect(limit).toBe(500);
+        return [
+          { id: 'other', requestId: 'req-other', toolName: 'fs_read', status: 'completed' },
+          { id: 'job-1', requestId: 'req-drain', toolName: 'fs_search', status: 'completed' },
+          { id: 'job-2', requestId: 'req-drain', toolName: 'fs_read', status: 'completed' },
+        ];
+      },
+    });
+
+    expect(snapshots).toEqual([expect.objectContaining({ id: 'job-1', toolName: 'fs_search' })]);
+
+    const drain = await awaitDelegatedRequestJobDrain({
+      requestId: 'req-drain',
+      deadlineMs: 50,
+      pollMs: 10,
+      now: () => nowMs,
+      wait: async (ms) => {
+        nowMs += ms;
+      },
+      listJobs: () => {
+        calls += 1;
+        return [{
+          id: 'job-drain',
+          requestId: 'req-drain',
+          toolName: 'fs_read',
+          status: calls === 1 ? 'running' : 'completed',
+        }];
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(drain).toMatchObject({
+      waitedMs: 10,
+      inFlightRemaining: 0,
+      snapshots: [expect.objectContaining({ id: 'job-drain', status: 'completed' })],
+    });
   });
 
   it('owns extended evidence drain decisions from verification state', () => {

@@ -84,8 +84,9 @@ import {
   resolveDelegatedWorkerLifecycle,
 } from '../runtime/execution-graph/delegated-worker-handoff.js';
 import {
+  awaitDelegatedRequestJobDrain,
   finalizeDelegatedWorkerVerification,
-  isDelegatedJobInFlight,
+  listDelegatedRequestJobSnapshots,
   runDelegatedWorkerVerificationCycle,
   verifyDelegatedWorkerResult,
   type DelegatedJobSnapshot,
@@ -315,8 +316,6 @@ function readDelegatedPendingApprovalMetadata(metadata: Record<string, unknown> 
   };
 }
 
-const DELEGATED_REQUEST_JOB_LOOKUP_LIMIT = 500;
-const DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT = 120;
 interface ExecutionGraphResumeContext {
   graphId: string;
   nodeId: string;
@@ -1919,9 +1918,18 @@ export class WorkerManager {
         pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
         hasFallbackProvider,
       };
+      const drainDelegatedJobs = (deadlineMs?: number) => awaitDelegatedRequestJobDrain({
+        requestId,
+        ...(typeof deadlineMs === 'number' ? { deadlineMs } : {}),
+        listJobs: (limit) => (
+          typeof (this.tools as { listJobs?: unknown }).listJobs === 'function'
+            ? this.tools.listJobs(limit)
+            : []
+        ),
+      });
 
       let result = await this.dispatchToWorker(worker, baseDispatchParams);
-      const firstDrain = await awaitPendingDelegatedJobs(this.tools, requestId);
+      const firstDrain = await drainDelegatedJobs();
       if (firstDrain.inFlightRemaining > 0) {
         this.recordDelegatedWorkerTrace('delegated_job_wait_expired', input, delegatedTarget, {
           requestId,
@@ -1939,7 +1947,7 @@ export class WorkerManager {
         executionProfile: effectiveExecutionProfile,
         taskContract: effectiveTaskContract,
         jobSnapshots: firstDrain.snapshots,
-        drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
+        drainPendingJobs: drainDelegatedJobs,
         trace: (event) => this.recordDelegatedWorkerTrace(event.stage, input, delegatedTarget, event.details),
       });
       let jobSnapshots = verificationCycle.jobSnapshots;
@@ -2037,7 +2045,7 @@ export class WorkerManager {
             pendingAction: effectiveInput.pendingAction,
             pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
           });
-          const retryDrain = await awaitPendingDelegatedJobs(this.tools, requestId);
+          const retryDrain = await drainDelegatedJobs();
           if (retryDrain.inFlightRemaining > 0) {
             this.recordDelegatedWorkerTrace('delegated_job_wait_expired', effectiveInput, delegatedTarget, {
               requestId,
@@ -2056,7 +2064,7 @@ export class WorkerManager {
             taskContract: effectiveTaskContract,
             jobSnapshots: retryDrain.snapshots,
             attemptLabel: 'retry',
-            drainPendingJobs: (deadlineMs) => awaitPendingDelegatedJobs(this.tools, requestId, deadlineMs),
+            drainPendingJobs: drainDelegatedJobs,
             trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
           });
           jobSnapshots = verificationCycle.jobSnapshots;
@@ -2653,7 +2661,14 @@ export class WorkerManager {
       .filter((entry): entry is NonNullable<typeof entry> => !!entry)
       .slice(-6);
 
-    const jobSnapshots = listDelegatedRequestJobSnapshots(this.tools, requestId)
+    const jobSnapshots = listDelegatedRequestJobSnapshots({
+      requestId,
+      listJobs: (limit) => (
+        typeof (this.tools as { listJobs?: unknown }).listJobs === 'function'
+          ? this.tools.listJobs(limit)
+          : []
+      ),
+    })
       .slice(0, 24)
       .map((job) => ({
         jobId: job.id,
@@ -4225,53 +4240,6 @@ function uniqueStrings(values: string[]): string[] {
     unique.push(normalized);
   }
   return unique;
-}
-
-const DELEGATED_JOB_DRAIN_DEADLINE_MS = 2500;
-const DELEGATED_JOB_DRAIN_POLL_MS = 50;
-
-async function awaitPendingDelegatedJobs(
-  tools: ToolExecutor,
-  requestId: string,
-  deadlineMs: number = DELEGATED_JOB_DRAIN_DEADLINE_MS,
-): Promise<{ snapshots: DelegatedJobSnapshot[]; waitedMs: number; inFlightRemaining: number }> {
-  const start = Date.now();
-  let snapshots = listDelegatedRequestJobSnapshots(tools, requestId);
-  while (Date.now() - start < deadlineMs) {
-    const inFlight = snapshots.filter((snapshot) => isDelegatedJobInFlight(snapshot.status));
-    if (inFlight.length === 0) break;
-    await new Promise((resolve) => setTimeout(resolve, DELEGATED_JOB_DRAIN_POLL_MS));
-    snapshots = listDelegatedRequestJobSnapshots(tools, requestId);
-  }
-  const inFlightRemaining = snapshots.filter((snapshot) => isDelegatedJobInFlight(snapshot.status)).length;
-  return {
-    snapshots,
-    waitedMs: Date.now() - start,
-    inFlightRemaining,
-  };
-}
-
-function listDelegatedRequestJobSnapshots(
-  tools: ToolExecutor,
-  requestId: string,
-): DelegatedJobSnapshot[] {
-  if (!requestId || typeof (tools as { listJobs?: unknown }).listJobs !== 'function') {
-    return [];
-  }
-  return tools.listJobs(DELEGATED_REQUEST_JOB_LOOKUP_LIMIT)
-    .filter((job) => job.requestId === requestId)
-    .slice(0, DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT)
-    .map((job) => ({
-      id: job.id,
-      toolName: job.toolName,
-      status: job.status,
-      createdAt: job.createdAt,
-      startedAt: job.startedAt,
-      completedAt: job.completedAt,
-      argsPreview: job.argsPreview,
-      resultPreview: job.resultPreview,
-      error: job.error,
-    }));
 }
 
 function sanitizeDelegatedEnvelopeForOperator(

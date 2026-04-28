@@ -27,6 +27,10 @@ import {
   type DelegatedResultSufficiencyFailure,
 } from './delegated-worker-retry.js';
 
+const DELEGATED_REQUEST_JOB_LOOKUP_LIMIT = 500;
+const DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT = 120;
+const DELEGATED_JOB_DRAIN_DEADLINE_MS = 2500;
+const DELEGATED_JOB_DRAIN_POLL_MS = 50;
 const DELEGATED_EVIDENCE_DRAIN_DEADLINE_MS = 60_000;
 
 export interface DelegatedJobSnapshot {
@@ -40,6 +44,23 @@ export interface DelegatedJobSnapshot {
   resultPreview?: string;
   error?: string;
 }
+
+export interface DelegatedJobSnapshotSourceRecord {
+  id: string;
+  requestId?: string;
+  toolName: string;
+  status: string;
+  createdAt?: number;
+  startedAt?: number;
+  completedAt?: number;
+  argsPreview?: string;
+  resultPreview?: string;
+  error?: string;
+}
+
+export type DelegatedJobSnapshotLister = (
+  limit: number,
+) => readonly DelegatedJobSnapshotSourceRecord[];
 
 export interface DelegatedWorkerVerificationInput {
   metadata: Record<string, unknown> | undefined;
@@ -58,6 +79,20 @@ export interface DelegatedJobDrainResult {
   snapshots: DelegatedJobSnapshot[];
   waitedMs: number;
   inFlightRemaining: number;
+}
+
+export interface DelegatedRequestJobSnapshotInput {
+  requestId: string;
+  listJobs?: DelegatedJobSnapshotLister;
+  lookupLimit?: number;
+  snapshotLimit?: number;
+}
+
+export interface DelegatedRequestJobDrainInput extends DelegatedRequestJobSnapshotInput {
+  deadlineMs?: number;
+  pollMs?: number;
+  now?: () => number;
+  wait?: (ms: number) => Promise<void>;
 }
 
 export interface DelegatedEvidenceDrainExtensionTraceEvent {
@@ -339,6 +374,54 @@ export function isDelegatedJobInFlight(status: string | undefined): boolean {
     || normalized === 'running'
     || normalized === 'pending'
     || normalized === 'starting';
+}
+
+export function listDelegatedRequestJobSnapshots(
+  input: DelegatedRequestJobSnapshotInput,
+): DelegatedJobSnapshot[] {
+  const requestId = input.requestId.trim();
+  if (!requestId || typeof input.listJobs !== 'function') {
+    return [];
+  }
+  const lookupLimit = input.lookupLimit ?? DELEGATED_REQUEST_JOB_LOOKUP_LIMIT;
+  const snapshotLimit = input.snapshotLimit ?? DELEGATED_REQUEST_JOB_SNAPSHOT_LIMIT;
+  return input.listJobs(lookupLimit)
+    .filter((job) => job.requestId === requestId)
+    .slice(0, snapshotLimit)
+    .map((job) => ({
+      id: job.id,
+      toolName: job.toolName,
+      status: job.status,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      argsPreview: job.argsPreview,
+      resultPreview: job.resultPreview,
+      error: job.error,
+    }));
+}
+
+export async function awaitDelegatedRequestJobDrain(
+  input: DelegatedRequestJobDrainInput,
+): Promise<DelegatedJobDrainResult> {
+  const deadlineMs = Math.max(0, input.deadlineMs ?? DELEGATED_JOB_DRAIN_DEADLINE_MS);
+  const pollMs = Math.max(0, input.pollMs ?? DELEGATED_JOB_DRAIN_POLL_MS);
+  const now = input.now ?? Date.now;
+  const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const start = now();
+  let snapshots = listDelegatedRequestJobSnapshots(input);
+  while (now() - start < deadlineMs) {
+    const inFlight = snapshots.filter((snapshot) => isDelegatedJobInFlight(snapshot.status));
+    if (inFlight.length === 0) break;
+    await wait(pollMs);
+    snapshots = listDelegatedRequestJobSnapshots(input);
+  }
+  const inFlightRemaining = snapshots.filter((snapshot) => isDelegatedJobInFlight(snapshot.status)).length;
+  return {
+    snapshots,
+    waitedMs: now() - start,
+    inFlightRemaining,
+  };
 }
 
 export function shouldExtendDelegatedEvidenceDrain(input: {
