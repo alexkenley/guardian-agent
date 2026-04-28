@@ -157,9 +157,11 @@ import {
   normalizeChatContinuationPrincipalRole,
 } from '../runtime/chat-agent/chat-continuation-payloads.js';
 import {
-  emitChatContinuationGraphResumeEvent,
+  completeChatContinuationGraphResume,
+  failChatContinuationGraphResume,
   readChatContinuationGraphResume,
   recordChatContinuationGraphApproval,
+  startChatContinuationGraphApprovalResume,
   type ChatContinuationGraphResume,
 } from '../runtime/chat-agent/chat-continuation-graph.js';
 import {
@@ -1289,49 +1291,23 @@ export class WorkerManager {
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const graphStore = this.observability.executionGraphStore;
-    if (!graphStore || chatResume.payload.type !== 'automation_authoring') return null;
+    if (!graphStore || chatResume.payload.type !== CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING) return null;
     const nowMs = this.observability.now?.() ?? Date.now();
-    this.completeExecutionGraphPendingAction(pendingAction, nowMs);
-    emitChatContinuationGraphResumeEvent({
+    const graphResume = startChatContinuationGraphApprovalResume({
       graphStore,
       runTimeline: this.observability.runTimeline,
-      resume: chatResume,
-      kind: 'interruption_resolved',
-      payload: {
-        kind: 'approval',
-        approvalId: options.approvalId,
-        resumeToken: chatResume.resumeToken,
-        resultStatus: (options.approvalResult.approved ?? options.approvalResult.success) ? 'approved' : 'denied',
-      },
-      eventKey: 'approval-resolved',
+      pendingAction,
+      approvalId: options.approvalId,
+      approvalResult: options.approvalResult,
+      completePendingAction: (_actionId, completedAt) => this.completeExecutionGraphPendingAction(pendingAction, completedAt),
+      deniedResponseContent: options.approvalResult.message || 'Approval denied. I did not continue automation authoring.',
       nowMs,
     });
-    if (!(options.approvalResult.approved ?? options.approvalResult.success)) {
-      emitChatContinuationGraphResumeEvent({
-        graphStore,
-        runTimeline: this.observability.runTimeline,
-        resume: chatResume,
-        kind: 'graph_failed',
-        payload: {
-          reason: options.approvalResult.message || 'Approval denied.',
-          continuationArtifactId: chatResume.artifact.artifactId,
-        },
-        eventKey: 'denied',
-        nowMs,
-      });
-      return {
-        content: options.approvalResult.message || 'Approval denied. I did not continue automation authoring.',
-        metadata: {
-          executionGraph: {
-            graphId: chatResume.graph.graphId,
-            status: 'failed',
-            reason: 'approval_denied',
-          },
-        },
-      };
-    }
+    if (!graphResume) return null;
+    if (!graphResume.approved) return graphResume.deniedResponse ?? null;
 
-    const resume = chatResume.payload;
+    const resume = graphResume.resume.payload;
+    if (resume.type !== CHAT_CONTINUATION_TYPE_AUTOMATION_AUTHORING) return null;
     const codeContext = resume.codeContext;
     const messageMetadata = {
       ...(resume.messageMetadata ?? {}),
@@ -1362,39 +1338,21 @@ export class WorkerManager {
         assumeAuthoring: true,
       },
     );
-    emitChatContinuationGraphResumeEvent({
+    if (!result) {
+      return failChatContinuationGraphResume({
+        graphStore,
+        runTimeline: this.observability.runTimeline,
+        resume: graphResume.resume,
+        reason: 'Automation authoring could not resume after approval.',
+        responseContent: 'Automation authoring could not resume after approval.',
+      });
+    }
+    return completeChatContinuationGraphResume({
       graphStore,
       runTimeline: this.observability.runTimeline,
-      resume: chatResume,
-      kind: result ? 'graph_completed' : 'graph_failed',
-      payload: {
-        continuationArtifactId: chatResume.artifact.artifactId,
-        resultStatus: result ? 'completed' : 'failed',
-      },
-      eventKey: result ? 'completed' : 'failed',
+      resume: graphResume.resume,
+      response: result,
     });
-    if (!result) {
-      return {
-        content: 'Automation authoring could not resume after approval.',
-        metadata: {
-          executionGraph: {
-            graphId: chatResume.graph.graphId,
-            status: 'failed',
-          },
-        },
-      };
-    }
-    return {
-      content: result.content,
-      metadata: {
-        ...(result.metadata ?? {}),
-        executionGraph: {
-          graphId: chatResume.graph.graphId,
-          status: 'completed',
-          continuationArtifactId: chatResume.artifact.artifactId,
-        },
-      },
-    };
   }
 
   private completeExecutionGraphPendingAction(

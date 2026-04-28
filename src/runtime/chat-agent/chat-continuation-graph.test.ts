@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutionGraphStore } from '../execution-graph/graph-store.js';
 import { buildGraphPendingActionReplacement } from '../execution-graph/pending-action-adapter.js';
-import type { PendingActionRecord } from '../pending-actions.js';
+import {
+  toPendingActionClientMetadata,
+  type PendingActionRecord,
+} from '../pending-actions.js';
 import {
   completeChatContinuationGraphResume,
   recordChatContinuationGraphApproval,
+  readChatContinuationGraphResume,
   startChatContinuationGraphApprovalResume,
 } from './chat-continuation-graph.js';
 
@@ -93,10 +97,105 @@ describe('chat continuation graph approval resume', () => {
       ['graph_failed', undefined, 'Denied by operator.'],
     ]);
   });
+
+  it('keeps suspended tool-loop replay state inside the graph artifact, not pending-action client metadata', () => {
+    const graphStore = new ExecutionGraphStore({ now: fixedNow(1_000) });
+    const pendingAction = createPendingAction(graphStore, {
+      prompt: 'Approve write?',
+      approvalIds: ['approval-tool-1'],
+      originalUserContent: 'Create the requested file.',
+      route: 'coding_task',
+      operation: 'update',
+      summary: 'Resume a suspended tool loop after approval.',
+      continuation: {
+        type: 'suspended_tool_loop',
+        llmMessages: [
+          { role: 'user', content: 'Write the private plan to tmp/secret.txt.' },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [{
+              id: 'call-1',
+              name: 'fs_write',
+              arguments: '{"path":"tmp/secret.txt","content":"classified"}',
+            }],
+          },
+        ],
+        pendingTools: [{
+          approvalId: 'approval-tool-1',
+          toolCallId: 'call-1',
+          jobId: 'job-1',
+          name: 'fs_write',
+        }],
+        originalMessage: {
+          id: 'message-1',
+          userId: 'user-1',
+          channel: 'web',
+          surfaceId: 'surface-1',
+          timestamp: 1_000,
+          content: 'Write the private plan to tmp/secret.txt.',
+        },
+        requestText: 'Write the private plan to tmp/secret.txt.',
+        referenceTime: 1_000,
+        allowModelMemoryMutation: false,
+        activeSkillIds: ['coding'],
+        contentTrustLevel: 'trusted',
+        taintReasons: [],
+      },
+    });
+
+    expect(pendingAction.resume?.kind).toBe('execution_graph');
+    const artifactRef = pendingAction.graphInterrupt?.artifactRefs[0];
+    expect(artifactRef).toMatchObject({
+      artifactType: 'ChatContinuation',
+      label: 'Tool-loop continuation',
+      preview: 'Resume 1 approved tool call.',
+      redactionPolicy: 'internal_resume_payload',
+    });
+
+    const graphId = String(pendingAction.resume?.payload.graphId);
+    const artifact = graphStore.getArtifact(graphId, artifactRef!.artifactId);
+    expect(artifact).toMatchObject({
+      artifactType: 'ChatContinuation',
+      label: 'Tool-loop continuation',
+      refs: ['fs_write'],
+      redactionPolicy: 'internal_resume_payload',
+      content: {
+        type: 'chat_continuation',
+        payload: {
+          type: 'suspended_tool_loop',
+          requestText: 'Write the private plan to tmp/secret.txt.',
+        },
+      },
+    });
+
+    const resume = readChatContinuationGraphResume({ graphStore, pendingAction });
+    expect(resume?.payload).toMatchObject({
+      type: 'suspended_tool_loop',
+      pendingTools: [{ approvalId: 'approval-tool-1', name: 'fs_write' }],
+    });
+
+    const clientMetadataJson = JSON.stringify(toPendingActionClientMetadata(pendingAction));
+    expect(clientMetadataJson).toContain('Tool-loop continuation');
+    expect(clientMetadataJson).not.toContain('llmMessages');
+    expect(clientMetadataJson).not.toContain('requestText');
+    expect(clientMetadataJson).not.toContain('Write the private plan');
+    expect(clientMetadataJson).not.toContain('classified');
+  });
 });
 
-function createPendingAction(graphStore: ExecutionGraphStore): PendingActionRecord {
+function createPendingAction(
+  graphStore: ExecutionGraphStore,
+  overrides: Partial<Parameters<typeof recordChatContinuationGraphApproval>[0]['action']> = {},
+): PendingActionRecord {
   let pendingAction: PendingActionRecord | null = null;
+  const continuation: Parameters<typeof recordChatContinuationGraphApproval>[0]['action']['continuation'] = overrides.continuation ?? {
+    type: 'filesystem_save_output',
+    targetPath: 'tmp/out.txt',
+    content: 'hello',
+    originalUserContent: 'Save the answer.',
+    allowPathRemediation: false,
+  };
   recordChatContinuationGraphApproval({
     graphStore,
     userKey: 'user-1:web',
@@ -106,16 +205,19 @@ function createPendingAction(graphStore: ExecutionGraphStore): PendingActionReco
     agentId: 'guardian',
     requestId: 'request-1',
     action: {
-      prompt: 'Approve save?',
-      approvalIds: ['approval-1'],
-      originalUserContent: 'Save the answer.',
-      continuation: {
-        type: 'filesystem_save_output',
-        targetPath: 'tmp/out.txt',
-        content: 'hello',
-        originalUserContent: 'Save the answer.',
-        allowPathRemediation: false,
-      },
+      ...overrides,
+      prompt: overrides.prompt ?? 'Approve save?',
+      approvalIds: overrides.approvalIds ?? ['approval-1'],
+      originalUserContent: overrides.originalUserContent ?? 'Save the answer.',
+      route: overrides.route,
+      operation: overrides.operation,
+      summary: overrides.summary,
+      turnRelation: overrides.turnRelation,
+      resolution: overrides.resolution,
+      missingFields: overrides.missingFields,
+      provenance: overrides.provenance,
+      entities: overrides.entities,
+      continuation,
     },
     setGraphPendingActionForRequest: (_userKey, _surfaceId, action, nowMs) => {
       const replacement = buildGraphPendingActionReplacement({

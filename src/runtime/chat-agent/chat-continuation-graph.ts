@@ -285,6 +285,8 @@ export function startChatContinuationGraphApprovalResume(input: {
   approvalId: string;
   approvalResult: ChatContinuationApprovalDecision;
   completePendingAction: (actionId: string, nowMs: number) => void;
+  deniedResponseContent?: string;
+  deniedStatusReason?: string;
   nowMs?: number;
 }): ChatContinuationGraphApprovalResumeStart | null {
   const resume = readChatContinuationGraphResume({
@@ -312,29 +314,52 @@ export function startChatContinuationGraphApprovalResume(input: {
   if (approved) {
     return { resume, approved: true };
   }
-  emitChatContinuationGraphResumeEvent({
+  const deniedResponse = failChatContinuationGraphResume({
     graphStore: input.graphStore,
     runTimeline: input.runTimeline,
     resume,
-    kind: 'graph_failed',
-    payload: {
-      reason: input.approvalResult.message || 'Approval denied.',
-      continuationArtifactId: resume.artifact.artifactId,
-    },
-    eventKey: 'denied',
+    reason: input.approvalResult.message || 'Approval denied.',
+    responseContent: input.deniedResponseContent
+      ?? input.approvalResult.message
+      ?? 'Approval denied. I did not continue the pending action.',
+    statusReason: input.deniedStatusReason ?? 'approval_denied',
     nowMs,
   });
   return {
     resume,
     approved: false,
-    deniedResponse: {
-      content: input.approvalResult.message || 'Approval denied. I did not continue the pending action.',
-      metadata: {
-        executionGraph: {
-          graphId: resume.graph.graphId,
-          status: 'failed',
-          reason: 'approval_denied',
-        },
+    deniedResponse,
+  };
+}
+
+export function failChatContinuationGraphResume(input: {
+  graphStore: Pick<ExecutionGraphStore, 'appendEvent' | 'getSnapshot'>;
+  runTimeline?: Pick<RunTimelineStore, 'ingestExecutionGraphEvent'>;
+  resume: ChatContinuationGraphResume;
+  reason: string;
+  responseContent: string;
+  statusReason?: string;
+  nowMs?: number;
+}): { content: string; metadata: Record<string, unknown> } {
+  emitChatContinuationGraphResumeEvent({
+    graphStore: input.graphStore,
+    runTimeline: input.runTimeline,
+    resume: input.resume,
+    kind: 'graph_failed',
+    payload: {
+      reason: input.reason,
+      continuationArtifactId: input.resume.artifact.artifactId,
+    },
+    eventKey: 'failed',
+    nowMs: input.nowMs,
+  });
+  return {
+    content: input.responseContent,
+    metadata: {
+      executionGraph: {
+        graphId: input.resume.graph.graphId,
+        status: 'failed',
+        ...(input.statusReason ? { reason: input.statusReason } : {}),
       },
     },
   };
