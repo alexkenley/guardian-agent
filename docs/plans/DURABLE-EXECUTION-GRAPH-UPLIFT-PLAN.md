@@ -1300,6 +1300,16 @@ Checkpoint after the delegated grounded-synthesis retry ownership cleanup:
 - Live API startup/regression smoke passed with request id `grounded-retry-extract-42804`: `/api/message` returned exactly `GROUNDED-RETRY-EXTRACT-42804`, the routing trace classified `general_assistant`, selected `ollama-cloud-direct` / `minimax-m2.1`, completed the run, and reported no provider fallback.
 - Answer-only delegated retry behavior was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check did not force an artificial live recovery failure.
 
+Checkpoint after the delegated terminal handoff ownership cleanup:
+
+- `src/runtime/execution-graph/delegated-worker-handoff.ts` now owns delegated terminal handoff policy: blocked/failed/completed lifecycle resolution, approval/policy/clarification/workspace-switch reporting modes, long-running held-result policy, insufficient-result failure formatting, and delegated run-class normalization.
+- `WorkerManager` still owns brokered worker dispatch, graph persistence/projection callbacks, job metadata publication, and final response assembly, but it no longer carries the pure terminal handoff/lifecycle helper block.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/delegated-worker-handoff.test.ts src/supervisor/worker-manager.test.ts` reported 53 passing tests.
+- Full local gates passed after the extraction: `npm run check`, `npm run build`, and full `npm test` (313 files, 3391 tests).
+- The actual app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` returned `status=running`.
+- Live API startup/regression smoke passed with request id `handoff-extract-42804`: `/api/message` returned exactly `HANDOFF-EXTRACT-42804`, the routing trace classified `general_assistant`, selected `ollama-cloud-direct` / `minimax-m2.1`, completed the run, and reported no provider fallback.
+- Delegated terminal handoff behavior was proven with focused execution-graph/WorkerManager tests in this slice. The live API spot check was a startup/direct-regression check, not an artificial blocked delegated run.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
