@@ -1180,6 +1180,71 @@ export function selectEscalatedDelegatedExecutionProfile(input: {
   };
 }
 
+export function selectManagedCloudSiblingDelegatedExecutionProfile(input: {
+  config: GuardianAgentConfig;
+  currentProfile?: SelectedExecutionProfile | null;
+  parentProfile?: SelectedExecutionProfile | null;
+  gatewayDecision?: IntentGatewayDecision | null;
+  orchestration?: OrchestrationRoleDescriptor | null;
+  mode?: RoutingTierMode;
+}): SelectedExecutionProfile | null {
+  const currentProfile = input.currentProfile ?? null;
+  if (!currentProfile || currentProfile.providerTier !== 'managed_cloud') {
+    return null;
+  }
+  const routingMode = currentProfile.routingMode ?? input.mode ?? 'auto';
+  if (
+    currentProfile.selectionSource === 'request_override'
+    || routingMode === 'local-only'
+    || routingMode === 'frontier-only'
+  ) {
+    return null;
+  }
+  const delegatedDecision = resolveDelegatedExecutionDecision({
+    gatewayDecision: input.gatewayDecision,
+    orchestration: input.orchestration,
+    parentProfile: input.parentProfile ?? currentProfile,
+  });
+  if (!delegatedDecision) {
+    return null;
+  }
+  const currentProviderName = currentProfile.providerName.trim();
+  const candidateProviders = currentProfile.fallbackProviderOrder.filter((providerName) => (
+    providerName.trim()
+    && providerName !== currentProviderName
+  ));
+  for (const providerName of candidateProviders) {
+    const providerConfig = input.config.llm[providerName];
+    if (!providerConfig || providerConfig.enabled === false) {
+      continue;
+    }
+    const providerType = providerConfig.provider?.trim() || providerName;
+    if (getProviderTier(providerType) !== 'managed_cloud') {
+      continue;
+    }
+    const selected = selectExecutionProfile({
+      config: input.config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: delegatedDecision,
+      mode: routingMode,
+      forcedProviderName: providerName,
+    });
+    if (!selected || selected.providerName === currentProviderName || selected.providerTier !== 'managed_cloud') {
+      continue;
+    }
+    const delegatedLabel = input.orchestration?.label?.trim()
+      || input.orchestration?.role
+      || 'delegated task';
+    return {
+      ...selected,
+      routingMode,
+      selectionSource: 'delegated_role',
+      reason: `managed-cloud sibling retry selected provider '${providerName}' for ${delegatedLabel}`,
+    };
+  }
+  return null;
+}
+
 export function serializeSelectedExecutionProfile(
   profile: SelectedExecutionProfile,
 ): Record<string, unknown> {

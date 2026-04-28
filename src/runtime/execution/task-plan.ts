@@ -84,6 +84,15 @@ export function buildPlannedTask(
     ? normalizedGatewaySteps.map((step) => applyDefaultExpectedToolCategories(step, contract))
     : [];
 
+  const toolSynthesisFallback = buildReadOnlyToolSynthesisFallbackPlan(
+    decision,
+    contract,
+    gatewaySteps,
+  );
+  if (toolSynthesisFallback) {
+    return toolSynthesisFallback;
+  }
+
   if (gatewaySteps.length > 0) {
     const answerBackedSteps = ensureRequiredAnswerStep(gatewaySteps, contract);
     const steps = ensureExactFileReferenceReadStep(
@@ -93,8 +102,17 @@ export function buildPlannedTask(
     return {
       planId: buildPlanId(decision?.route ?? contract.route, decision?.operation ?? contract.operation, steps.length),
       steps,
-      allowAdditionalSteps: false,
+      allowAdditionalSteps: steps.some(hasRuntimeEvidencePlaceholder),
     };
+  }
+
+  const emptyPlanToolSynthesisFallback = buildReadOnlyToolSynthesisFallbackPlan(
+    decision,
+    contract,
+    [],
+  );
+  if (emptyPlanToolSynthesisFallback) {
+    return emptyPlanToolSynthesisFallback;
   }
 
   if (contract.kind === 'general_answer') {
@@ -310,6 +328,88 @@ function shouldRequireFinalAnswerStep(kind: DelegatedTaskContractKind): boolean 
     || kind === 'security_analysis'
     || kind === 'general_answer'
     || kind === 'tool_execution';
+}
+
+function hasRuntimeEvidencePlaceholder(step: PlannedStep): boolean {
+  return step.expectedToolCategories?.some((category) => category.trim() === 'runtime_evidence') === true;
+}
+
+function buildReadOnlyToolSynthesisFallbackPlan(
+  decision: IntentGatewayDecision | null | undefined,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    route?: string;
+    operation?: string;
+    summary?: string;
+    answerConstraints?: AnswerConstraints;
+  },
+  gatewaySteps: PlannedStep[],
+): PlannedTask | null {
+  if (!shouldRequireReadOnlyToolSynthesisEvidence(decision, contract)) {
+    return null;
+  }
+  if (gatewaySteps.some((step) => step.kind !== 'answer')) {
+    return null;
+  }
+  const answerSummary = buildToolSynthesisFallbackAnswerSummary(gatewaySteps, contract);
+  const steps: PlannedStep[] = [
+    {
+      stepId: 'step_1',
+      kind: 'tool_call',
+      summary: 'Collect real runtime/tool evidence needed to answer the request across the requested domains.',
+      expectedToolCategories: ['runtime_evidence'],
+      required: true,
+    },
+    {
+      stepId: 'step_2',
+      kind: 'answer',
+      summary: answerSummary,
+      required: true,
+      dependsOn: ['step_1'],
+    },
+  ];
+  return {
+    planId: buildPlanId(decision?.route ?? contract.route, decision?.operation ?? contract.operation, steps.length),
+    steps,
+    allowAdditionalSteps: true,
+  };
+}
+
+function shouldRequireReadOnlyToolSynthesisEvidence(
+  decision: IntentGatewayDecision | null | undefined,
+  contract: {
+    kind: DelegatedTaskContractKind;
+    operation?: string;
+  },
+): boolean {
+  if (contract.kind !== 'general_answer') {
+    return false;
+  }
+  const operation = decision?.operation ?? contract.operation;
+  if (operation !== 'inspect' && operation !== 'read' && operation !== 'search') {
+    return false;
+  }
+  return decision?.requiresToolSynthesis === true
+    || decision?.preferredAnswerPath === 'tool_loop'
+    || decision?.executionClass === 'tool_orchestration'
+    || decision?.executionClass === 'provider_crud';
+}
+
+function buildToolSynthesisFallbackAnswerSummary(
+  gatewaySteps: PlannedStep[],
+  contract: {
+    summary?: string;
+    answerConstraints?: AnswerConstraints;
+  },
+): string {
+  const answerSummaries = gatewaySteps
+    .filter((step) => step.kind === 'answer')
+    .map((step) => step.summary.trim())
+    .filter((summary) => summary.length > 0 && !isGeneratedGenericAnswerSummary(summary));
+  const summary = answerSummaries.length > 0
+    ? answerSummaries.join(' ')
+    : contract.summary?.trim() || 'Answer with grounded findings from the collected evidence.';
+  return enrichAnswerSummaryForConstraints(summary, contract.answerConstraints);
 }
 
 function applyContractAnswerSummary(
@@ -945,6 +1045,11 @@ function expectedToolCategoryMatchesTool(
   const normalized = value.trim();
   return normalized === toolName
     || normalized === inferredToolKind
+    || (normalized === 'runtime_evidence' && toolName !== 'find_tools' && (
+      inferredToolKind === 'read'
+        || inferredToolKind === 'search'
+        || inferredToolKind === 'tool_call'
+    ))
     || (normalized === 'repo' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repository' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))

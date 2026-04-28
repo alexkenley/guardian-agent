@@ -13,6 +13,7 @@ import {
   buildDelegatedRetryIntentGatewayRecord,
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
+  isDelegatedToolEvidenceRetry,
   shouldAdoptDelegatedTaskContract,
   shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
@@ -164,6 +165,41 @@ describe('delegated worker retry graph policy', () => {
 
     expect(isDelegatedAnswerSynthesisRetry(failure!)).toBe(false);
     expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, executionProfile())).toBe(true);
+    expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, {
+      ...executionProfile(),
+      providerTier: 'frontier',
+    })).toBe(false);
+  });
+
+  it('uses a same-profile corrective pass for managed-cloud missing tool-evidence failures', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          {
+            stepId: 'evidence',
+            kind: 'tool_call',
+            summary: 'Collect read-only runtime evidence.',
+            expectedToolCategories: ['runtime_evidence'],
+          },
+          {
+            stepId: 'answer',
+            kind: 'answer',
+            summary: 'Answer from evidence.',
+          },
+        ],
+      }),
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Delegated worker stopped before satisfying every required planned step.'],
+      retryable: true,
+      missingEvidenceKinds: ['tool_call'],
+      unsatisfiedStepIds: ['evidence', 'answer'],
+      requiredNextAction: 'Complete the evidence step and answer.',
+    }, envelope);
+
+    expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, executionProfile())).toBe(true);
+    expect(isDelegatedToolEvidenceRetry(failure!)).toBe(true);
     expect(shouldRetryDelegatedCorrectivePassOnSameProfile(failure!, {
       ...executionProfile(),
       providerTier: 'frontier',

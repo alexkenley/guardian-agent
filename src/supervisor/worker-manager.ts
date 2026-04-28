@@ -39,6 +39,7 @@ import type {
 import {
   resolveDelegatedExecutionDecision,
   selectEscalatedDelegatedExecutionProfile,
+  selectManagedCloudSiblingDelegatedExecutionProfile,
   type SelectedExecutionProfile,
 } from '../runtime/execution-profiles.js';
 import {
@@ -83,6 +84,7 @@ import {
   buildDelegatedRetryIntentGatewayRecord,
   formatDelegatedStepIds,
   isDelegatedAnswerSynthesisRetry,
+  isDelegatedToolEvidenceRetry,
   shouldAdoptDelegatedTaskContract,
   shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
@@ -2314,20 +2316,22 @@ export class WorkerManager {
           ? { verifiedResult, insufficiency, jobSnapshots }
           : null;
       if (insufficiency) {
-        const retryProfile = shouldRetryDelegatedAnswerSynthesisOnSameProfile(
+        const shouldUseSameProfileRetry = shouldRetryDelegatedAnswerSynthesisOnSameProfile(
           insufficiency,
           effectiveExecutionProfile,
         ) || shouldRetryDelegatedCorrectivePassOnSameProfile(
           insufficiency,
           effectiveExecutionProfile,
-        )
+        ) && !isDelegatedToolEvidenceRetry(insufficiency);
+        const retryProfile = shouldUseSameProfileRetry
           ? effectiveExecutionProfile ?? null
           : selectDelegatedRetryExecutionProfile(
-              this.runtime,
-              delegatedTarget,
-              effectiveIntentDecision ?? undefined,
-              effectiveExecutionProfile,
-            );
+                this.runtime,
+                delegatedTarget,
+                effectiveIntentDecision ?? undefined,
+                effectiveExecutionProfile,
+                insufficiency,
+              );
         if (retryProfile) {
           const retryUsesSameProfile = isSameExecutionProfile(retryProfile, effectiveExecutionProfile);
           const retryDetail = buildDelegatedRetryDetail(
@@ -5217,9 +5221,23 @@ function selectDelegatedRetryExecutionProfile(
   target: ResolvedDelegatedTargetMetadata,
   intentDecision: IntentGatewayDecision | undefined,
   currentProfile: SelectedExecutionProfile | undefined,
+  insufficiency?: DelegatedResultSufficiencyFailure,
 ): SelectedExecutionProfile | null {
   const config = runtime.getConfigSnapshot?.();
   if (!config) return currentProfile ?? null;
+  if (insufficiency && isDelegatedToolEvidenceRetry(insufficiency)) {
+    const sibling = selectManagedCloudSiblingDelegatedExecutionProfile({
+      config,
+      currentProfile,
+      parentProfile: currentProfile,
+      gatewayDecision: intentDecision,
+      orchestration: target.orchestration,
+      mode: currentProfile?.routingMode,
+    });
+    if (sibling) {
+      return sibling;
+    }
+  }
   const escalated = selectEscalatedDelegatedExecutionProfile({
     config,
     currentProfile,

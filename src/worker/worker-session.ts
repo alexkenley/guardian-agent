@@ -738,6 +738,34 @@ function isCatalogEvidenceCategory(category: string): boolean {
     || normalized.startsWith('second_brain_');
 }
 
+function buildDelegatedTaskContractToolExecutionCorrectionPrompt(
+  taskContract: DelegatedTaskContract,
+): string | undefined {
+  const evidenceSteps = taskContract.plan.steps.filter((step) => step.required !== false && step.kind !== 'answer');
+  if (evidenceSteps.length === 0) {
+    return undefined;
+  }
+  const expectedCategories = [
+    ...new Set(evidenceSteps.flatMap((step) => step.expectedToolCategories ?? []).map((category) => category.trim()).filter(Boolean)),
+  ];
+  const hasRuntimeEvidencePlaceholder = expectedCategories.includes('runtime_evidence');
+  return [
+    'System correction: this delegated turn has a task contract that requires real tool evidence.',
+    'Do not answer from memory, stop after tool discovery, or claim findings before satisfying the required non-answer planned steps with real tool results.',
+    ...(expectedCategories.length > 0
+      ? [`Use tools matching these planned categories before the final answer: ${expectedCategories.join(', ')}.`]
+      : ['Use available tools that match the required planned steps before the final answer.']),
+    ...(hasRuntimeEvidencePlaceholder
+      ? [
+          'The runtime_evidence category is a placeholder for real read-only evidence tools across the requested domains; find_tools can discover tools, but find_tools itself does not satisfy runtime_evidence.',
+          'After discovering a matching read-only status, list, read, search, or schema tool, call that tool. If no matching tool exists for a requested domain after discovery, report that domain as unavailable in the final answer instead of continuing broad discovery.',
+        ]
+      : []),
+    'After collecting tool evidence, synthesize the answer from those tool results.',
+    'Only pause if a real tool result returns pending_approval or another real blocker.',
+  ].join(' ');
+}
+
 function mapEvidenceStatus(result: Record<string, unknown> | undefined, errorMessage?: string): EvidenceReceipt['status'] {
   if (errorMessage) return 'failed';
   const status = typeof result?.status === 'string' ? result.status.trim().toLowerCase() : '';
@@ -3255,7 +3283,6 @@ export class BrokeredWorkerSession {
       ?? readSelectedExecutionProfileMetadata(params.message.metadata);
 
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(message.content);
-    const toolExecutionCorrectionPrompt = buildToolExecutionCorrectionPrompt(intentDecision);
     const answerFirstOriginalRequest = stripLeadingContextPrefix(message.content);
     const skillAnswerFirstCandidate = shouldUseAnswerFirstForSkills(params.activeSkills, answerFirstOriginalRequest);
     const skillPrefersAnswerFirst = skillAnswerFirstCandidate
@@ -3281,6 +3308,8 @@ export class BrokeredWorkerSession {
         : undefined,
     );
     const workerLoopBudget = deriveWorkerLoopBudget(taskContract, selectedExecutionProfile);
+    const toolExecutionCorrectionPrompt = buildToolExecutionCorrectionPrompt(intentDecision)
+      ?? buildDelegatedTaskContractToolExecutionCorrectionPrompt(taskContract);
     appendSystemGuidance(llmMessages, buildDelegatedTaskPlanGuidance(taskContract));
 
     appendSystemGuidance(llmMessages, buildExactFileReferenceGuidance(taskContract));

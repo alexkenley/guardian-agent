@@ -7,6 +7,7 @@ import {
   selectEscalatedDelegatedExecutionProfile,
   selectDelegatedExecutionProfile,
   selectExecutionProfile,
+  selectManagedCloudSiblingDelegatedExecutionProfile,
 } from './execution-profiles.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
 
@@ -115,6 +116,52 @@ describe('execution profiles', () => {
       'ollama-cloud-coding',
       'ollama-cloud-direct',
     ]);
+  });
+
+  it('can retry a delegated managed-cloud tool-loop failure on a sibling managed-cloud profile before frontier', () => {
+    const config = createConfig();
+    const current = selectExecutionProfile({
+      config,
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'provider_crud',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+      }),
+      mode: 'auto',
+    });
+    const sibling = selectManagedCloudSiblingDelegatedExecutionProfile({
+      config,
+      currentProfile: current,
+      parentProfile: current,
+      gatewayDecision: createGatewayDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'provider_crud',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+      }),
+      orchestration: {
+        role: 'explorer',
+        label: 'Provider Explorer',
+        lenses: ['provider-admin'],
+      },
+      mode: 'auto',
+    });
+
+    expect(current?.providerName).toBe('ollama-cloud-tools');
+    expect(sibling).toMatchObject({
+      providerName: 'ollama-cloud-general',
+      providerModel: 'gpt-oss:120b',
+      providerTier: 'managed_cloud',
+      selectionSource: 'delegated_role',
+    });
   });
 
   it('direct reasoning tasks use managed cloud instead of frontier in balanced auto mode', () => {

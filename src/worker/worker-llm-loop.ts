@@ -95,7 +95,7 @@ export async function runLlmLoop(
   let forcedPolicyBlockedRetryUsed = false;
   let forcedSkillShapeRetryCount = 0;
   let forcedToolExecutionRetryUsed = false;
-  let forcedDiscoveryContinuationRetryUsed = false;
+  let forcedDiscoveryContinuationRetryCount = 0;
   let lastToolRoundResults: Array<{
     toolName: string;
     args: Record<string, unknown>;
@@ -352,6 +352,7 @@ export async function runLlmLoop(
     if (
       !forcedToolExecutionRetryUsed
       && lastToolRoundResults.length === 0
+      && !hasConcretePriorToolEvidence(messages)
       && (!response.toolCalls || response.toolCalls.length === 0)
       && shouldRetryToolExecutionCorrection(response.content ?? '', llmToolDefs, options?.toolExecutionCorrectionPrompt)
     ) {
@@ -369,17 +370,17 @@ export async function runLlmLoop(
       stopReason = mapChatResponseStopReason(response);
     }
 
-    if (
-      !forcedDiscoveryContinuationRetryUsed
+    while (
+      forcedDiscoveryContinuationRetryCount < 3
       && (!response.toolCalls || response.toolCalls.length === 0)
       && shouldRetryDiscoveryContinuation(lastToolRoundResults, options?.toolExecutionCorrectionPrompt)
     ) {
-      forcedDiscoveryContinuationRetryUsed = true;
+      forcedDiscoveryContinuationRetryCount += 1;
       response = await chatFn(
         [
           ...plannedTaskMessages,
           { role: 'assistant', content: response.content ?? '' },
-          { role: 'user', content: buildDiscoveryContinuationCorrectionPrompt() },
+          { role: 'user', content: buildDiscoveryContinuationCorrectionPrompt(llmToolDefs) },
         ],
         { tools: llmToolDefs },
       );
@@ -398,10 +399,13 @@ export async function runLlmLoop(
       break;
     }
 
+    const assistantToolCallContent = response.content ?? '';
+    finalContent = '';
+
     toolCallCount += response.toolCalls.length;
     messages.push({
       role: 'assistant',
-      content: response.content ?? '',
+      content: assistantToolCallContent,
       toolCalls: response.toolCalls,
     });
 
@@ -778,6 +782,24 @@ function hasUsableDirectContent(content: string | undefined): boolean {
   return true;
 }
 
+function hasConcretePriorToolEvidence(messages: ChatMessage[]): boolean {
+  const toolCallNamesById = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role === 'assistant' && Array.isArray(message.toolCalls)) {
+      for (const toolCall of message.toolCalls) {
+        toolCallNamesById.set(toolCall.id, toolCall.name);
+      }
+    }
+    if (message.role !== 'tool') continue;
+    const toolName = typeof message.toolCallId === 'string'
+      ? toolCallNamesById.get(message.toolCallId)
+      : undefined;
+    if (toolName === 'find_tools') continue;
+    return true;
+  }
+  return false;
+}
+
 function isSuccessfulToolResult(result: Record<string, unknown>): boolean {
   const status = typeof result.status === 'string' ? result.status.trim().toLowerCase() : '';
   if (
@@ -910,10 +932,20 @@ function collectToolResultText(result: Record<string, unknown>): string {
   ].filter(Boolean).join('\n');
 }
 
-function buildDiscoveryContinuationCorrectionPrompt(): string {
+function buildDiscoveryContinuationCorrectionPrompt(
+  toolDefs: import('../llm/types.js').ToolDefinition[] = [],
+): string {
+  const actionableTools = toolDefs
+    .map((tool) => tool.name)
+    .filter((name) => name && name !== 'find_tools')
+    .slice(0, 16);
   return [
     'System correction: discovering a tool is not the requested outcome.',
     'If the original request still needs inspection, execution, or verification, call the discovered tool now.',
+    ...(actionableTools.length > 0
+      ? [`Available non-discovery tools now include: ${actionableTools.join(', ')}.`]
+      : []),
+    'Do not call find_tools again unless none of the currently available non-discovery tools can satisfy any remaining planned evidence step.',
     'Do not stop after find_tools, and do not ask the user whether to proceed when the original request already told you to do the work.',
     'Only pause if a real tool result returns pending_approval or another real blocker.',
   ].join(' ');

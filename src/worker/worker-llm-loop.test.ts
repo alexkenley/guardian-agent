@@ -1580,6 +1580,339 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toBe('Remote sandbox user: daytona');
   });
 
+  it('does not treat progress text on a tool-call turn as the final answer', async () => {
+    const messages: ChatMessage[] = [{
+      role: 'user',
+      content: 'Inspect Vercel status with read-only tools and return the result.',
+    }];
+    const responses: ChatResponse[] = [
+      {
+        content: 'I will discover the Vercel status tool first.',
+        toolCalls: [{ id: 'call-1', name: 'find_tools', arguments: JSON.stringify({ query: 'vercel_status' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'vercel_status', arguments: JSON.stringify({ profile: 'main' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Vercel profile main is available.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const calledTools: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'find_tools',
+          description: 'Find deferred tools.',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'system',
+        }];
+      },
+      async searchTools() {
+        return [{
+          name: 'vercel_status',
+          description: 'Summarize Vercel projects and recent deployments.',
+          parameters: { type: 'object', properties: { profile: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'cloud',
+        }];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'find_tools') {
+          return {
+            success: true,
+            output: {
+              tools: [{
+                name: 'vercel_status',
+                description: 'Summarize Vercel projects and recent deployments.',
+                parameters: { type: 'object', properties: { profile: { type: 'string' } } },
+                risk: 'read_only',
+                category: 'cloud',
+              }],
+            },
+          };
+        }
+        expect(request.toolName).toBe('vercel_status');
+        return { success: true, output: { profile: 'main', connected: true } };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      4,
+      32_000,
+      undefined,
+      {
+        toolExecutionCorrectionPrompt: 'System correction: this turn requires real tool evidence.',
+      },
+    );
+
+    expect(calledTools).toEqual(['find_tools', 'vercel_status']);
+    expect(result.finalContent).toBe('Vercel profile main is available.');
+  });
+
+  it('reissues discovery-continuation correction when a multi-domain worker keeps discovering instead of calling tools', async () => {
+    const messages: ChatMessage[] = [{
+      role: 'user',
+      content: 'Inspect connected cloud and workspace services with read-only tools, then return a compact table.',
+    }];
+    const plannedTask: PlannedTask = {
+      planId: 'plan:general_assistant:inspect:2',
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'tool_call',
+          summary: 'Collect real runtime/tool evidence needed to answer the request across the requested domains.',
+          expectedToolCategories: ['runtime_evidence'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Return a compact table.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    };
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'find_tools', arguments: JSON.stringify({ query: 'vercel status' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I found a Vercel status tool and will keep checking what is available.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'find_tools', arguments: JSON.stringify({ query: 'workspace status' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I found workspace tools too.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-3', name: 'vercel_status', arguments: JSON.stringify({ profile: 'main' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: '| Domain | Status |\n| --- | --- |\n| Vercel | available |',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const correctionPrompts: string[] = [];
+    const calledTools: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'find_tools',
+          description: 'Find deferred tools.',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'system',
+        }];
+      },
+      async searchTools(query) {
+        if (query.includes('vercel')) {
+          return [{
+            name: 'vercel_status',
+            description: 'Summarize Vercel projects and recent deployments.',
+            parameters: { type: 'object', properties: { profile: { type: 'string' } } },
+            risk: 'read_only',
+            category: 'cloud',
+          }];
+        }
+        return [{
+          name: 'gws_schema',
+          description: 'Discover Google Workspace methods.',
+          parameters: { type: 'object', properties: {} },
+          risk: 'read_only',
+          category: 'workspace',
+        }];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'find_tools') {
+          const query = typeof request.args.query === 'string' ? request.args.query : '';
+          return {
+            success: true,
+            output: {
+              tools: query.includes('vercel')
+                ? [{
+                    name: 'vercel_status',
+                    description: 'Summarize Vercel projects and recent deployments.',
+                    parameters: { type: 'object', properties: { profile: { type: 'string' } } },
+                    risk: 'read_only',
+                    category: 'cloud',
+                  }]
+                : [{
+                    name: 'gws_schema',
+                    description: 'Discover Google Workspace methods.',
+                    parameters: { type: 'object', properties: {} },
+                    risk: 'read_only',
+                    category: 'workspace',
+                  }],
+            },
+          };
+        }
+        expect(request.toolName).toBe('vercel_status');
+        return { success: true, output: { profile: 'main', projects: [] } };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (roundMessages) => {
+        const latest = roundMessages.at(-1);
+        if (latest?.role === 'user' && latest.content.includes('discovering a tool is not the requested outcome')) {
+          correctionPrompts.push(latest.content);
+        }
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      6,
+      32_000,
+      undefined,
+      {
+        plannedTask,
+        toolExecutionCorrectionPrompt: 'System correction: this turn requires real tool evidence.',
+      },
+    );
+
+    expect(correctionPrompts).toHaveLength(2);
+    expect(correctionPrompts.at(-1)).toContain('Available non-discovery tools now include: vercel_status');
+    expect(calledTools).toEqual(['find_tools', 'find_tools', 'vercel_status']);
+    expect(result.finalContent).toContain('Vercel');
+  });
+
+  it('keeps correcting a discovery-only stop when the first correction still returns progress text', async () => {
+    const messages: ChatMessage[] = [{
+      role: 'user',
+      content: 'Inspect Vercel status with read-only tools.',
+    }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'find_tools', arguments: JSON.stringify({ query: 'vercel_status' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'I found the Vercel status tool and will inspect it next.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: 'I will now call vercel_status.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: '',
+        toolCalls: [{ id: 'call-2', name: 'vercel_status', arguments: JSON.stringify({ profile: 'main' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Vercel profile main is available.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const correctionPrompts: string[] = [];
+    const calledTools: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'find_tools',
+          description: 'Find deferred tools.',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'system',
+        }];
+      },
+      async searchTools() {
+        return [{
+          name: 'vercel_status',
+          description: 'Summarize Vercel projects and recent deployments.',
+          parameters: { type: 'object', properties: { profile: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'cloud',
+        }];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        if (request.toolName === 'find_tools') {
+          return {
+            success: true,
+            output: {
+              tools: [{
+                name: 'vercel_status',
+                description: 'Summarize Vercel projects and recent deployments.',
+                parameters: { type: 'object', properties: { profile: { type: 'string' } } },
+                risk: 'read_only',
+                category: 'cloud',
+              }],
+            },
+          };
+        }
+        expect(request.toolName).toBe('vercel_status');
+        return { success: true, output: { profile: 'main' } };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (roundMessages) => {
+        const latest = roundMessages.at(-1);
+        if (latest?.role === 'user' && latest.content.includes('discovering a tool is not the requested outcome')) {
+          correctionPrompts.push(latest.content);
+        }
+        const next = responses.shift();
+        if (!next) throw new Error('Unexpected extra chatFn call');
+        return next;
+      },
+      toolCaller,
+      5,
+      32_000,
+      undefined,
+      {
+        toolExecutionCorrectionPrompt: 'System correction: this turn requires real tool evidence.',
+      },
+    );
+
+    expect(correctionPrompts).toHaveLength(2);
+    expect(calledTools).toEqual(['find_tools', 'vercel_status']);
+    expect(result.finalContent).toContain('available');
+  });
+
   it('passes the model memory-mutation allowance through to the tool caller', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Please remember that I prefer terse updates.' }];
     const responses: ChatResponse[] = [

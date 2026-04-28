@@ -296,6 +296,158 @@ describe('task plan receipt accounting', () => {
     })).toBe('step_3');
   });
 
+  it('requires real evidence when a read-only tool-synthesis plan only contains answer steps', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'general_assistant',
+      operation: 'inspect',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      confidence: 'high',
+      summary: 'Inspect connected service status.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'answer',
+          summary: 'Do not create, update, delete, deploy, send email, start sandboxes, or modify anything.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return a compact table with each domain, tool/source used, connected/available status, and safe identifiers.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      kind: 'general_answer',
+      route: 'general_assistant',
+      operation: 'inspect',
+      summary: 'Inspect connected service status.',
+    });
+
+    expect(plannedTask).toMatchObject({
+      allowAdditionalSteps: true,
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'tool_call',
+          expectedToolCategories: ['runtime_evidence'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    });
+    expect(plannedTask.steps[1]?.summary).toContain('Return a compact table');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'find_tools',
+      args: { query: 'vercel_status' },
+    })).toBeUndefined();
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'whm_status',
+      args: { profile: 'safe-profile-id' },
+    })).toBe('step_1');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'automation_list',
+      args: {},
+    })).toBe('step_1');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'web_search',
+      args: { query: 'example' },
+    })).toBe('step_1');
+  });
+
+  it('does not add evidence requirements to ordinary direct general answers', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'general_assistant',
+      operation: 'inspect',
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      confidence: 'high',
+      summary: 'Give concise planning advice.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+    }, {
+      kind: 'general_answer',
+      route: 'general_assistant',
+      operation: 'inspect',
+      summary: 'Give concise planning advice.',
+    });
+
+    expect(plannedTask.steps).toEqual([
+      {
+        stepId: 'step_1',
+        kind: 'answer',
+        summary: 'Give concise planning advice.',
+        required: true,
+      },
+    ]);
+  });
+
+  it('preserves additional tool latitude when retrying a runtime-evidence fallback plan', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'general_assistant',
+      operation: 'inspect',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      confidence: 'high',
+      summary: 'Inspect connected service status.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'tool_call',
+          summary: 'Collect real runtime/tool evidence needed to answer the request across the requested domains.',
+          expectedToolCategories: ['runtime_evidence'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return a compact table.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      kind: 'general_answer',
+      route: 'general_assistant',
+      operation: 'inspect',
+      summary: 'Inspect connected service status.',
+    });
+
+    expect(plannedTask.allowAdditionalSteps).toBe(true);
+  });
+
   it('allows semantic write steps to be satisfied by Second Brain mutation tools', () => {
     const plannedTask: PlannedTask = {
       planId: 'plan:complex_planning_task:run:2',

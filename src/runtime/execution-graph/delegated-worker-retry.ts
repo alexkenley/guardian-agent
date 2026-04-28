@@ -135,6 +135,9 @@ export function shouldRetryDelegatedCorrectivePassOnSameProfile(
   if (isDelegatedAnswerSynthesisRetry(insufficiency)) return true;
   if (currentProfile.providerTier !== 'managed_cloud') return false;
   const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
+  if (insufficiency.decision.decision === 'insufficient' && isDelegatedToolEvidenceRetry(insufficiency)) {
+    return true;
+  }
   const onlyAnswerEvidenceMissing = missingEvidenceKinds.length === 0
     || missingEvidenceKinds.every((kind) => kind === 'answer');
   const onlyAnswerStepsUnsatisfied = insufficiency.unsatisfiedSteps.length === 0
@@ -144,6 +147,23 @@ export function shouldRetryDelegatedCorrectivePassOnSameProfile(
   return onlyAnswerEvidenceMissing
     && onlyAnswerStepsUnsatisfied
     && insufficiency.decision.decision === 'insufficient';
+}
+
+export function isDelegatedToolEvidenceRetry(
+  insufficiency: DelegatedResultSufficiencyFailure,
+): boolean {
+  const missingEvidenceKinds = insufficiency.decision.missingEvidenceKinds ?? [];
+  const hasUnsatisfiedNonAnswerStep = insufficiency.unsatisfiedSteps.some((step) => step.kind && step.kind !== 'answer');
+  const hasMissingToolEvidence = missingEvidenceKinds.some((kind) => (
+    kind === 'tool_call'
+      || kind === 'read'
+      || kind === 'search'
+      || kind === 'runtime_evidence'
+      || kind === 'repo_evidence'
+      || kind === 'security_evidence'
+      || kind === 'execution_evidence'
+  ));
+  return hasUnsatisfiedNonAnswerStep || hasMissingToolEvidence;
 }
 
 export function buildDelegatedRetryDetail(
