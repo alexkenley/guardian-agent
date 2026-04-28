@@ -93,12 +93,11 @@ import {
   type DelegatedJobSnapshot,
 } from '../runtime/execution-graph/delegated-worker-verification.js';
 import {
-  buildDelegatedGroundedAnswerEnvelope,
-  buildDelegatedGroundedAnswerSynthesisMessages,
   buildDelegatedRetryableFailure,
   buildDelegatedRetryAttemptPlan,
   isDelegatedAnswerSynthesisRetry,
   isDelegatedToolEvidenceRetry,
+  runDelegatedGroundedAnswerSynthesisRetry,
   shouldAdoptDelegatedTaskContract,
   shouldUseSameProfileDelegatedRetry,
   type DelegatedResultSufficiencyFailure,
@@ -251,22 +250,6 @@ interface ResolvedDelegatedTargetMetadata {
   agentId: string;
   agentName?: string;
   orchestration?: OrchestrationRoleDescriptor;
-}
-
-interface DelegatedWorkerDispatchBase {
-  message: UserMessage;
-  systemPrompt: string;
-  history: Array<{ role: 'user' | 'assistant'; content: string }>;
-  knowledgeBases: PromptAssemblyKnowledgeBase[];
-  activeSkills: ResolvedSkill[];
-  additionalSections: PromptAssemblyAdditionalSection[];
-  toolContext: string;
-  runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
-  executionProfile?: SelectedExecutionProfile;
-  continuity?: PromptAssemblyContinuity | null;
-  pendingAction?: PromptAssemblyPendingAction | null;
-  pendingApprovalNotice?: string;
-  hasFallbackProvider?: boolean;
 }
 
 function normalizeDelegatedApprovalSummaries(value: unknown): PendingActionApprovalSummary[] {
@@ -1624,115 +1607,6 @@ export class WorkerManager {
     };
   }
 
-  private async tryDelegatedGroundedAnswerSynthesis(input: {
-    request: WorkerMessageRequest;
-    worker: WorkerProcess;
-    target: ResolvedDelegatedTargetMetadata;
-    taskContract: DelegatedResultEnvelope['taskContract'];
-    verifiedResult: {
-      envelope: DelegatedResultEnvelope;
-      decision: VerificationDecision;
-    };
-    insufficiency: DelegatedResultSufficiencyFailure;
-    jobSnapshots: DelegatedJobSnapshot[];
-    requestId: string;
-    taskRunId: string;
-    effectiveIntentDecision?: IntentGatewayDecision;
-    dispatchBase: DelegatedWorkerDispatchBase;
-  }): Promise<{
-    result: { content: string; metadata?: Record<string, unknown> };
-    verifiedResult: {
-      envelope: DelegatedResultEnvelope;
-      decision: VerificationDecision;
-    };
-  } | null> {
-    if (!isDelegatedAnswerSynthesisRetry(input.insufficiency)) {
-      return null;
-    }
-
-    const profileLabel = describeDelegatedExecutionProfile(input.dispatchBase.executionProfile);
-    const detail = profileLabel
-      ? `Synthesizing final answer from gathered evidence using ${profileLabel}.`
-      : 'Synthesizing final answer from gathered evidence.';
-    this.recordDelegatedWorkerTrace('delegated_worker_retrying', input.request, input.target, {
-      requestId: input.requestId,
-      taskRunId: input.taskRunId,
-      lifecycle: 'running',
-      workerId: input.worker.id,
-      taskContract: input.taskContract,
-      reason: detail,
-    });
-    this.publishDelegatedWorkerProgress(input.request, input.target, {
-      id: `delegated-worker:${input.taskRunId}:grounded-answer-synthesis`,
-      kind: 'running',
-      requestId: input.requestId,
-      taskRunId: input.taskRunId,
-      workerId: input.worker.id,
-      detail,
-    });
-
-    const synthesis = await this.dispatchToWorker(input.worker, {
-      ...input.dispatchBase,
-      groundedSynthesis: {
-        messages: buildDelegatedGroundedAnswerSynthesisMessages({
-          originalRequest: input.request.message.content,
-          history: input.dispatchBase.history,
-          intentDecision: input.effectiveIntentDecision,
-          envelope: input.verifiedResult.envelope,
-          verification: input.verifiedResult.decision,
-          insufficiency: input.insufficiency,
-          jobSnapshots: input.jobSnapshots,
-        }),
-        maxTokens: 2_500,
-        temperature: 0,
-      },
-    });
-    const finalAnswer = synthesis.content.trim();
-    if (!finalAnswer) {
-      this.recordDelegatedWorkerTrace('delegated_worker_running', input.request, input.target, {
-        requestId: input.requestId,
-        taskRunId: input.taskRunId,
-        lifecycle: 'running',
-        workerId: input.worker.id,
-        taskContract: input.taskContract,
-        reason: 'Grounded answer synthesis returned empty content; delegated verification failure remains authoritative.',
-      });
-      return null;
-    }
-
-    const now = this.observability.now?.() ?? Date.now();
-    const synthesizedEnvelope = buildDelegatedGroundedAnswerEnvelope({
-      sourceEnvelope: input.verifiedResult.envelope,
-      finalAnswer,
-      taskRunId: input.taskRunId,
-      timestamp: now,
-    });
-    const metadata: Record<string, unknown> = {
-      ...(synthesis.metadata ?? {}),
-      ...buildDelegatedExecutionMetadata(synthesizedEnvelope),
-      delegatedGroundedAnswerSynthesis: {
-        available: true,
-        reason: 'answer_only_retry',
-        satisfiedStepCount: input.insufficiency.satisfiedSteps.length,
-        unsatisfiedStepIds: input.insufficiency.unsatisfiedSteps.map((step) => step.stepId),
-      },
-    };
-    const verifiedResult = verifyDelegatedWorkerResult({
-      metadata,
-      intentDecision: input.effectiveIntentDecision,
-      executionProfile: input.dispatchBase.executionProfile,
-      taskContract: input.taskContract,
-      jobSnapshots: input.jobSnapshots,
-    });
-    return {
-      result: {
-        content: finalAnswer,
-        metadata,
-      },
-      verifiedResult,
-    };
-  }
-
   private startDelegatedWorkerGraph(input: {
     request: WorkerMessageRequest;
     target: ResolvedDelegatedTargetMetadata;
@@ -2242,31 +2116,40 @@ export class WorkerManager {
         }
       }
       if (insufficiency && answerSynthesisFallback) {
-        const synthesisResult = await this.tryDelegatedGroundedAnswerSynthesis({
-          request: effectiveInput,
-          worker,
-          target: delegatedTarget,
+        const synthesisDispatchBase = {
+          ...baseDispatchParams,
+          message: effectiveInput.message,
+          systemPrompt: effectiveInput.systemPrompt,
+          history: effectiveInput.history,
+          knowledgeBases: effectiveInput.knowledgeBases ?? [],
+          activeSkills: effectiveInput.activeSkills ?? [],
+          toolContext: effectiveInput.toolContext ?? '',
+          runtimeNotices: effectiveInput.runtimeNotices ?? [],
+          executionProfile: effectiveExecutionProfile,
+          continuity: effectiveInput.continuity,
+          pendingAction: effectiveInput.pendingAction,
+          pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
+        };
+        const synthesisResult = await runDelegatedGroundedAnswerSynthesisRetry({
+          originalRequest: effectiveInput.message.content,
+          history: synthesisDispatchBase.history,
+          intentDecision: effectiveIntentDecision ?? undefined,
           taskContract: effectiveTaskContract,
           verifiedResult: answerSynthesisFallback.verifiedResult,
           insufficiency: answerSynthesisFallback.insufficiency,
           jobSnapshots: answerSynthesisFallback.jobSnapshots,
           requestId,
           taskRunId: delegatedTaskRunId,
-          effectiveIntentDecision: effectiveIntentDecision ?? undefined,
-          dispatchBase: {
-            ...baseDispatchParams,
-            message: effectiveInput.message,
-            systemPrompt: effectiveInput.systemPrompt,
-            history: effectiveInput.history,
-            knowledgeBases: effectiveInput.knowledgeBases ?? [],
-            activeSkills: effectiveInput.activeSkills ?? [],
-            toolContext: effectiveInput.toolContext ?? '',
-            runtimeNotices: effectiveInput.runtimeNotices ?? [],
-            executionProfile: effectiveExecutionProfile,
-            continuity: effectiveInput.continuity,
-            pendingAction: effectiveInput.pendingAction,
-            pendingApprovalNotice: effectiveInput.pendingApprovalNotice,
-          },
+          workerId: worker.id,
+          executionProfile: effectiveExecutionProfile,
+          now: this.observability.now ?? Date.now,
+          dispatchSynthesis: (groundedSynthesis) => this.dispatchToWorker(worker, {
+            ...synthesisDispatchBase,
+            groundedSynthesis,
+          }),
+          verifyResult: (verificationInput) => verifyDelegatedWorkerResult(verificationInput),
+          trace: (event) => this.recordDelegatedWorkerTrace(event.stage, effectiveInput, delegatedTarget, event.details),
+          progress: (event) => this.publishDelegatedWorkerProgress(effectiveInput, delegatedTarget, event),
         });
         if (synthesisResult) {
           result = synthesisResult.result;

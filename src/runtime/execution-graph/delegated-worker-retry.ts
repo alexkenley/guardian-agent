@@ -16,6 +16,7 @@ import type {
   IntentGatewayDecision,
   IntentGatewayRecord,
 } from '../intent-gateway.js';
+import { buildDelegatedExecutionMetadata } from '../execution/metadata.js';
 
 export interface DelegatedResultSufficiencyFailure {
   decision: VerificationDecision;
@@ -42,6 +43,43 @@ export interface DelegatedGroundedSynthesisJobSnapshot {
   argsPreview?: string;
   resultPreview?: string;
   error?: string;
+}
+
+export interface DelegatedGroundedAnswerSynthesisDispatchRequest {
+  messages: ChatMessage[];
+  maxTokens: number;
+  temperature: number;
+}
+
+export interface DelegatedGroundedAnswerSynthesisDispatchResult {
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DelegatedGroundedAnswerSynthesisVerifiedResult {
+  envelope: DelegatedResultEnvelope;
+  decision: VerificationDecision;
+}
+
+export interface DelegatedGroundedAnswerSynthesisTraceEvent {
+  stage: 'delegated_worker_retrying' | 'delegated_worker_running';
+  details: {
+    requestId: string;
+    taskRunId: string;
+    lifecycle: 'running';
+    workerId?: string;
+    taskContract: DelegatedResultEnvelope['taskContract'];
+    reason: string;
+  };
+}
+
+export interface DelegatedGroundedAnswerSynthesisProgressEvent {
+  id: string;
+  kind: 'running';
+  requestId: string;
+  taskRunId: string;
+  workerId?: string;
+  detail: string;
 }
 
 const DELEGATED_EVIDENCE_REF_LIMIT = 8;
@@ -242,6 +280,122 @@ export function buildDelegatedGroundedAnswerEnvelope(input: {
       ...input.sourceEnvelope.events.filter((event) => event.eventId !== answerEvent.eventId),
       answerEvent,
     ],
+  };
+}
+
+export async function runDelegatedGroundedAnswerSynthesisRetry(input: {
+  originalRequest: string;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  intentDecision?: IntentGatewayDecision;
+  taskContract: DelegatedResultEnvelope['taskContract'];
+  verifiedResult: DelegatedGroundedAnswerSynthesisVerifiedResult;
+  insufficiency: DelegatedResultSufficiencyFailure;
+  jobSnapshots: DelegatedGroundedSynthesisJobSnapshot[];
+  requestId: string;
+  taskRunId: string;
+  workerId?: string;
+  executionProfile?: SelectedExecutionProfile;
+  now?: () => number;
+  dispatchSynthesis: (
+    request: DelegatedGroundedAnswerSynthesisDispatchRequest,
+  ) => Promise<DelegatedGroundedAnswerSynthesisDispatchResult>;
+  verifyResult: (request: {
+    metadata: Record<string, unknown>;
+    intentDecision: IntentGatewayDecision | undefined;
+    executionProfile: SelectedExecutionProfile | undefined;
+    taskContract: DelegatedResultEnvelope['taskContract'];
+    jobSnapshots: DelegatedGroundedSynthesisJobSnapshot[];
+  }) => DelegatedGroundedAnswerSynthesisVerifiedResult;
+  trace?: (event: DelegatedGroundedAnswerSynthesisTraceEvent) => void;
+  progress?: (event: DelegatedGroundedAnswerSynthesisProgressEvent) => void;
+}): Promise<{
+  result: DelegatedGroundedAnswerSynthesisDispatchResult;
+  verifiedResult: DelegatedGroundedAnswerSynthesisVerifiedResult;
+} | null> {
+  if (!isDelegatedAnswerSynthesisRetry(input.insufficiency)) {
+    return null;
+  }
+
+  const detail = buildDelegatedGroundedAnswerSynthesisDetail(input.executionProfile);
+  input.trace?.({
+    stage: 'delegated_worker_retrying',
+    details: {
+      requestId: input.requestId,
+      taskRunId: input.taskRunId,
+      lifecycle: 'running',
+      ...(input.workerId ? { workerId: input.workerId } : {}),
+      taskContract: input.taskContract,
+      reason: detail,
+    },
+  });
+  input.progress?.({
+    id: `delegated-worker:${input.taskRunId}:grounded-answer-synthesis`,
+    kind: 'running',
+    requestId: input.requestId,
+    taskRunId: input.taskRunId,
+    ...(input.workerId ? { workerId: input.workerId } : {}),
+    detail,
+  });
+
+  const synthesis = await input.dispatchSynthesis({
+    messages: buildDelegatedGroundedAnswerSynthesisMessages({
+      originalRequest: input.originalRequest,
+      history: input.history,
+      intentDecision: input.intentDecision,
+      envelope: input.verifiedResult.envelope,
+      verification: input.verifiedResult.decision,
+      insufficiency: input.insufficiency,
+      jobSnapshots: input.jobSnapshots,
+    }),
+    maxTokens: 2_500,
+    temperature: 0,
+  });
+  const finalAnswer = synthesis.content.trim();
+  if (!finalAnswer) {
+    input.trace?.({
+      stage: 'delegated_worker_running',
+      details: {
+        requestId: input.requestId,
+        taskRunId: input.taskRunId,
+        lifecycle: 'running',
+        ...(input.workerId ? { workerId: input.workerId } : {}),
+        taskContract: input.taskContract,
+        reason: 'Grounded answer synthesis returned empty content; delegated verification failure remains authoritative.',
+      },
+    });
+    return null;
+  }
+
+  const timestamp = input.now?.() ?? Date.now();
+  const synthesizedEnvelope = buildDelegatedGroundedAnswerEnvelope({
+    sourceEnvelope: input.verifiedResult.envelope,
+    finalAnswer,
+    taskRunId: input.taskRunId,
+    timestamp,
+  });
+  const metadata: Record<string, unknown> = {
+    ...(synthesis.metadata ?? {}),
+    ...buildDelegatedExecutionMetadata(synthesizedEnvelope),
+    delegatedGroundedAnswerSynthesis: {
+      available: true,
+      reason: 'answer_only_retry',
+      satisfiedStepCount: input.insufficiency.satisfiedSteps.length,
+      unsatisfiedStepIds: input.insufficiency.unsatisfiedSteps.map((step) => step.stepId),
+    },
+  };
+  const verifiedResult = input.verifyResult({
+    metadata,
+    intentDecision: input.intentDecision,
+    executionProfile: input.executionProfile,
+    taskContract: input.taskContract,
+    jobSnapshots: input.jobSnapshots,
+  });
+  return {
+    result: {
+      content: finalAnswer,
+      metadata,
+    },
+    verifiedResult,
   };
 }
 
@@ -810,4 +964,13 @@ function describeDelegatedExecutionProfile(profile: SelectedExecutionProfile | u
   const model = profile.providerModel;
   if (provider && model && provider !== model) return `${provider} / ${model}`;
   return provider || model || profile.id;
+}
+
+function buildDelegatedGroundedAnswerSynthesisDetail(
+  profile: SelectedExecutionProfile | undefined,
+): string {
+  const profileLabel = describeDelegatedExecutionProfile(profile);
+  return profileLabel
+    ? `Synthesizing final answer from gathered evidence using ${profileLabel}.`
+    : 'Synthesizing final answer from gathered evidence.';
 }

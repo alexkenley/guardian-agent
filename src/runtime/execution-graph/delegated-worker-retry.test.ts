@@ -19,6 +19,7 @@ import {
   isDelegatedAnswerSynthesisRetry,
   isSameDelegatedExecutionProfile,
   isDelegatedToolEvidenceRetry,
+  runDelegatedGroundedAnswerSynthesisRetry,
   shouldAdoptDelegatedTaskContract,
   shouldRetryDelegatedCorrectivePassOnSameProfile,
   shouldRetryDelegatedAnswerSynthesisOnSameProfile,
@@ -310,6 +311,122 @@ describe('delegated worker retry graph policy', () => {
     expect(repaired.events).toEqual([expect.objectContaining({
       eventId: 'answer-synthesis:task-1',
       type: 'claim_emitted',
+    })]);
+  });
+
+  it('runs grounded answer synthesis retry through broker-safe callbacks', async () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          { stepId: 'read', kind: 'read', summary: 'Read implementation files.' },
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from evidence.' },
+        ],
+      }),
+      stepReceipts: [{
+        stepId: 'read',
+        status: 'satisfied',
+        evidenceReceiptIds: ['receipt-read'],
+        summary: 'Read implementation files.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+      evidenceReceipts: [{
+        receiptId: 'receipt-read',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['src/runtime/execution-graph/delegated-worker-retry.ts'],
+        summary: 'Read delegated retry policy.',
+        startedAt: 1,
+        endedAt: 2,
+      }],
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['Evidence was collected but the final answer was missing.'],
+      retryable: true,
+      missingEvidenceKinds: ['answer'],
+      unsatisfiedStepIds: ['answer'],
+    }, envelope);
+    const dispatches: Array<{ messages: unknown[]; maxTokens: number; temperature: number }> = [];
+    const traces: Array<{ stage: string; details: Record<string, unknown> }> = [];
+    const progress: Array<Record<string, unknown>> = [];
+
+    const result = await runDelegatedGroundedAnswerSynthesisRetry({
+      originalRequest: 'Where is retry policy implemented?',
+      history: [{ role: 'user', content: 'Please inspect the repo.' }],
+      intentDecision: gatewayDecision(),
+      taskContract: envelope.taskContract,
+      verifiedResult: {
+        envelope,
+        decision: failure!.decision,
+      },
+      insufficiency: failure!,
+      jobSnapshots: [{
+        id: 'job-1',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        resultPreview: 'Read delegated-worker-retry.ts',
+      }],
+      requestId: 'request-1',
+      taskRunId: 'task-1',
+      workerId: 'worker-1',
+      executionProfile: executionProfile(),
+      now: () => 123,
+      dispatchSynthesis: async (request) => {
+        dispatches.push(request);
+        return {
+          content: 'Retry policy is implemented in src/runtime/execution-graph/delegated-worker-retry.ts.',
+          metadata: {
+            providerMetadata: true,
+          },
+        };
+      },
+      verifyResult: (request) => {
+        expect(request.metadata.delegatedGroundedAnswerSynthesis).toMatchObject({
+          available: true,
+          reason: 'answer_only_retry',
+          satisfiedStepCount: 1,
+          unsatisfiedStepIds: ['answer'],
+        });
+        const repaired = request.metadata.delegatedResult as DelegatedResultEnvelope;
+        expect(repaired.finalUserAnswer).toBe('Retry policy is implemented in src/runtime/execution-graph/delegated-worker-retry.ts.');
+        return {
+          envelope: repaired,
+          decision: {
+            decision: 'satisfied',
+            reasons: [],
+            retryable: false,
+          },
+        };
+      },
+      trace: (event) => traces.push(event),
+      progress: (event) => progress.push(event),
+    });
+
+    expect(result?.result).toMatchObject({
+      content: 'Retry policy is implemented in src/runtime/execution-graph/delegated-worker-retry.ts.',
+      metadata: {
+        providerMetadata: true,
+      },
+    });
+    expect(result?.verifiedResult.decision.decision).toBe('satisfied');
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.maxTokens).toBe(2_500);
+    expect(dispatches[0]?.temperature).toBe(0);
+    expect(JSON.stringify(dispatches[0]?.messages)).toContain('No tools are available');
+    expect(traces).toEqual([expect.objectContaining({
+      stage: 'delegated_worker_retrying',
+      details: expect.objectContaining({
+        requestId: 'request-1',
+        taskRunId: 'task-1',
+        workerId: 'worker-1',
+      }),
+    })]);
+    expect(progress).toEqual([expect.objectContaining({
+      id: 'delegated-worker:task-1:grounded-answer-synthesis',
+      kind: 'running',
+      workerId: 'worker-1',
     })]);
   });
 
