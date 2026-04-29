@@ -146,8 +146,10 @@ describe('tryAutomationControlPreRoute', () => {
     });
 
     expect(result?.content).toContain('Automation catalog (2)');
-    expect(result?.content).toContain('Weekday Outlook Inbox Summary');
-    expect(result?.content).toContain('Browser Read Smoke');
+    expect(result?.content).toContain('- Weekday Outlook Inbox Summary - enabled');
+    expect(result?.content).toContain('- Browser Read Smoke - enabled');
+    expect(result?.content).not.toContain('30 8 * * 1-5');
+    expect(result?.content).not.toContain('[workflow');
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
@@ -273,9 +275,10 @@ describe('tryAutomationControlPreRoute', () => {
     });
 
     expect(result?.content).toContain('Automation catalog (45): showing 21-45');
-    expect(result?.content).toContain('Automation 25');
-    expect(result?.content).toContain('Automation 1');
-    expect(result?.content).not.toContain('Automation 45');
+    expect(result?.content).toMatch(/^- Automation 25 - enabled$/m);
+    expect(result?.content).toMatch(/^- Automation 1 - enabled$/m);
+    expect(result?.content).not.toMatch(/^- Automation 26 - enabled$/m);
+    expect(result?.content).not.toMatch(/^- Automation 45 - enabled$/m);
     expect(result?.metadata?.continuationState).toMatchObject({
       kind: 'automation_catalog_list',
       payload: { offset: 20, limit: 25, total: 45 },

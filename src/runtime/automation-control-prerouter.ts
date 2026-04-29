@@ -372,8 +372,7 @@ function renderAutomationInspectCopy(
     return listLines.join('\n');
   }
   for (const entry of pageEntries) {
-    const schedule = toString(entry.task?.cron) || readEventType(entry.task) || 'manual';
-    listLines.push(`- ${entry.name} [${entry.kind === 'workflow' ? 'workflow' : entry.kind === 'assistant_task' ? 'assistant' : 'task'} · ${entry.builtin ? 'catalog' : (entry.enabled ? 'enabled' : 'disabled')} · ${schedule}]`);
+    listLines.push(`- ${entry.name} - ${entry.enabled ? 'enabled' : 'disabled'}`);
   }
   if (window.offset + pageEntries.length < catalog.length) {
     listLines.push(`- ...and ${catalog.length - (window.offset + pageEntries.length)} more`);

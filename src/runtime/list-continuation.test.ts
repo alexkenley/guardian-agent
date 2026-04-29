@@ -136,6 +136,14 @@ describe('list-continuation', () => {
     })).toBe('browser_task');
   });
 
+  it('maps natural paged-list follow-up wording even when the gateway marks the turn fresh', () => {
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'automation_catalog_list',
+      content: 'Show the next page of automations.',
+      turnRelation: 'new_request',
+    })).toBe('automation_control');
+  });
+
   it('does not map paged-list continuation state for standalone new requests', () => {
     expect(resolvePagedListContinuationRoute({
       continuationStateKind: 'automation_catalog_list',

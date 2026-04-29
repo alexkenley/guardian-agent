@@ -135,6 +135,15 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
       return false;
     }
     if (isReadOnlyAutomationControlOperation(decision.operation)
+      && isAutomationReadView(decision.entities.automationReadView)
+      && nonAnswerSteps.every((step) => {
+        const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
+        return categories.length > 0
+          && categories.every((category) => isAutomationDirectCategory(category));
+      })) {
+      return false;
+    }
+    if (isReadOnlyAutomationControlOperation(decision.operation)
       && nonAnswerSteps.length < requiredSteps.length) {
       return true;
     }
@@ -210,6 +219,10 @@ function isReadOnlyAutomationControlOperation(operation: IntentGatewayDecision['
     || operation === 'inspect'
     || operation === 'search'
     || operation === 'navigate';
+}
+
+function isAutomationReadView(value: unknown): value is 'catalog' | 'count' {
+  return value === 'catalog' || value === 'count';
 }
 
 function dedupeCandidates(

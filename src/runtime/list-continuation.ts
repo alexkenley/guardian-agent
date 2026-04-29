@@ -87,7 +87,8 @@ export function hasPagedListFollowUpRequest(
   content: string,
   _turnRelation: IntentGatewayDecision['turnRelation'] | undefined,
 ): boolean {
-  return /\b(additional|more|remaining|rest|next|other)\b/i.test(content);
+  return /\b(additional|more|remaining|next|other)\b/i.test(content)
+    || /\brest\b/.test(content);
 }
 
 export function resolvePagedListContinuationRoute(input: {
@@ -95,7 +96,6 @@ export function resolvePagedListContinuationRoute(input: {
   content: string;
   turnRelation?: IntentGatewayDecision['turnRelation'];
 }): PagedListContinuationRoute | null {
-  if (input.turnRelation !== 'follow_up') return null;
   if (!hasPagedListFollowUpRequest(input.content, input.turnRelation)) return null;
   switch (input.continuationStateKind) {
     case 'automation_catalog_list':
@@ -115,7 +115,8 @@ export function resolvePagedListContinuationRoute(input: {
 }
 
 function wantsRemainingItems(content: string): boolean {
-  return /\b(remaining|rest|all remaining|all the remaining|all the rest)\b/i.test(content);
+  return /\b(remaining|all remaining|all the remaining|all the rest)\b/i.test(content)
+    || /\brest\b/.test(content);
 }
 
 function readRequestedAdditionalCount(content: string): number | undefined {

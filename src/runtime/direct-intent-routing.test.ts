@@ -212,6 +212,34 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('keeps concrete automation catalog reads on the direct control candidate when an answer step only formats the catalog', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'automation_control',
+        operation: 'read',
+        entities: { automationReadView: 'catalog' },
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'List saved automations.',
+            expectedToolCategories: ['automation_list'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return the automation names and enabled status.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual(['automation_control']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('keeps answer-only repaired automation-control reads on the direct control candidate', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({
