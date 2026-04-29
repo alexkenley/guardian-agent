@@ -668,6 +668,10 @@ describe('RunTimelineStore', () => {
       'req-delegated-worker',
       'delegated-task:job-1',
     ]);
+    expect(store.listRunsForCodeSession('code-1').map((entry) => entry.summary.runId)).toEqual([
+      'req-delegated-worker',
+      'delegated-task:job-1',
+    ]);
   });
 
   it('prefers delegated-worker live commentary over generic orchestrator tail items', () => {

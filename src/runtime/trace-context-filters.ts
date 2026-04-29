@@ -58,6 +58,27 @@ function extractContextFiltersFromDetails(details: Record<string, unknown> | und
   };
 }
 
+function extractContextFiltersFromRunSummary(detail: DashboardRunDetail): ExtractedTraceContextFilters {
+  const summary = detail.summary;
+  return {
+    ...(typeof summary.executionId === 'string' && summary.executionId.trim() ? { executionId: summary.executionId.trim() } : {}),
+    ...(typeof summary.rootExecutionId === 'string' && summary.rootExecutionId.trim() ? { rootExecutionId: summary.rootExecutionId.trim() } : {}),
+    ...(typeof summary.codeSessionId === 'string' && summary.codeSessionId.trim() ? { codeSessionId: summary.codeSessionId.trim() } : {}),
+  };
+}
+
+function mergeContextWithRunSummary(
+  context: ExtractedTraceContextFilters,
+  summary: ExtractedTraceContextFilters,
+): ExtractedTraceContextFilters {
+  return {
+    ...context,
+    ...(context.executionId ? {} : summary.executionId ? { executionId: summary.executionId } : {}),
+    ...(context.rootExecutionId ? {} : summary.rootExecutionId ? { rootExecutionId: summary.rootExecutionId } : {}),
+    ...(context.codeSessionId ? {} : summary.codeSessionId ? { codeSessionId: summary.codeSessionId } : {}),
+  };
+}
+
 function normalizeFilterValue(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -150,12 +171,19 @@ export function runDetailMatchesContextFilters(
 ): boolean {
   const normalized = normalizeFilters(filters);
   if (!hasAnyContextFilter(normalized)) return true;
+  const summaryContext = extractContextFiltersFromRunSummary(detail);
   const items = Array.isArray(detail.items) ? detail.items : [];
+  if (items.length === 0) {
+    return matchesExtractedContext(summaryContext, normalized);
+  }
   return items.some((item) => {
     const context = item.contextAssembly;
-    if (!context) return false;
+    if (!context) return matchesExtractedContext(summaryContext, normalized);
     return matchesExtractedContext(
-      extractContextFiltersFromDetails(context as unknown as Record<string, unknown>),
+      mergeContextWithRunSummary(
+        extractContextFiltersFromDetails(context as unknown as Record<string, unknown>),
+        summaryContext,
+      ),
       normalized,
     );
   });

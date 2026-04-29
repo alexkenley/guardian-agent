@@ -90,6 +90,53 @@ describe('trace context filters', () => {
     expect(runDetailMatchesContextFilters(detail, { activeExecutionRef: 'missing' })).toBe(false);
   });
 
+  it('matches run details by summary identity plus item context metadata', () => {
+    const detail = {
+      summary: {
+        runId: 'run-1',
+        groupId: 'group-1',
+        kind: 'assistant_dispatch',
+        status: 'completed',
+        title: 'Run 1',
+        startedAt: 1,
+        lastUpdatedAt: 2,
+        pendingApprovalCount: 0,
+        verificationPendingCount: 0,
+        tags: [],
+        executionId: 'execution-123',
+        rootExecutionId: 'root-456',
+        codeSessionId: 'code-session-789',
+      },
+      items: [
+        {
+          id: 'item-1',
+          runId: 'run-1',
+          timestamp: 2,
+          type: 'note',
+          status: 'info',
+          source: 'system',
+          title: 'Assembled context',
+          contextAssembly: {
+            continuityKey: 'continuity-1',
+            activeExecutionRefs: ['pending_action:approval-1'],
+          },
+        },
+      ],
+    };
+
+    expect(runDetailMatchesContextFilters(detail, { codeSessionId: 'session-789' })).toBe(true);
+    expect(runDetailMatchesContextFilters(detail, {
+      continuityKey: 'continuity-1',
+      codeSessionId: 'session-789',
+    })).toBe(true);
+    expect(runDetailMatchesContextFilters(detail, { executionId: 'execution-123' })).toBe(true);
+    expect(runDetailMatchesContextFilters(detail, { rootExecutionId: 'root-456' })).toBe(true);
+    expect(runDetailMatchesContextFilters(detail, {
+      continuityKey: 'continuity-1',
+      codeSessionId: 'missing',
+    })).toBe(false);
+  });
+
   it('matches intent routing trace entries by continuity key and active execution ref', () => {
     const entry = {
       details: {
