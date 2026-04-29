@@ -694,6 +694,182 @@ describe('BrokeredWorkerSession automation control', () => {
     });
   });
 
+  it('does not suspend delegated synthesis when a redundant pending approval is not needed for the completed contract', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const sawToolResults = messages.some((message) => message.role === 'tool');
+      if (sawToolResults) {
+        return {
+          content: [
+            '- Vercel: reachable.',
+            '- WHM: reachable.',
+            '- Gmail: authenticated.',
+            '- Microsoft calendar: reachable.',
+            '- Automations: listed.',
+            '- Repo: runLiveToolLoopController is in src/runtime/chat-agent/live-tool-loop-controller.ts.',
+          ].join('\n'),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [
+          {
+            id: 'call-m365-calendars-pending',
+            name: 'm365',
+            arguments: JSON.stringify({ service: 'calendar', method: 'list', resource: 'me/calendars' }),
+          },
+          {
+            id: 'call-m365-calendar-view',
+            name: 'm365',
+            arguments: JSON.stringify({ service: 'calendar', method: 'list', resource: 'me/calendarView', step_id: 'step_1' }),
+          },
+          {
+            id: 'call-fs-search',
+            name: 'fs_search',
+            arguments: JSON.stringify({ query: 'runLiveToolLoopController', mode: 'content', step_id: 'step_2' }),
+          },
+        ],
+      } satisfies ChatResponse;
+    });
+    const callTool = vi.fn(async (request) => {
+      if (
+        request.toolName === 'm365'
+        && (request.args as { resource?: string }).resource === 'me/calendars'
+      ) {
+        return {
+          success: true,
+          status: 'pending_approval',
+          approvalId: 'approval-redundant-calendars',
+          jobId: 'job-redundant-calendars',
+          approvalSummary: {
+            toolName: 'm365',
+            argsPreview: '{"service":"calendar","method":"list","resource":"me/calendars"}',
+          },
+        };
+      }
+      if (request.toolName === 'm365') {
+        return {
+          success: true,
+          status: 'succeeded',
+          output: { value: [] },
+        };
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        output: {
+          matches: [
+            {
+              path: 'src/runtime/chat-agent/live-tool-loop-controller.ts',
+              line: 168,
+              text: 'export async function runLiveToolLoopController(',
+            },
+          ],
+        },
+      };
+    });
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'm365',
+          description: 'Execute Microsoft Graph API calls.',
+          category: 'workspace',
+          parameters: { type: 'object', properties: {}, additionalProperties: true },
+        },
+        {
+          name: 'fs_search',
+          description: 'Search files in the workspace.',
+          category: 'repo',
+          parameters: { type: 'object', properties: {}, additionalProperties: true },
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-redundant-pending-approval',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Check Microsoft calendar status and search this workspace for runLiveToolLoopController. Return short bullets.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Check connector status and search the repo.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              {
+                kind: 'read',
+                summary: 'Check Microsoft calendar status.',
+                expectedToolCategories: ['m365'],
+                required: true,
+              },
+              {
+                kind: 'search',
+                summary: 'Search this workspace for runLiveToolLoopController.',
+                expectedToolCategories: ['fs_search'],
+                required: true,
+              },
+              {
+                kind: 'answer',
+                summary: 'Return short bullets.',
+                required: true,
+                dependsOn: ['step_1', 'step_2'],
+              },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(callTool.mock.calls.map(([request]) => request.toolName)).toEqual(['m365', 'm365', 'fs_search']);
+    expect(result.content).toContain('runLiveToolLoopController');
+    expect(result.content).not.toContain('Waiting for approval');
+    expect(result.metadata?.pendingAction).toBeUndefined();
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        lifecycle: 'completed',
+        completionReason: 'model_response',
+        successfulToolResultCount: 2,
+      },
+      delegatedResult: {
+        runStatus: 'completed',
+        stepReceipts: [
+          expect.objectContaining({ stepId: 'step_1', status: 'satisfied' }),
+          expect.objectContaining({ stepId: 'step_2', status: 'satisfied' }),
+          expect.objectContaining({ stepId: 'step_3', status: 'satisfied' }),
+        ],
+      },
+    });
+  });
+
   it('suppresses approval-looking text when no real approval metadata exists', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

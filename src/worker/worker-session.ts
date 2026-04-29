@@ -3617,6 +3617,56 @@ export class BrokeredWorkerSession {
       }
     }
 
+    const phantomApproval = isPhantomPendingApprovalMessage(result.finalContent);
+    const finalContent = phantomApproval
+      ? 'I did not create a real approval request for that action. Please try again.'
+      : result.finalContent;
+    const finalTaskContract = shouldPromoteAnswerOnlyTaskContract(
+      result.outcome,
+      preferAnswerFirst,
+    )
+      ? buildAnswerOnlyTaskContract(taskContract, answerFirstOriginalRequest || finalContent)
+      : taskContract;
+
+    if (
+      pendingTools.length > 0
+      && !phantomApproval
+      && result.outcome.stopReason !== 'approval_required'
+      && finalContent.trim().length > 0
+    ) {
+      const completedEnvelope = buildDelegatedResultEnvelope({
+        taskContract: finalTaskContract,
+        finalAnswerCandidate: finalContent,
+        operatorSummary: finalContent,
+        events: delegatedEvents,
+        receipts: [...evidenceReceipts.values()],
+        toolReceiptStepIds,
+        responseSource,
+        selectedExecutionProfile,
+        stopReason: result.outcome.stopReason,
+      });
+      if (completedEnvelope.runStatus === 'completed') {
+        this.pendingApprovals = null;
+        this.suspendedSession = null;
+        this.rememberToolReportScope(message, codeContext, toolExecutor);
+        return {
+          content: finalContent,
+          metadata: {
+            ...buildToolLoopExecutionMetadata({
+              ...result.outcome,
+              completionReason: result.outcome.completionReason === 'approval_pending'
+                ? 'model_response'
+                : result.outcome.completionReason,
+            }, {
+              runStatus: completedEnvelope.runStatus,
+            }),
+            ...buildDelegatedExecutionMetadata(completedEnvelope),
+            ...(responseSource ? { responseSource } : {}),
+          },
+        };
+      }
+    }
+
     if (pendingTools.length > 0) {
       this.rememberToolReportScope(message, codeContext, toolExecutor);
       const ids = pendingTools.map((pending) => pending.approvalId);
@@ -3690,7 +3740,6 @@ export class BrokeredWorkerSession {
     this.pendingApprovals = null;
     this.suspendedSession = null;
     this.rememberToolReportScope(message, codeContext, toolExecutor);
-    const phantomApproval = isPhantomPendingApprovalMessage(result.finalContent);
 
     const policyBlockedSamples = result.outcome.policyBlockedSamples ?? [];
     if (
@@ -3736,15 +3785,6 @@ export class BrokeredWorkerSession {
       };
     }
 
-    const finalContent = phantomApproval
-      ? 'I did not create a real approval request for that action. Please try again.'
-      : result.finalContent;
-    const finalTaskContract = shouldPromoteAnswerOnlyTaskContract(
-      result.outcome,
-      preferAnswerFirst,
-    )
-      ? buildAnswerOnlyTaskContract(taskContract, answerFirstOriginalRequest || finalContent)
-      : taskContract;
     const envelope = buildDelegatedResultEnvelope({
       taskContract: finalTaskContract,
       ...(phantomApproval ? {} : { finalAnswerCandidate: finalContent }),
