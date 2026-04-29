@@ -51,6 +51,7 @@ export function repairStructuredIntentGatewayRoute(
   const explicitAutomationAuthoring = isExplicitAutomationAuthoringRequest(rawSourceContent);
   const explicitAutomationControl = isExplicitAutomationControlRequest(rawSourceContent);
   const explicitAutomationOutput = isExplicitAutomationOutputRequest(rawSourceContent);
+  const plannedAutomationSave = hasPlannedToolCategory(parsed, 'automation_save');
   const explicitProviderConfig = isExplicitProviderConfigRequest(rawSourceContent);
   const rawCredentialDisclosure = isRawCredentialDisclosureRequest(rawSourceContent);
   const explicitCodingExecution = isExplicitCodingExecutionRequest(rawSourceContent);
@@ -93,6 +94,9 @@ export function repairStructuredIntentGatewayRoute(
     return 'complex_planning_task';
   }
   if (route === 'unknown' && explicitAutomationAuthoring) {
+    return 'automation_authoring';
+  }
+  if (route === 'automation_authoring' && plannedAutomationSave) {
     return 'automation_authoring';
   }
   if (
@@ -149,6 +153,7 @@ export function repairStructuredIntentGatewayOperation(
   route: IntentGatewayDecision['route'],
   turnRelation: IntentGatewayDecision['turnRelation'],
   repairContext: IntentGatewayRepairContext | undefined,
+  parsed?: Record<string, unknown>,
 ): IntentGatewayDecision['operation'] {
   if (turnRelation === 'clarification_answer' || turnRelation === 'correction') {
     return operation;
@@ -198,7 +203,13 @@ export function repairStructuredIntentGatewayOperation(
   if (route === 'general_assistant' && isExplicitProviderConfigRequest(rawSourceContent)) {
     return inferProviderConfigOperation(rawSourceContent, operation);
   }
-  if (route === 'automation_authoring' && isExplicitAutomationAuthoringRequest(rawSourceContent)) {
+  if (
+    route === 'automation_authoring'
+    && (
+      isExplicitAutomationAuthoringRequest(rawSourceContent)
+      || hasPlannedToolCategory(parsed, 'automation_save')
+    )
+  ) {
     return 'create';
   }
   if (route === 'automation_control' && isExplicitAutomationControlRequest(rawSourceContent)) {
@@ -222,4 +233,20 @@ function mentionsAutomationControlTerms(content: string | undefined): boolean {
   return /\bautomation\b/.test(normalized)
     || /\bworkflow\b/.test(normalized)
     || /\bautomations\b/.test(normalized);
+}
+
+function hasPlannedToolCategory(parsed: Record<string, unknown> | undefined, category: string): boolean {
+  const rawSteps = Array.isArray(parsed?.planned_steps)
+    ? parsed.planned_steps
+    : Array.isArray(parsed?.plannedSteps)
+      ? parsed.plannedSteps
+      : [];
+  return rawSteps.some((rawStep) => {
+    if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) {
+      return false;
+    }
+    const step = rawStep as Record<string, unknown>;
+    return Array.isArray(step.expectedToolCategories)
+      && step.expectedToolCategories.includes(category);
+  });
 }

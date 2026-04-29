@@ -172,6 +172,7 @@ export function normalizeIntentGatewayDecision(
     route,
     turnRelation,
     repairContext,
+    parsed,
   );
   const operation = repairIntentGatewayOperation(
     semanticallyRepairedOperation,

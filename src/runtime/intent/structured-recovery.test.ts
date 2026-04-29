@@ -176,6 +176,52 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('preserves mixed automation creation and control plans as automation authoring', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'automation_authoring',
+      confidence: 'high',
+      operation: 'update',
+      summary: 'Create an automation, then list, dry-run, disable, search output, and save follow-up.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'write',
+          summary: 'Create a simple step-based automation for output checks.',
+          expectedToolCategories: ['automation_save'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'List saved automations.',
+          expectedToolCategories: ['automation_list'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Dry-run the same automation.',
+          expectedToolCategories: ['automation_run'],
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'I created automations earlier and now I want to control them: create a simple step-based automation for output checks, list automations, dry-run that automation, disable it, search stored automation output for public page checks, then create a Second Brain task with the result.',
+    }, {
+      classifierSource: 'classifier.confirmation',
+    });
+
+    expect(decision.route).toBe('automation_authoring');
+    expect(decision.operation).toBe('create');
+    expect(decision.plannedSteps[0]?.expectedToolCategories).toContain('automation_save');
+  });
+
   it('repairs explicit conversation transcript references into follow-up turns when continuity is available', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',
