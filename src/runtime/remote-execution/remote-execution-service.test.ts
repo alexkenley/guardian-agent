@@ -631,6 +631,155 @@ describe('RemoteExecutionService', () => {
     expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('clears released managed lease identifiers from target health', async () => {
+    const root = createRoot();
+    let now = 20_000;
+    const releaseLeaseSpy = vi.fn(async () => undefined);
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: vi.fn(async (request) => createLease(request.localWorkspaceRoot, {
+          id: 'managed-lease-to-release',
+          sandboxId: 'sandbox-to-release',
+          leaseMode: request.leaseMode ?? 'ephemeral',
+        })),
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(),
+        releaseLease: releaseLeaseSpy,
+        run: vi.fn(),
+      }],
+      now: () => now,
+    });
+
+    const lease = await service.acquireLease({
+      target: TARGET,
+      localWorkspaceRoot: root,
+      codeSessionId: 'code-session-release',
+      leaseMode: 'managed',
+    });
+
+    expect(service.getKnownTargetHealth()[TARGET.id]).toMatchObject({
+      state: 'healthy',
+      leaseId: lease.id,
+      sandboxId: lease.sandboxId,
+    });
+
+    now += 1_000;
+    await service.disposeLease({
+      target: TARGET,
+      lease,
+    });
+
+    expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
+    expect(service.getKnownTargetHealth()[TARGET.id]).toMatchObject({
+      state: 'healthy',
+      reason: 'Remote sandbox lease released.',
+    });
+    expect(service.getKnownTargetHealth()[TARGET.id]?.leaseId).toBeUndefined();
+    expect(service.getKnownTargetHealth()[TARGET.id]?.sandboxId).toBeUndefined();
+  });
+
+  it('keeps target health attached to a remaining active lease after releasing another lease', async () => {
+    const root = createRoot();
+    let now = 30_000;
+    let leaseIndex = 0;
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: vi.fn(async (request) => {
+          leaseIndex += 1;
+          return createLease(request.localWorkspaceRoot, {
+            id: `managed-lease-${leaseIndex}`,
+            sandboxId: `sandbox-${leaseIndex}`,
+            leaseMode: request.leaseMode ?? 'ephemeral',
+          });
+        }),
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(),
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
+      }],
+      now: () => now,
+    });
+
+    const firstLease = await service.acquireLease({
+      target: TARGET,
+      localWorkspaceRoot: root,
+      codeSessionId: 'code-session-one',
+      leaseMode: 'managed',
+    });
+    now += 1_000;
+    const secondLease = await service.acquireLease({
+      target: TARGET,
+      localWorkspaceRoot: root,
+      codeSessionId: 'code-session-two',
+      leaseMode: 'managed',
+    });
+
+    await service.disposeLease({
+      target: TARGET,
+      lease: firstLease,
+    });
+
+    expect(service.getKnownTargetHealth()[TARGET.id]).toMatchObject({
+      state: 'healthy',
+      leaseId: secondLease.id,
+      sandboxId: secondLease.sandboxId,
+    });
+  });
+
   it('resumes a stopped cached managed lease before the next code-session run', async () => {
     const root = createRoot();
     writeFileSync(join(root, 'package.json'), '{"name":"demo"}');

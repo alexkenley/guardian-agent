@@ -637,6 +637,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
     if (leaseKey) {
       this.leasesByKey.delete(leaseKey);
     }
+    this.refreshTargetHealthAfterLeaseRelease(lease, 'Remote sandbox lease stopped.');
   }
 
   async stopAllManagedLeases(): Promise<void> {
@@ -653,6 +654,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
               if (leaseKey) {
                 this.leasesByKey.delete(leaseKey);
               }
+              this.refreshTargetHealthAfterLeaseRelease(lease, 'Remote sandbox lease stopped.');
             }).catch(() => undefined)
           );
         }
@@ -704,6 +706,34 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       this.leasesByKey.delete(leaseKey);
     }
     await provider.releaseLease(lease).catch(() => undefined);
+    this.refreshTargetHealthAfterLeaseRelease(lease, 'Remote sandbox lease released.');
+  }
+
+  private refreshTargetHealthAfterLeaseRelease(lease: RemoteExecutionProviderLease, reason: string): void {
+    const activeLease = [...this.leasesByKey.values()].find((candidate) => candidate.targetId === lease.targetId);
+    if (activeLease) {
+      this.targetHealth.set(activeLease.targetId, toHealthSummary({
+        state: 'healthy',
+        reason: activeLease.codeSessionId
+          ? `Active leased sandbox is attached to code session '${activeLease.codeSessionId}'.`
+          : 'Active leased sandbox is available.',
+        checkedAt: activeLease.lastUsedAt,
+        leaseId: activeLease.id,
+        sandboxId: activeLease.sandboxId,
+      }));
+      return;
+    }
+
+    const current = this.targetHealth.get(lease.targetId);
+    if (!current || (current.leaseId !== lease.id && current.sandboxId !== lease.sandboxId)) {
+      return;
+    }
+    this.targetHealth.set(lease.targetId, toHealthSummary({
+      state: current.state,
+      reason,
+      checkedAt: this.now(),
+      durationMs: current.durationMs,
+    }));
   }
 
   private findLeaseKey(leaseId: string): string | null {
