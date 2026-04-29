@@ -67,6 +67,7 @@ import {
   buildDelegatedWorkerGraphCompletion,
   buildDelegatedWorkerGraphFailure,
   buildDelegatedWorkerRunningMetadata,
+  buildDelegatedTaskContractTraceMetadata,
   startDelegatedWorkerGraphRun,
   type DelegatedWorkerGraphCompletion,
   type DelegatedWorkerGraphJobMetadata,
@@ -3814,28 +3815,6 @@ function buildDelegatedWorkerExecutionTraceMetadata(
     ...(typeof workerExecution.pendingApprovalCount === 'number'
       ? { workerExecutionPendingApprovalCount: workerExecution.pendingApprovalCount }
       : {}),
-  };
-}
-
-function buildDelegatedTaskContractTraceMetadata(
-  taskContract: DelegatedResultEnvelope['taskContract'] | undefined,
-): Record<string, unknown> {
-  if (!taskContract) return {};
-  const requiredSteps = taskContract.plan.steps.filter((step) => step.required);
-  return {
-    taskContractKind: taskContract.kind,
-    ...(taskContract.route ? { taskContractRoute: taskContract.route } : {}),
-    ...(taskContract.operation ? { taskContractOperation: taskContract.operation } : {}),
-    taskContractRequiresEvidence: taskContract.requiresEvidence,
-    taskContractAllowsAnswerFirst: taskContract.allowsAnswerFirst,
-    taskContractRequireExactFileReferences: taskContract.requireExactFileReferences,
-    ...(taskContract.summary ? { taskContractSummary: taskContract.summary } : {}),
-    taskContractPlanId: taskContract.plan.planId,
-    taskContractPlanStepCount: taskContract.plan.steps.length,
-    taskContractPlanRequiredStepCount: requiredSteps.length,
-    taskContractPlanStepIds: taskContract.plan.steps.map((step) => step.stepId),
-    taskContractPlanStepKinds: taskContract.plan.steps.map((step) => step.kind),
-    taskContractRequiredStepIds: requiredSteps.map((step) => step.stepId),
   };
 }
 

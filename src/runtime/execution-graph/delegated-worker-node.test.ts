@@ -7,11 +7,13 @@ import {
   buildDelegatedWorkerRunningMetadata,
   buildDelegatedWorkerStartProjection,
   buildDelegatedWorkerTerminalProjection,
+  buildDelegatedTaskContractTraceMetadata,
   normalizeDelegatedGraphBlockerKind,
   startDelegatedWorkerGraphRun,
 } from './delegated-worker-node.js';
 import type { VerificationDecision } from '../execution/types.js';
 import type { ExecutionGraphEvent } from './graph-events.js';
+import { buildDelegatedTaskContract } from '../execution/verifier.js';
 
 describe('delegated worker graph node helpers', () => {
   it('builds delegated worker start projection events', () => {
@@ -136,6 +138,39 @@ describe('delegated worker graph node helpers', () => {
         executionProfileName: 'managed-cloud',
       }],
       edges: [],
+    });
+  });
+
+  it('builds delegated task-contract trace metadata outside WorkerManager ownership', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'inspect',
+      summary: 'Inspect repository.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+      entities: {},
+    });
+
+    expect(buildDelegatedTaskContractTraceMetadata(taskContract)).toMatchObject({
+      taskContractKind: 'repo_inspection',
+      taskContractRoute: 'coding_task',
+      taskContractOperation: 'inspect',
+      taskContractRequiresEvidence: true,
+      taskContractRequireExactFileReferences: true,
+      taskContractPlanId: taskContract.plan.planId,
+      taskContractPlanStepCount: taskContract.plan.steps.length,
+      taskContractPlanRequiredStepCount: taskContract.plan.steps.filter((step) => step.required).length,
+      taskContractPlanStepIds: taskContract.plan.steps.map((step) => step.stepId),
+      taskContractPlanStepKinds: taskContract.plan.steps.map((step) => step.kind),
     });
   });
 

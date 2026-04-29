@@ -1,5 +1,8 @@
 import type { IntentGatewayDecision } from '../intent/types.js';
-import type { VerificationDecision } from '../execution/types.js';
+import type {
+  DelegatedTaskContract,
+  VerificationDecision,
+} from '../execution/types.js';
 import {
   artifactRefFromArtifact,
   buildVerificationResultArtifact,
@@ -191,6 +194,28 @@ export function buildDelegatedWorkerGraphContext(
     ...(normalizeText(input.userId) ? { userId: normalizeText(input.userId) } : {}),
     ...(normalizeText(input.codeSessionId) ? { codeSessionId: normalizeText(input.codeSessionId) } : {}),
     title,
+  };
+}
+
+export function buildDelegatedTaskContractTraceMetadata(
+  taskContract: DelegatedTaskContract | undefined,
+): Record<string, unknown> {
+  if (!taskContract) return {};
+  const requiredSteps = taskContract.plan.steps.filter((step) => step.required);
+  return {
+    taskContractKind: taskContract.kind,
+    ...(taskContract.route ? { taskContractRoute: taskContract.route } : {}),
+    ...(taskContract.operation ? { taskContractOperation: taskContract.operation } : {}),
+    taskContractRequiresEvidence: taskContract.requiresEvidence,
+    taskContractAllowsAnswerFirst: taskContract.allowsAnswerFirst,
+    taskContractRequireExactFileReferences: taskContract.requireExactFileReferences,
+    ...(taskContract.summary ? { taskContractSummary: taskContract.summary } : {}),
+    taskContractPlanId: taskContract.plan.planId,
+    taskContractPlanStepCount: taskContract.plan.steps.length,
+    taskContractPlanRequiredStepCount: requiredSteps.length,
+    taskContractPlanStepIds: taskContract.plan.steps.map((step) => step.stepId),
+    taskContractPlanStepKinds: taskContract.plan.steps.map((step) => step.kind),
+    taskContractRequiredStepIds: requiredSteps.map((step) => step.stepId),
   };
 }
 

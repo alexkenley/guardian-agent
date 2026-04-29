@@ -1483,6 +1483,15 @@ Checkpoint after the delegated operator-metadata redaction cleanup:
 - The rebuilt app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` confirmed the live API was running. Startup still reports the known local Ollama unavailable warning and host-runtime Google Second Brain 404 / scheduled-task integrity warnings.
 - Live API replay with request id `codex-live-redaction-42808` proved the mixed web + repo + memory delegated graph path still completed with `executionGraph.status=completed`, returned the expected three-source answer, and returned metadata containing no `rawOutput`, `traceResultPreview`, or `args` fields.
 
+Checkpoint after the delegated task-contract trace metadata ownership cleanup:
+
+- `src/runtime/execution-graph/delegated-worker-node.ts` now owns `buildDelegatedTaskContractTraceMetadata`, so graph event payloads and delegated routing trace details use the same graph-owned task-contract metadata shape.
+- `WorkerManager` imports the graph-owned metadata helper instead of carrying a private delegated task-contract trace shaper. It still owns supervisor/runtime authority for worker dispatch, ToolExecutor polling, progress publication, and audit/trace recording.
+- This is a pure ownership cleanup. It does not change Intent Gateway routing, task-plan construction, provider/profile selection, approval policy, tool execution, delegated verification, or brokered-worker isolation.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/delegated-worker-node.test.ts src/supervisor/worker-manager.test.ts` reported 56 passing tests.
+- Local gates passed after the cleanup: `npm run check` and `npm run build`.
+- Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.
