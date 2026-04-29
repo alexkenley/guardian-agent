@@ -334,6 +334,7 @@ describe('delegated worker retry graph policy', () => {
     });
 
     expect(messages[0]?.content).toContain('No tools are available');
+    expect(messages[0]?.content).toContain('do not mention tests, docs, fixtures, examples, or verifier expectations');
     expect(messages[1]?.content).toContain('Where is recovery defined?');
     expect(messages[1]?.content).toContain('src/runtime/execution-graph/node-recovery.ts');
     expect(messages[1]?.content).toContain('Delegated job snapshots');
@@ -489,6 +490,40 @@ describe('delegated worker retry graph policy', () => {
       'docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md',
       'web/public/js/chat-panel.js',
     ]);
+  });
+
+  it('extracts refs from structured delegated job search previews', () => {
+    expect(extractDelegatedEvidenceRefs(JSON.stringify({
+      matches: [
+        {
+          relativePath: 'src/runtime/execution-graph/mutation-node.ts',
+          line: 214,
+          preview: 'export function emitMutationResumeGraphEvent',
+        },
+        {
+          filePath: 'S:\\Development\\GuardianAgent\\docs\\plans\\DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md',
+          line: 52,
+        },
+      ],
+      metadata: {
+        files: ['web/public/js/chat-panel.js'],
+      },
+      content: 'plain content without a path should not become a ref',
+    }))).toEqual([
+      'src/runtime/execution-graph/mutation-node.ts',
+      'docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md',
+      'web/public/js/chat-panel.js',
+    ]);
+  });
+
+  it('does not convert URL schemes into drive-letter refs', () => {
+    expect(extractDelegatedEvidenceRefs(JSON.stringify({
+      results: [
+        { title: 'Example Domain', url: 'https://example.com/' },
+        { title: 'Docs', url: 'http://example.test/docs' },
+      ],
+      path: 'src/runtime/execution-graph/mutation-node.ts',
+    }))).toEqual(['src/runtime/execution-graph/mutation-node.ts']);
   });
 
   it('uses a same-profile corrective pass for managed-cloud answer-only failures before stronger escalation', () => {

@@ -884,9 +884,7 @@ function buildClaimsFromReceipts(
         // implementation_file claims (the worker read these files to answer
         // the question) vs fs_search/fs_list receipts as file_reference claims
         // (these are search hits).
-        const isImplementationRead = isRepoInspection
-          && receipt.toolName === 'fs_read'
-          && receipt.status === 'succeeded';
+        const isImplementationRead = shouldClassifyRepoReadAsImplementationClaim(ref, receipt, taskContract, isRepoInspection);
         claims.push({
           claimId: `${receipt.receiptId}:file:${ref}`,
           kind: isImplementationRead ? 'implementation_file' : 'file_reference',
@@ -914,6 +912,34 @@ function buildClaimsFromReceipts(
     }
   }
   return claims;
+}
+
+const SUPPORT_ONLY_REPO_PATH_PATTERN = /(?:^|\/)(?:__tests__|test|tests|fixtures?|examples?|docs?)\/|(?:\.test|\.spec)\.[a-z0-9]+$/i;
+const SUPPORT_PATH_REQUEST_PATTERN = /\b(?:test|tests|testing|spec|specs|fixtures?|examples?|docs?|documentation)\b/i;
+
+function shouldClassifyRepoReadAsImplementationClaim(
+  ref: string,
+  receipt: EvidenceReceipt,
+  taskContract: DelegatedTaskContract,
+  isRepoInspection: boolean,
+): boolean {
+  if (!isRepoInspection || receipt.toolName !== 'fs_read' || receipt.status !== 'succeeded') {
+    return false;
+  }
+  if (!SUPPORT_ONLY_REPO_PATH_PATTERN.test(ref.replace(/\\/g, '/'))) {
+    return true;
+  }
+  return contractExplicitlyTargetsSupportRepoPaths(taskContract);
+}
+
+function contractExplicitlyTargetsSupportRepoPaths(taskContract: DelegatedTaskContract): boolean {
+  const text = [
+    taskContract.summary,
+    ...taskContract.plan.steps.map((step) => step.summary),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ');
+  return SUPPORT_PATH_REQUEST_PATTERN.test(text);
 }
 
 function buildAnswerReceipt(

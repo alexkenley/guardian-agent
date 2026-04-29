@@ -741,7 +741,200 @@ describe('verifyDelegatedResult', () => {
       missingEvidenceKinds: ['implementation_file_claim'],
       unsatisfiedStepIds: ['step_2', 'step_4'],
     });
-    expect(decision.requiredNextAction).toContain('read the likely implementation files');
+    expect(decision.requiredNextAction).toContain('targeted repo inspection');
+  });
+
+  it('rejects mixed-domain implementation-location answers that cite only repo job-snapshot refs', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web for the title of https://example.com.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search this workspace for where execution graph mutation approval resume events are emitted.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'search', summary: 'Search memory for SMOKE-MEM-42801.', expectedToolCategories: ['memory_search'], required: true },
+        { kind: 'answer', summary: 'Return three short bullets with what each source found.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Web: https://example.com title is "Example Domain".',
+      '- Workspace: Execution graph mutation approval resume events are emitted in src/runtime/execution-graph/mutation-node.ts.',
+      '- Memory: Found SMOKE-MEM-42801.',
+    ].join('\n');
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-web'], summary: 'Found title.', startedAt: 1, endedAt: 2 },
+          { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['job-repo'], summary: 'Found candidate repo files.', startedAt: 3, endedAt: 4 },
+          { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-memory'], summary: 'Found memory marker.', startedAt: 5, endedAt: 6 },
+          { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['answer:1'], summary: finalAnswer, startedAt: 7, endedAt: 8 },
+        ],
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-web',
+            sourceType: 'tool_call',
+            toolName: 'web_search',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'job-repo',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: ['src/runtime/execution-graph/mutation-node.ts'],
+            summary: 'Search found mutation-node.ts.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-memory',
+            sourceType: 'tool_call',
+            toolName: 'memory_search',
+            status: 'succeeded',
+            refs: ['memory:smoke'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+        claims: [{
+          claimId: 'answer:1:answer',
+          kind: 'answer',
+          subject: 'final_answer',
+          value: finalAnswer,
+          evidenceReceiptIds: ['answer:1'],
+          confidence: 1,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['implementation_file_claim'],
+      unsatisfiedStepIds: ['step_2', 'step_4'],
+    });
+  });
+
+  it('rejects mixed-domain implementation-location answers that cite unconfirmed paths inferred from support search hits', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web for the title of https://example.com.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search this workspace for where execution graph mutation approval resume events are emitted.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'search', summary: 'Search memory for SMOKE-MEM-42801.', expectedToolCategories: ['memory_search'], required: true },
+        { kind: 'answer', summary: 'Return three short bullets with what each source found.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Web: https://example.com title is "Example Domain".',
+      '- Workspace: Execution graph mutation approval resume events are emitted in src/runtime/execution-graph/mutation-node.ts.',
+      '- Memory: Found SMOKE-MEM-42801.',
+    ].join('\n');
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-web'], summary: 'Found title.', startedAt: 1, endedAt: 2 },
+          { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-repo'], summary: 'Found support-file snippets.', startedAt: 3, endedAt: 4 },
+          { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-memory'], summary: 'Found memory marker.', startedAt: 5, endedAt: 6 },
+          { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['answer:1'], summary: finalAnswer, startedAt: 7, endedAt: 8 },
+        ],
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-web',
+            sourceType: 'tool_call',
+            toolName: 'web_search',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-repo',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: ['src/runtime/execution/verifier.test.ts'],
+            summary: 'Search found test snippets mentioning mutation-node.ts.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-memory',
+            sourceType: 'tool_call',
+            toolName: 'memory_search',
+            status: 'succeeded',
+            refs: ['memory:smoke'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+        claims: [
+          {
+            claimId: 'claim-support-1',
+            kind: 'file_reference',
+            subject: 'src/runtime/execution/verifier.test.ts',
+            value: 'src/runtime/execution/verifier.test.ts',
+            evidenceReceiptIds: ['receipt-repo'],
+            confidence: 0.8,
+          },
+          {
+            claimId: 'answer:1:answer',
+            kind: 'answer',
+            subject: 'final_answer',
+            value: finalAnswer,
+            evidenceReceiptIds: ['answer:1'],
+            confidence: 1,
+          },
+        ],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['implementation_file_claim'],
+      unsatisfiedStepIds: ['step_2', 'step_4'],
+    });
+    expect(decision.reasons.join(' ')).toContain('not backed by read or code-symbol confirmation');
   });
 
   it('accepts mixed-domain implementation-location answers backed by implementation file reads', () => {

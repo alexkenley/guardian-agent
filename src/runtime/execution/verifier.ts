@@ -481,6 +481,7 @@ const REPO_EVIDENCE_CATEGORY_NAMES = new Set([
 ]);
 const REPO_NO_MATCH_ANSWER_PATTERN = /\b(?:no\s+(?:content\s+)?matches?\s+(?:were\s+)?found|no\s+results?\s+(?:were\s+)?found|could(?:\s+not|n't)\s+find|did(?:\s+not|n't)\s+find|not\s+found)\b/i;
 const IMPLEMENTATION_LOCATION_REQUEST_PATTERN = /\b(?:where|which|what|exact|identify|locate|show|list|find|search)\b[\s\S]{0,180}\b(?:implement|implements|implemented|define|defines|defined|called|calls|callers?|emitted|emits?|triggered|fires?|published|registered|wired|handled|handles|render|renders|rendered|own|owns|responsible|file|files|function|functions|symbol|symbols|path|paths)\b/i;
+const FINAL_ANSWER_FILE_REFERENCE_PATTERN = /\b(?:src|docs|web|scripts|config|policies|skills|native|test|tests|lib|public|tmp)(?:[\\/][^\s`'",)\]}]+)+/gi;
 
 function verifyRepoEvidenceQuality(
   envelope: DelegatedResultEnvelope,
@@ -572,9 +573,13 @@ function verifyRepoEvidenceDepth(
       ))
       .map((receipt) => receipt.receiptId),
   );
-  const successfulRepoReadReceiptIds = new Set(
+  const successfulRepoConfirmationReceiptIds = new Set(
     envelope.evidenceReceipts
-      .filter((receipt) => receipt.status === 'succeeded' && receipt.sourceType === 'tool_call' && receipt.toolName === 'fs_read')
+      .filter((receipt) => (
+        receipt.status === 'succeeded'
+        && receipt.sourceType === 'tool_call'
+        && (receipt.toolName === 'fs_read' || receipt.toolName === 'code_symbol_search')
+      ))
       .map((receipt) => receipt.receiptId),
   );
   if (successfulRepoReceiptIds.size <= 0) {
@@ -587,18 +592,50 @@ function verifyRepoEvidenceDepth(
   if (implementationClaims.length > 0) {
     return null;
   }
+  const repoReadReceiptClaims = buildFileClaimsFromReceipts(
+    envelope,
+    (receipt) => successfulRepoConfirmationReceiptIds.has(receipt.receiptId),
+  );
+  if (repoReadReceiptClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadReceiptClaims)) {
+    return null;
+  }
   const repoReadFileClaims = envelope.claims.filter((claim) => (
     claim.kind === 'file_reference'
-    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoReadReceiptIds.has(receiptId))
+    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoConfirmationReceiptIds.has(receiptId))
   ));
   if (repoReadFileClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadFileClaims)) {
     return null;
+  }
+  const finalAnswerFileReferences = extractFinalAnswerFileReferences(answer);
+  const confirmedRepoFileClaims = [...repoReadReceiptClaims, ...repoReadFileClaims];
+  if (
+    finalAnswerFileReferences.length > 0
+    && !finalAnswerFileReferences.every((fileReference) => fileReferenceBackedByClaims(
+      fileReference,
+      confirmedRepoFileClaims,
+    ))
+  ) {
+    const repoStepIds = findRepoEvidenceStepIds(envelope.taskContract.plan.steps);
+    const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+    return {
+      decision: 'insufficient',
+      reasons: ['Delegated worker cited implementation file paths that were not backed by read or code-symbol confirmation evidence.'],
+      retryable: true,
+      requiredNextAction: 'Retry the delegated run with targeted repo inspection; read or code-symbol-search the cited implementation files before using them in the final answer.',
+      missingEvidenceKinds: ['implementation_file_claim'],
+      unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
+    };
   }
   const repoFileClaims = envelope.claims.filter((claim) => (
     claim.kind === 'file_reference'
     && claim.evidenceReceiptIds.some((receiptId) => successfulRepoReceiptIds.has(receiptId))
   ));
-  if (repoFileClaims.length <= 0 || !finalAnswerCitesFileReference(answer, repoFileClaims)) {
+  const repoReceiptFileClaims = buildFileClaimsFromReceipts(
+    envelope,
+    (receipt) => successfulRepoReceiptIds.has(receipt.receiptId),
+  );
+  const repoCitedFileClaims = [...repoFileClaims, ...repoReceiptFileClaims];
+  if (repoCitedFileClaims.length <= 0 || !finalAnswerCitesFileReference(answer, repoCitedFileClaims)) {
     return null;
   }
   const repoStepIds = findRepoEvidenceStepIds(envelope.taskContract.plan.steps);
@@ -611,6 +648,51 @@ function verifyRepoEvidenceDepth(
     missingEvidenceKinds: ['implementation_file_claim'],
     unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
   };
+}
+
+function buildFileClaimsFromReceipts(
+  envelope: DelegatedResultEnvelope,
+  includeReceipt: (receipt: DelegatedResultEnvelope['evidenceReceipts'][number]) => boolean,
+): Claim[] {
+  const claims: Claim[] = [];
+  for (const receipt of envelope.evidenceReceipts) {
+    if (!includeReceipt(receipt)) continue;
+    for (const ref of receipt.refs) {
+      const normalized = ref.trim();
+      if (!normalized || isGenericFileReferenceCandidate(normalized.replace(/\\/g, '/').toLowerCase())) continue;
+      claims.push({
+        claimId: `${receipt.receiptId}:receipt-ref:${normalized}`,
+        kind: 'file_reference',
+        subject: normalized,
+        value: normalized,
+        evidenceReceiptIds: [receipt.receiptId],
+        confidence: 0.75,
+      });
+    }
+  }
+  return claims;
+}
+
+function extractFinalAnswerFileReferences(answer: string): string[] {
+  const refs = new Set<string>();
+  for (const match of answer.matchAll(FINAL_ANSWER_FILE_REFERENCE_PATTERN)) {
+    const normalized = match[0].trim().replace(/[.:;,!?]+$/g, '');
+    if (!normalized || isGenericFileReferenceCandidate(normalized.replace(/\\/g, '/').toLowerCase())) continue;
+    refs.add(normalized);
+  }
+  return [...refs];
+}
+
+function fileReferenceBackedByClaims(fileReference: string, fileClaims: Claim[]): boolean {
+  const referenceVariants = buildComparableFileReferenceVariants(fileReference);
+  if (referenceVariants.length <= 0) return false;
+  return fileClaims.some((claim) => {
+    const claimVariants = [
+      ...buildComparableFileReferenceVariants(claim.subject),
+      ...buildComparableFileReferenceVariants(claim.value),
+    ];
+    return referenceVariants.some((referenceVariant) => claimVariants.includes(referenceVariant));
+  });
 }
 
 interface RepoInspectionVerificationResult {

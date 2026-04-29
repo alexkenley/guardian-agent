@@ -333,6 +333,15 @@ export function normalizeIntentGatewayDecision(
     operation,
     personalItemType: entityResolution.entities.personalItemType,
   });
+  const plannedStepsRequireRepoGrounding = !rawCredentialDisclosure
+    && planRequiresRepoGrounding(effectivePlannedSteps);
+  const effectiveRequiresRepoGrounding = rawCredentialDisclosure
+    ? false
+    : requiresRepoGrounding || plannedStepsRequireRepoGrounding;
+  const effectiveRequireExactFileReferences = requireExactFileReferences || (
+    effectiveRequiresRepoGrounding
+    && requestNeedsExactFileReferences(repairContext?.sourceContent)
+  );
   const structuredWritePlanRoute = route === 'unknown' && hasRequiredWritePlannedStep({
     plannedSteps: effectivePlannedSteps,
   } as IntentGatewayDecision)
@@ -345,14 +354,18 @@ export function normalizeIntentGatewayDecision(
   const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(effectiveRoute, effectivePlannedSteps);
   const structurallyDirectAnswer = isStructurallyDirectAssistantTurn({
     executionClass,
-    requiresRepoGrounding,
+    requiresRepoGrounding: effectiveRequiresRepoGrounding,
     requiresToolSynthesis,
     plannedSteps: effectivePlannedSteps,
   });
   const effectiveExecutionClass = structuredWritePlanRoute
     ? 'tool_orchestration'
+    : effectiveRequiresRepoGrounding && executionClass === 'direct_assistant'
+    ? 'tool_orchestration'
     : toolBackedAnswerPlan ? 'tool_orchestration' : executionClass;
   const effectivePreferredTier = structuredWritePlanRoute
+    ? 'external'
+    : effectiveRequiresRepoGrounding && preferredTier === 'local'
     ? 'external'
     : toolBackedAnswerPlan ? 'external' : preferredTier;
   const effectiveRequiresToolSynthesis = structuredWritePlanRoute
@@ -364,6 +377,8 @@ export function normalizeIntentGatewayDecision(
       ? 'medium'
     : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
       ? derivedWorkload.expectedContextPressure
+    : effectiveRequiresRepoGrounding && expectedContextPressure === 'low'
+      ? 'medium'
       : expectedContextPressure;
   const effectivePreferredAnswerPath = toolBackedAnswerPlan
     ? 'tool_loop'
@@ -409,6 +424,8 @@ export function normalizeIntentGatewayDecision(
     ...(resolvedContent ? { resolvedContent: classifierSource } : {}),
     executionClass: structuredWritePlanRoute
       ? 'derived.workload'
+      : effectiveRequiresRepoGrounding && executionClass === 'direct_assistant'
+      ? 'derived.workload'
       : toolBackedAnswerPlan
       ? 'derived.workload'
       : rawCredentialDisclosure
@@ -416,12 +433,16 @@ export function normalizeIntentGatewayDecision(
       : (!routeOrOperationRepaired && normalizedExecutionClass) ? classifierSource : 'derived.workload',
     preferredTier: structuredWritePlanRoute
       ? 'derived.workload'
+      : effectiveRequiresRepoGrounding && preferredTier === 'local'
+      ? 'derived.workload'
       : toolBackedAnswerPlan
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
       : (!routeOrOperationRepaired && normalizedPreferredTier) ? classifierSource : 'derived.workload',
     requiresRepoGrounding: rawCredentialDisclosure
+      ? 'derived.workload'
+      : plannedStepsRequireRepoGrounding && !requiresRepoGrounding
       ? 'derived.workload'
       : hasParsedRequiresRepoGrounding ? classifierSource : 'derived.workload',
     requiresToolSynthesis: structuredWritePlanRoute
@@ -431,14 +452,14 @@ export function normalizeIntentGatewayDecision(
       : rawCredentialDisclosure
       ? 'derived.workload'
       : hasParsedRequiresToolSynthesis ? classifierSource : 'derived.workload',
-    ...(hasParsedRequireExactFileReferences || requireExactFileReferences
+    ...(hasParsedRequireExactFileReferences || effectiveRequireExactFileReferences
       ? {
-          requireExactFileReferences: (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean === requireExactFileReferences)
+          requireExactFileReferences: (hasParsedRequireExactFileReferences && parsed.requireExactFileReferences as boolean === effectiveRequireExactFileReferences)
             ? classifierSource
             : 'derived.workload',
         }
       : {}),
-    expectedContextPressure: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct')
+    expectedContextPressure: structuredWritePlanRoute || toolBackedAnswerPlan || (structurallyDirectAnswer && preferredAnswerPath !== 'direct') || (effectiveRequiresRepoGrounding && expectedContextPressure === 'low')
       ? 'derived.workload'
       : rawCredentialDisclosure
       ? 'derived.workload'
@@ -472,9 +493,9 @@ export function normalizeIntentGatewayDecision(
     missingFields: effectiveMissingFields,
     executionClass: effectiveExecutionClass,
     preferredTier: effectivePreferredTier,
-    requiresRepoGrounding,
+    requiresRepoGrounding: effectiveRequiresRepoGrounding,
     requiresToolSynthesis: effectiveRequiresToolSynthesis,
-    requireExactFileReferences,
+    requireExactFileReferences: effectiveRequireExactFileReferences,
     expectedContextPressure: effectiveExpectedContextPressure,
     preferredAnswerPath: effectivePreferredAnswerPath,
     simpleVsComplex: effectiveSimpleVsComplex,
@@ -845,6 +866,12 @@ function requiresToolBackedAnswerPlan(
   ));
   const hasAnswerStep = requiredSteps.some((step) => step.kind === 'answer');
   return hasToolEvidenceStep && hasAnswerStep;
+}
+
+function planRequiresRepoGrounding(steps: IntentGatewayPlannedStep[]): boolean {
+  return steps
+    .filter((step) => step.required !== false)
+    .some((step) => step.expectedToolCategories?.some(isRepoEvidenceCategory) ?? false);
 }
 
 function supportsToolBackedAnswerPlan(route: IntentGatewayDecision['route']): boolean {

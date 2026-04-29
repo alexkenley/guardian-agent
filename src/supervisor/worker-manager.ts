@@ -120,6 +120,7 @@ import {
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
+  readDelegatedResultEnvelope,
   readExecutionEvents,
   sanitizeDelegatedEnvelopeForOperator,
 } from '../runtime/execution/metadata.js';
@@ -152,6 +153,7 @@ import {
 import {
   attachWorkerSuspensionMetadata,
   readWorkerSuspensionMetadata,
+  withWorkerSuspensionSourceEnvelope,
 } from '../runtime/worker-suspension.js';
 import type {
   DelegatedResultEnvelope,
@@ -2865,6 +2867,10 @@ export class WorkerManager {
     if (!this.observability.pendingActionStore) return null;
     const approvalMetadata = readDelegatedPendingApprovalMetadata(input.result.metadata);
     if (!approvalMetadata) return null;
+    const workerSuspension = withWorkerSuspensionSourceEnvelope(
+      readWorkerSuspensionMetadata(input.result.metadata),
+      readDelegatedResultEnvelope(input.result.metadata),
+    );
     return recordDelegatedWorkerGraphPendingApprovalAction({
       store: this.observability.pendingActionStore,
       graphStore: this.observability.executionGraphStore,
@@ -2874,7 +2880,7 @@ export class WorkerManager {
       taskRunId: input.taskRunId,
       graphCompletion: input.graphCompletion,
       approvalMetadata,
-      workerSuspension: readWorkerSuspensionMetadata(input.result.metadata),
+      workerSuspension,
       intentDecision: input.intentDecision,
       now: this.observability.now,
       ttlMs: PENDING_APPROVAL_TTL_MS,

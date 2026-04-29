@@ -98,6 +98,19 @@ export interface DelegatedRetryExecutionProfileSelectionInput {
 
 const DELEGATED_EVIDENCE_REF_LIMIT = 8;
 const DELEGATED_EVIDENCE_PATH_PATTERN = /[A-Za-z]:(?:\\\\|\\|\/)[^"',\]\s}]+|(?:src|docs|web|scripts|config|tmp|policies|skills|native)(?:\\\\|\\|\/)[^"',\]\s}]+/gi;
+const DELEGATED_STRUCTURED_REF_KEYS = new Set([
+  'absolutePath',
+  'file',
+  'filePath',
+  'files',
+  'match',
+  'matches',
+  'path',
+  'paths',
+  'relativePath',
+  'ref',
+  'refs',
+]);
 
 export function shouldAdoptDelegatedTaskContract(
   current: DelegatedResultEnvelope['taskContract'],
@@ -206,6 +219,7 @@ export function buildDelegatedGroundedAnswerSynthesisMessages(input: {
         'No tools are available in this pass. Use the gathered delegated evidence and recent conversation context only.',
         'Do not execute actions, approve actions, mutate files, or claim that additional tool calls were made.',
         'If evidence is thin, clearly separate what the evidence shows from what remains uncertain.',
+        'For implementation-location answers, cite the implementation source files directly; do not mention tests, docs, fixtures, examples, or verifier expectations unless the user explicitly asked about those support artifacts.',
         'Produce the final user-facing answer that satisfies the remaining answer step.',
       ].join('\n'),
     },
@@ -454,6 +468,10 @@ export function extractDelegatedEvidenceRefs(...values: Array<string | undefined
       if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
         return [...refs];
       }
+    }
+    collectStructuredDelegatedEvidenceRefs(value, refs);
+    if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
+      return [...refs].slice(0, DELEGATED_EVIDENCE_REF_LIMIT);
     }
   }
   return [...refs];
@@ -937,6 +955,64 @@ function collectDelegatedGroundedAnswerRefs(envelope: DelegatedResultEnvelope): 
   return [...refs];
 }
 
+function collectStructuredDelegatedEvidenceRefs(value: string, refs: Set<string>): void {
+  const trimmed = value.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) {
+    return;
+  }
+  try {
+    collectStructuredDelegatedEvidenceRefsFromUnknown(JSON.parse(trimmed), refs);
+  } catch {
+    return;
+  }
+}
+
+function collectStructuredDelegatedEvidenceRefsFromUnknown(value: unknown, refs: Set<string>, keyHint?: string): void {
+  if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
+    return;
+  }
+  if (typeof value === 'string') {
+    collectDelegatedEvidenceRefsFromText(value, refs);
+    if (keyHint && DELEGATED_STRUCTURED_REF_KEYS.has(keyHint)) {
+      const normalized = normalizeDelegatedEvidenceRef(value);
+      if (normalized && isDelegatedEvidenceRefCandidate(normalized)) {
+        refs.add(normalized);
+      }
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectStructuredDelegatedEvidenceRefsFromUnknown(item, refs, keyHint);
+      if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
+        return;
+      }
+    }
+    return;
+  }
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    collectStructuredDelegatedEvidenceRefsFromUnknown(nested, refs, key);
+    if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
+      return;
+    }
+  }
+}
+
+function collectDelegatedEvidenceRefsFromText(value: string, refs: Set<string>): void {
+  const matches = value.match(DELEGATED_EVIDENCE_PATH_PATTERN) ?? [];
+  for (const match of matches) {
+    const normalized = normalizeDelegatedEvidenceRef(match);
+    if (!normalized) continue;
+    refs.add(normalized);
+    if (refs.size >= DELEGATED_EVIDENCE_REF_LIMIT) {
+      return;
+    }
+  }
+}
+
 function buildDelegatedSynthesisStepLines(envelope: DelegatedResultEnvelope): string[] {
   const receiptByStepId = new Map(envelope.stepReceipts.map((receipt) => [receipt.stepId, receipt]));
   return envelope.taskContract.plan.steps.map((step) => {
@@ -985,6 +1061,9 @@ function buildDelegatedSynthesisHistoryLines(
 
 function normalizeDelegatedEvidenceRef(value: string | undefined): string | null {
   let normalized = value?.trim().replace(/\\\\/g, '/').replace(/\\/g, '/').replace(/^["']|["']$/g, '') ?? '';
+  if (/^[A-Za-z]:\/{2,}/.test(normalized)) {
+    return null;
+  }
   normalized = normalized.replace(/\/+/g, '/').replace(/\.\.\.$/, '').trim();
   if (!normalized) return null;
   const workspaceRelativeMatch = normalized.match(/(?:^|\/)(src|docs|web|scripts|config|tmp|policies|skills|native)\/.+$/i);
@@ -992,6 +1071,14 @@ function normalizeDelegatedEvidenceRef(value: string | undefined): string | null
     return normalized.slice(workspaceRelativeMatch.index + (normalized[workspaceRelativeMatch.index] === '/' ? 1 : 0));
   }
   return normalized;
+}
+
+function isDelegatedEvidenceRefCandidate(value: string): boolean {
+  const normalized = value.replace(/\\/g, '/').trim();
+  if (!normalized) return false;
+  return /(?:^|\/)(?:src|docs|web|scripts|config|tmp|policies|skills|native)\//i.test(normalized)
+    || /^[A-Za-z]:\//.test(normalized)
+    || normalized.split('/').length >= 2;
 }
 
 function truncateDelegatedInlineText(value: string, maxChars: number): string {

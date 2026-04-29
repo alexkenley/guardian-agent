@@ -146,6 +146,25 @@ export function serializeWorkerSuspensionSession(
   return clonePlain(suspension);
 }
 
+export function withWorkerSuspensionSourceEnvelope(
+  suspension: SerializedWorkerSuspensionSession | null,
+  sourceEnvelope: DelegatedResultEnvelope | undefined,
+): SerializedWorkerSuspensionSession | null {
+  if (!suspension) return null;
+  if (suspension.kind !== 'tool_loop' || !sourceEnvelope) {
+    return serializeWorkerSuspensionSession(suspension);
+  }
+  const cloned = serializeWorkerSuspensionSession(suspension);
+  if (cloned.kind !== 'tool_loop') {
+    return cloned;
+  }
+  return {
+    ...cloned,
+    taskContract: clonePlain(suspension.taskContract ?? sourceEnvelope.taskContract),
+    sourceEnvelope: clonePlain(sourceEnvelope),
+  };
+}
+
 export function readWorkerSuspensionSession(value: unknown): SerializedWorkerSuspensionSession | null {
   if (!isRecord(value) || value.version !== WORKER_SUSPENSION_SCHEMA_VERSION) return null;
   const originalMessage = readUserMessage(value.originalMessage);

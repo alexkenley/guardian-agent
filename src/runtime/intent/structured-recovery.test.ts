@@ -721,6 +721,8 @@ describe('normalizeIntentGatewayDecision', () => {
         dependsOn: ['step_3'],
       }),
     ]);
+    expect(decision.requiresRepoGrounding).toBe(true);
+    expect(decision.provenance?.requiresRepoGrounding).toBe('derived.workload');
   });
 
   it('treats mixed web, repo, and memory evidence as a tool-backed general answer plan', () => {
@@ -773,8 +775,10 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'search', 'read', 'answer']);
     expect(decision.executionClass).toBe('tool_orchestration');
     expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresRepoGrounding).toBe(true);
     expect(decision.requiresToolSynthesis).toBe(true);
     expect(decision.preferredAnswerPath).toBe('tool_loop');
+    expect(decision.provenance?.requiresRepoGrounding).toBe('derived.workload');
   });
 
   it('routes automation evidence plus answer plans through tool-backed synthesis even when the classifier says direct', () => {

@@ -2422,6 +2422,124 @@ describe('BrokeredWorkerSession automation control', () => {
     ]));
   });
 
+  it('does not classify support-file reads as implementation claims for implementation-location requests', async () => {
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed repo inspections should not reclassify the turn.');
+      }
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool' && lastMessage.toolCallId === 'call-read-test') {
+        return {
+          content: 'The matching support fixture is `src/runtime/execution-graph/mutation-node.test.ts`.',
+          model: 'test-model',
+          finishReason: 'stop',
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'fs_read')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-read-test',
+            name: 'fs_read',
+            arguments: JSON.stringify({
+              path: 'S:\\Development\\GuardianAgent\\src\\runtime\\execution-graph\\mutation-node.test.ts',
+            }),
+          }],
+          providerLocality: 'external',
+          providerName: 'openai',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 120) : 'unknown'}`);
+    });
+    const callTool = vi.fn(async (request: { toolName: string }) => {
+      expect(request.toolName).toBe('fs_read');
+      return {
+        success: true,
+        status: 'succeeded',
+        message: 'Tool \'fs_read\' completed.',
+        output: {
+          path: 'S:\\Development\\GuardianAgent\\src\\runtime\\execution-graph\\mutation-node.test.ts',
+          content: 'it("emits mutation resume graph events", () => {});',
+        },
+      };
+    });
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_read',
+        description: 'Read a file.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+        },
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-support-read-not-implementation',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Search this workspace for where execution graph mutation approval resume events are emitted. Do not edit anything.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata({
+          codeContext: {
+            workspaceRoot: 'S:\\Development\\GuardianAgent',
+            sessionId: 'code-1',
+          },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect the repo to identify where execution graph mutation approval resume events are emitted.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              { kind: 'read', summary: 'Read likely repo files for mutation approval resume event emission.', expectedToolCategories: ['fs_read'], required: true },
+              { kind: 'answer', summary: 'Answer with exact file paths grounded in the repo evidence.', required: true, dependsOn: ['step_1'] },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const delegatedResult = result.metadata?.delegatedResult as { claims?: Array<{ kind?: string; subject?: string }> } | undefined;
+    const implementationClaims = delegatedResult?.claims?.filter((claim) => claim.kind === 'implementation_file') ?? [];
+    const fileClaims = delegatedResult?.claims?.filter((claim) => claim.kind === 'file_reference') ?? [];
+    expect(implementationClaims.some((claim) => claim.subject === 'src/runtime/execution-graph/mutation-node.test.ts')).toBe(false);
+    expect(fileClaims.some((claim) => claim.subject === 'src/runtime/execution-graph/mutation-node.test.ts')).toBe(true);
+  });
+
   it('does not silently switch delegated worker providers when the selected model fails', async () => {
     const llmChat = vi.fn(async (_messages, _options, routing) => {
       if (routing?.useFallback === true) {
