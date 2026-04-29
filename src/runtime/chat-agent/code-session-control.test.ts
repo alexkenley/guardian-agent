@@ -109,12 +109,116 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
         '- CURRENT: Guardian Agent — S:\\Development\\GuardianAgent id=session-1',
         'Managed sandboxes attached to this coding session:',
         '- Daytona Main | backend=daytona_sandbox | state=running | status=active | sandboxId=sandbox-1 | workspace=/home/daytona/guardian-workspace | canRestart=no',
+        'Remote sandbox targets: none configured for this session.',
       ].join('\n'),
       metadata: {
         codeSessionResolved: true,
         codeSessionId: 'session-1',
       },
     });
+  });
+
+  it('uses structured Daytona status planned steps to refresh managed sandbox state', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'code_session_current') {
+        return {
+          success: true,
+          output: {
+            session: {
+              id: 'session-1',
+              ownerUserId: 'owner',
+              title: 'Guardian Agent',
+              workspaceRoot: 'S:\\Development\\GuardianAgent',
+              resolvedRoot: 'S:\\Development\\GuardianAgent',
+              workState: {
+                managedSandboxes: [],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+    const getCodeSessionManagedSandboxes = vi.fn(async () => ({
+      defaultTargetId: 'daytona:daytona-main',
+      targets: [
+        {
+          id: 'daytona:daytona-main',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          providerFamily: 'daytona',
+          backendKind: 'daytona_sandbox',
+          capabilityState: 'ready',
+          reason: 'Ready for bounded remote sandbox execution.',
+          networkMode: 'allow_all',
+          allowedDomains: [],
+          allowedCidrs: [],
+          healthState: 'unreachable',
+          healthReason: 'HTTP 502 from Daytona control plane.',
+        },
+      ],
+      sandboxes: [
+        {
+          leaseId: 'lease-1',
+          targetId: 'daytona-main',
+          profileName: 'Daytona Main',
+          backendKind: 'daytona_sandbox',
+          sandboxId: 'sandbox-1',
+          localWorkspaceRoot: 'S:\\Development\\GuardianAgent',
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'unreachable',
+          state: 'running',
+          healthReason: 'HTTP 502 from Daytona control plane.',
+          acquiredAt: 1,
+          lastUsedAt: 2,
+          trackedRemotePaths: [],
+        },
+      ],
+    }));
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getCodeSessionManagedSandboxes,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({
+        content: 'Check Daytona status.',
+      }),
+      ctx: createCtx(),
+      decision: createDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        entities: {},
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Check Daytona sandbox status and connectivity.',
+            expectedToolCategories: ['daytona_status'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Report whether the sandbox is reachable.',
+            required: true,
+          },
+        ],
+      }),
+    });
+
+    expect(getCodeSessionManagedSandboxes).toHaveBeenCalledWith('session-1', 'owner');
+    expect(result?.content).toContain('Managed sandboxes attached to this coding session:');
+    expect(result?.content).toContain('status=unreachable');
+    expect(result?.content).toContain('note=HTTP 502 from Daytona control plane.');
+    expect(result?.content).toContain('Remote sandbox targets:');
+    expect(result?.content).toContain('provider=daytona');
+    expect(result?.content).toContain('reachable=no');
   });
 
   it('reports when the current coding session has no attached managed sandboxes', async () => {
@@ -147,6 +251,7 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
     });
 
     expect(result?.content).toContain('No managed sandboxes are currently attached to this coding session.');
+    expect(result?.content).toContain('Remote sandbox targets: none configured for this session.');
     expect(result?.content).not.toContain('Available coding workspaces:');
   });
 

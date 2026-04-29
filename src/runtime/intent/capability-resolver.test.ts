@@ -178,6 +178,32 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['provider_read']);
   });
 
+  it('maps structured managed sandbox status reads to coding session control', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Check Daytona sandbox status and connectivity.',
+            expectedToolCategories: ['daytona_status'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Report whether the sandbox is reachable.',
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual(['coding_session_control']);
+  });
+
   it('maps coding backend requests to coding_backend', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

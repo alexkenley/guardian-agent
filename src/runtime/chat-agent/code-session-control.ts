@@ -9,6 +9,7 @@ import {
 } from '../../chat-agent-helpers.js';
 import { resolveCodingBackendSessionTarget } from '../coding-backend-session-target.js';
 import type { CodeSessionManagedSandbox, CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
+import type { RemoteExecutionTargetDescriptor } from '../remote-execution/policy.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import { isWorkspaceSwitchPendingActionSatisfied } from '../pending-action-resume.js';
@@ -32,7 +33,11 @@ export type CodeSessionToolExecutor = (
 export type CodeSessionManagedSandboxGetter = (
   sessionId: string,
   ownerUserId?: string,
-) => Promise<{ sandboxes: CodeSessionManagedSandbox[] }>;
+) => Promise<{
+  defaultTargetId?: string | null;
+  targets?: RemoteExecutionTargetDescriptor[];
+  sandboxes: CodeSessionManagedSandbox[];
+}>;
 
 export type CodingTaskResumer = (
   message: UserMessage,
@@ -352,6 +357,8 @@ async function handleCodeSessionManagedSandboxes(input: {
   const sessionId = toString(session.id).trim();
   const ownerUserId = toString(session.ownerUserId).trim() || input.message.userId?.trim();
   let sandboxes = extractManagedSandboxesFromSession(session);
+  let targets: RemoteExecutionTargetDescriptor[] = [];
+  let defaultTargetId = '';
 
   if (sessionId && input.getCodeSessionManagedSandboxes) {
     try {
@@ -359,6 +366,10 @@ async function handleCodeSessionManagedSandboxes(input: {
       if (Array.isArray(refreshed.sandboxes)) {
         sandboxes = refreshed.sandboxes;
       }
+      if (Array.isArray(refreshed.targets)) {
+        targets = refreshed.targets;
+      }
+      defaultTargetId = toString(refreshed.defaultTargetId);
     } catch {
       // Fall back to the current session snapshot when the live refresh fails.
     }
@@ -374,6 +385,14 @@ async function handleCodeSessionManagedSandboxes(input: {
     lines.push('Managed sandboxes attached to this coding session:');
     for (const sandbox of sandboxes) {
       lines.push(formatManagedSandboxLine(sandbox));
+    }
+  }
+  if (targets.length === 0) {
+    lines.push('Remote sandbox targets: none configured for this session.');
+  } else {
+    lines.push('Remote sandbox targets:');
+    for (const target of targets) {
+      lines.push(formatRemoteSandboxTargetLine(target, defaultTargetId));
     }
   }
   return {
@@ -584,10 +603,15 @@ export async function tryDirectCodeSessionControlFromGateway(
   input: CodeSessionControlGatewayInput,
 ): Promise<CodeSessionResponse | null> {
   if (!input.toolsEnabled) return null;
-  if (!input.decision || input.decision.route !== 'coding_session_control') return null;
+  if (!input.decision || (input.decision.route !== 'coding_session_control' && !isManagedSandboxStatusDecision(input.decision))) {
+    return null;
+  }
 
   let operation = input.decision.operation;
   const resource = input.decision.entities.codeSessionResource;
+  if (isManagedSandboxStatusDecision(input.decision)) {
+    return handleCodeSessionManagedSandboxes(input);
+  }
 
   if (!operation || operation === 'unknown') {
     const text = input.message.content.toLowerCase();
@@ -650,6 +674,20 @@ export async function tryDirectCodeSessionControlFromGateway(
   return handleCodeSessionList(input);
 }
 
+function isManagedSandboxStatusDecision(decision: IntentGatewayDecision): boolean {
+  if (decision.route === 'coding_session_control' && decision.entities.codeSessionResource === 'managed_sandboxes') {
+    return true;
+  }
+  return Array.isArray(decision.plannedSteps)
+    && decision.plannedSteps.some((step) => Array.isArray(step.expectedToolCategories)
+      && step.expectedToolCategories.some((category) => {
+        const normalized = category.trim();
+        return normalized === 'daytona_status'
+          || normalized === 'managed_sandbox_status'
+          || normalized === 'remote_sandbox_status';
+      }));
+}
+
 async function loadCurrentCodeSession(input: {
   executeDirectCodeSessionTool: CodeSessionToolExecutor;
   message: UserMessage;
@@ -684,4 +722,14 @@ function formatManagedSandboxLine(sandbox: CodeSessionManagedSandbox): string {
   const lifecycleState = formatValue(sandbox.state || sandbox.status);
   const canRestart = sandbox.backendKind === 'daytona_sandbox' && lifecycleState.toLowerCase() === 'stopped';
   return `- ${formatValue(sandbox.profileName)} | backend=${sandbox.backendKind} | state=${lifecycleState} | status=${formatValue(sandbox.status)} | sandboxId=${formatValue(sandbox.sandboxId)} | workspace=${formatValue(sandbox.remoteWorkspaceRoot || sandbox.localWorkspaceRoot)} | canRestart=${canRestart ? 'yes' : 'no'}${sandbox.healthReason ? ` | note=${formatValue(sandbox.healthReason)}` : ''}`;
+}
+
+function formatRemoteSandboxTargetLine(target: RemoteExecutionTargetDescriptor, defaultTargetId: string): string {
+  const formatValue = (value: string | number | boolean | undefined | null): string => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    return text || '(none)';
+  };
+  const isDefault = defaultTargetId && target.id === defaultTargetId;
+  const reachable = target.capabilityState === 'ready' && target.healthState !== 'unreachable';
+  return `- ${formatValue(target.profileName || target.profileId)} | provider=${target.providerFamily} | backend=${target.backendKind} | capability=${target.capabilityState} | reachable=${reachable ? 'yes' : 'no'} | default=${isDefault ? 'yes' : 'no'} | profile=${formatValue(target.profileId)}${target.healthReason ? ` | note=${formatValue(target.healthReason)}` : ` | note=${formatValue(target.reason)}`}`;
 }

@@ -53,6 +53,9 @@ function preferredCandidatesForDecision(
     case 'personal_assistant_task':
       return ['personal_assistant'];
     case 'general_assistant':
+      if (plannedStepExpectedCategories(decision).some((category) => isManagedSandboxStatusCategory(category))) {
+        return ['coding_session_control'];
+      }
       return decision.executionClass === 'provider_crud'
         ? ['provider_read']
         : [];
@@ -212,6 +215,13 @@ function isWebSearchDirectCategory(category: string): boolean {
     || normalized === 'web_search'
     || normalized === 'web_fetch'
     || normalized.startsWith('browser_');
+}
+
+function isManagedSandboxStatusCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'daytona_status'
+    || normalized === 'managed_sandbox_status'
+    || normalized === 'remote_sandbox_status';
 }
 
 function isReadOnlyAutomationControlOperation(operation: IntentGatewayDecision['operation']): boolean {
