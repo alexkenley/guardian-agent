@@ -318,7 +318,13 @@ export class DaytonaSandboxClient {
     }
     const ordered = [...directories].sort((left, right) => left.split('/').length - right.split('/').length);
     for (const directory of ordered) {
-      await session.createFolder(directory, '755');
+      try {
+        await session.createFolder(directory, '755');
+      } catch (error) {
+        if (!isAlreadyExistsError(error)) {
+          throw error;
+        }
+      }
     }
   }
 }

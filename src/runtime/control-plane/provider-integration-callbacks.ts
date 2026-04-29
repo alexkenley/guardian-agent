@@ -68,6 +68,40 @@ interface ProviderIntegrationCallbackOptions {
   };
 }
 
+const CLOUD_PROVIDER_KEYS = [
+  'cpanelProfiles',
+  'vercelProfiles',
+  'daytonaProfiles',
+  'cloudflareProfiles',
+  'awsProfiles',
+  'gcpProfiles',
+  'azureProfiles',
+] as const;
+
+type CloudProviderKey = typeof CLOUD_PROVIDER_KEYS[number];
+
+const CLOUD_PROVIDER_KEY_ALIASES: Record<string, CloudProviderKey> = {
+  cpanel: 'cpanelProfiles',
+  whm: 'cpanelProfiles',
+  cpanelProfiles: 'cpanelProfiles',
+  vercel: 'vercelProfiles',
+  vercelProfiles: 'vercelProfiles',
+  daytona: 'daytonaProfiles',
+  daytonaProfiles: 'daytonaProfiles',
+  cloudflare: 'cloudflareProfiles',
+  cloudflareProfiles: 'cloudflareProfiles',
+  aws: 'awsProfiles',
+  awsProfiles: 'awsProfiles',
+  gcp: 'gcpProfiles',
+  gcpProfiles: 'gcpProfiles',
+  azure: 'azureProfiles',
+  azureProfiles: 'azureProfiles',
+};
+
+function normalizeCloudProviderKey(providerKey: string): CloudProviderKey | undefined {
+  return CLOUD_PROVIDER_KEY_ALIASES[providerKey.trim()];
+}
+
 export function createProviderIntegrationCallbacks(
   options: ProviderIntegrationCallbackOptions,
 ): ProviderIntegrationCallbacks {
@@ -267,9 +301,16 @@ export function createProviderIntegrationCallbacks(
       const runtimeCreds = resolveRuntimeCredentialView(options.configRef.current, options.secretStore);
       const cloud = runtimeCreds.resolvedCloud;
       if (!cloud) return { success: false, message: 'Cloud tools are not configured.' };
+      const normalizedProviderKey = normalizeCloudProviderKey(providerKey);
+      if (!normalizedProviderKey) {
+        return {
+          success: false,
+          message: `Unknown cloud provider: '${providerKey}'. Expected one of: cpanel, vercel, daytona, cloudflare, aws, gcp, azure.`,
+        };
+      }
 
       try {
-        switch (providerKey) {
+        switch (normalizedProviderKey) {
           case 'cpanelProfiles': {
             const profile = cloud.cpanelProfiles?.find((entry) => entry.id === profileId);
             if (!profile) return { success: false, message: `cPanel profile '${profileId}' not found.` };
@@ -325,8 +366,6 @@ export function createProviderIntegrationCallbacks(
             await options.testCloudConnections.azure(profile);
             return { success: true, message: `Azure profile '${profile.name}': connected.` };
           }
-          default:
-            return { success: false, message: `Unknown cloud provider: '${providerKey}'.` };
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

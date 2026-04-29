@@ -159,6 +159,41 @@ describe('createProviderIntegrationCallbacks', () => {
     expect(result).toEqual({ success: true, message: "Daytona profile 'Primary Daytona': connected." });
   });
 
+  it('accepts the canonical Daytona provider name for cloud tests', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      daytonaProfiles: [
+        {
+          id: 'daytona-1',
+          name: 'Primary Daytona',
+          apiKey: 'secret-token',
+          enabled: true,
+          language: 'typescript',
+        },
+      ],
+    };
+    const testCloudConnections = {
+      cpanel: vi.fn(async () => {}),
+      vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
+      cloudflare: vi.fn(async () => {}),
+      aws: vi.fn(async () => {}),
+      gcp: vi.fn(async () => {}),
+      azure: vi.fn(async () => {}),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      configRef: { current: config },
+      testCloudConnections,
+    }));
+
+    const result = await callbacks.onCloudTest?.('daytona', 'daytona-1');
+
+    expect(testCloudConnections.daytona).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, message: "Daytona profile 'Primary Daytona': connected." });
+  });
+
   it('tests a configured Vercel profile through the injected cloud tester', async () => {
     const config = createConfig();
     config.assistant.tools.cloud = {
@@ -192,6 +227,44 @@ describe('createProviderIntegrationCallbacks', () => {
     }));
 
     const result = await callbacks.onCloudTest?.('vercelProfiles', 'vercel-prod');
+
+    expect(testCloudConnections.vercel).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, message: "Vercel profile 'Vercel Production': connected." });
+  });
+
+  it('accepts the canonical Vercel provider name for cloud tests', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      vercelProfiles: [
+        {
+          id: 'vercel-prod',
+          name: 'Vercel Production',
+          apiToken: 'secret-token',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+          },
+        },
+      ],
+    };
+    const testCloudConnections = {
+      cpanel: vi.fn(async () => {}),
+      vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
+      cloudflare: vi.fn(async () => {}),
+      aws: vi.fn(async () => {}),
+      gcp: vi.fn(async () => {}),
+      azure: vi.fn(async () => {}),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      configRef: { current: config },
+      testCloudConnections,
+    }));
+
+    const result = await callbacks.onCloudTest?.('vercel', 'vercel-prod');
 
     expect(testCloudConnections.vercel).toHaveBeenCalledOnce();
     expect(result).toEqual({ success: true, message: "Vercel profile 'Vercel Production': connected." });

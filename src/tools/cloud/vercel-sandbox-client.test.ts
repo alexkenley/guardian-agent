@@ -120,6 +120,43 @@ describe('VercelSandboxClient', () => {
     expect(session.status).toBe('stopped');
   });
 
+  it('returns null when an optional artifact is missing', async () => {
+    const sandbox = {
+      ...createSandboxRecord(),
+      readFileToBuffer: vi.fn(async () => {
+        throw new Error('404 not found');
+      }),
+    };
+    createMock.mockResolvedValueOnce(sandbox);
+
+    const client = new VercelSandboxClient();
+    const session = await client.createSandbox({
+      target: TARGET,
+      timeoutMs: 45_000,
+    });
+
+    await expect(session.readFileToBuffer({ path: '/vercel/sandbox/reports/junit.xml' })).resolves.toBeNull();
+  });
+
+  it('propagates non-missing artifact read failures', async () => {
+    const sandbox = {
+      ...createSandboxRecord(),
+      readFileToBuffer: vi.fn(async () => {
+        throw new Error('permission denied');
+      }),
+    };
+    createMock.mockResolvedValueOnce(sandbox);
+
+    const client = new VercelSandboxClient();
+    const session = await client.createSandbox({
+      target: TARGET,
+      timeoutMs: 45_000,
+    });
+
+    await expect(session.readFileToBuffer({ path: '/vercel/sandbox/reports/junit.xml' }))
+      .rejects.toThrow('permission denied');
+  });
+
   it('skips known Vercel base directories when ensuring nested paths', async () => {
     const client = new VercelSandboxClient();
     const session = {

@@ -50,6 +50,11 @@ function isAlreadyExistsError(error: unknown): boolean {
   return /\b(already exists|file exists|exist[s]?)\b/i.test(message);
 }
 
+function isNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(not found|no such file|404)\b/i.test(message);
+}
+
 function buildNetworkPolicy(target: VercelRemoteExecutionResolvedTarget): NetworkPolicy {
   if (target.networkMode === 'deny_all') return 'deny-all';
   if (target.networkMode === 'domain_allowlist') {
@@ -91,7 +96,16 @@ function buildWrappedVercelSandbox(sandbox: VercelSandboxHandle): VercelSandboxS
         stderr: await result.stderr(),
       };
     },
-    readFileToBuffer: async (file) => sandbox.readFileToBuffer(file),
+    readFileToBuffer: async (file) => {
+      try {
+        return await sandbox.readFileToBuffer(file);
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          return null;
+        }
+        throw error;
+      }
+    },
     stop: async (blocking) => {
       await sandbox.stop({ blocking });
       wrapped.status = 'stopped';

@@ -186,4 +186,36 @@ describe('DaytonaSandboxClient', () => {
     expect(startMock).toHaveBeenCalledWith(30);
     expect(refreshDataMock).toHaveBeenCalled();
   });
+
+  it('ignores already-existing nested directories during staging', async () => {
+    const client = new DaytonaSandboxClient();
+    const session = {
+      sandboxId: 'sandbox_123',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      refreshData: vi.fn(async () => undefined),
+      createFolder: vi.fn(async (directory: string) => {
+        if (directory === '/home') {
+          throw new Error('already exists');
+        }
+      }),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => ({ exitCode: 0, result: '' })),
+      readFileToBuffer: vi.fn(async () => null),
+      destroy: vi.fn(async () => undefined),
+    };
+
+    await expect(client.ensureDirectories(session, [
+      '/home/daytona/guardian-workspace/src/index.ts',
+    ])).resolves.toBeUndefined();
+
+    expect(session.createFolder).toHaveBeenCalledWith('/home', '755');
+    expect(session.createFolder).toHaveBeenCalledWith('/home/daytona', '755');
+    expect(session.createFolder).toHaveBeenCalledWith('/home/daytona/guardian-workspace', '755');
+    expect(session.createFolder).toHaveBeenCalledWith('/home/daytona/guardian-workspace/src', '755');
+  });
 });
