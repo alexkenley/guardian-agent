@@ -57,12 +57,22 @@ function mapToSandboxPath(remotePath: string): string {
   return path.posix.join(VERCEL_WRITABLE_WORKSPACE_ROOT, normalized);
 }
 
+function isPathInsideRemoteRoot(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
 function resolveArtifactPath(actualRemoteCwd: string, artifactPath: string): string {
   const normalized = normalizeRemoteRelativePath(artifactPath);
   if (path.posix.isAbsolute(normalized)) {
-    return normalized.startsWith(REMOTE_WORKSPACE_ROOT)
-      ? mapToSandboxPath(normalized)
-      : normalized;
+    if (isPathInsideRemoteRoot(normalized, REMOTE_WORKSPACE_ROOT)) {
+      return mapToSandboxPath(normalized);
+    }
+    if (isPathInsideRemoteRoot(normalized, VERCEL_WRITABLE_WORKSPACE_ROOT)) {
+      return normalized;
+    }
+    throw new Error(
+      `Remote artifact path '${artifactPath}' must be relative or inside ${REMOTE_WORKSPACE_ROOT}.`,
+    );
   }
   return path.posix.join(actualRemoteCwd, normalized);
 }
@@ -73,9 +83,9 @@ function buildCwdSentinelPath(actualRemoteCwd: string): string {
 
 function buildRemoteEnv(env: Record<string, string> | undefined): Record<string, string> {
   return {
+    ...(env ?? {}),
     CI: 'true',
     GUARDIAN_REMOTE_SANDBOX: '1',
-    ...(env ?? {}),
   };
 }
 

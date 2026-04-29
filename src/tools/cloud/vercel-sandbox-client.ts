@@ -60,6 +60,11 @@ function buildNetworkPolicy(target: VercelRemoteExecutionResolvedTarget): Networ
   if (target.networkMode === 'domain_allowlist') {
     return { allow: [...target.allowedDomains] };
   }
+  if (target.networkMode === 'cidr_allowlist') {
+    throw new Error(
+      'Vercel sandbox execution does not support CIDR network allowlists; use domain allowlists or deny_all.',
+    );
+  }
   return 'allow-all';
 }
 

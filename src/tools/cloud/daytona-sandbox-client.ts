@@ -215,6 +215,11 @@ async function resolveDaytonaWorkspaceRoot(input: {
 }
 
 async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<DaytonaSandboxSession> {
+  if (input.target.networkMode === 'domain_allowlist') {
+    throw new Error(
+      'Daytona sandbox execution does not support domain network allowlists; use CIDR allowlists or deny_all.',
+    );
+  }
   const client = new Daytona({
     apiKey: input.target.apiKey,
     apiUrl: input.target.apiUrl ?? DEFAULT_API_URL,

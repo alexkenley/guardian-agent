@@ -150,6 +150,21 @@ describe('DaytonaSandboxClient', () => {
     }), { timeout: 15 });
   });
 
+  it('fails closed when asked to use an unsupported domain allowlist', async () => {
+    const client = new DaytonaSandboxClient();
+
+    await expect(client.createSandbox({
+      target: {
+        ...TARGET,
+        networkMode: 'domain_allowlist',
+        allowedDomains: ['example.com'],
+      },
+      timeoutMs: 15_000,
+    })).rejects.toThrow(/does not support domain network allowlists/i);
+
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it('uses the persisted workspace root hint for stopped sandboxes without querying toolbox metadata', async () => {
     getMock.mockResolvedValueOnce(createSandboxRecord('stopped'));
 

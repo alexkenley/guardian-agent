@@ -109,6 +109,101 @@ describe('DaytonaRemoteExecutionProvider', () => {
     expect(session.destroy).toHaveBeenCalled();
   });
 
+  it('does not let request env override sandbox guardrail variables', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_env',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: 'started',
+      refreshData: vi.fn(async () => undefined),
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => ({
+        exitCode: 0,
+        result: '',
+      })),
+      readFileToBuffer: vi.fn(async (filePath: string) => {
+        if (filePath.endsWith('.stdout')) return Buffer.from('ok');
+        if (filePath.endsWith('.stderr')) return Buffer.from('');
+        if (filePath.endsWith('.exit')) return Buffer.from('0');
+        return null;
+      }),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxFactory: vi.fn(async () => session),
+      }),
+    });
+
+    const result = await provider.run(buildRequest({
+      artifactPaths: [],
+      env: {
+        CI: 'false',
+        GUARDIAN_REMOTE_SANDBOX: '0',
+        FOO: 'bar',
+      },
+    }));
+
+    expect(result.status).toBe('succeeded');
+    expect(session.executeCommand).toHaveBeenCalledWith(
+      expect.stringContaining(`'npm' 'test' >`),
+      '/home/daytona/guardian-workspace',
+      {
+        CI: 'true',
+        GUARDIAN_REMOTE_SANDBOX: '1',
+        FOO: 'bar',
+      },
+      120,
+    );
+  });
+
+  it('rejects artifact paths outside the remote workspace namespace', async () => {
+    const session: DaytonaSandboxSession = {
+      sandboxId: 'daytona_artifacts',
+      workspaceRoot: '/home/daytona/guardian-workspace',
+      state: 'started',
+      refreshData: vi.fn(async () => undefined),
+      createFolder: vi.fn(async () => undefined),
+      uploadFiles: vi.fn(async () => undefined),
+      setFileMode: vi.fn(async () => undefined),
+      waitUntilStarted: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      refreshActivity: vi.fn(async () => undefined),
+      executeCommand: vi.fn(async () => ({
+        exitCode: 0,
+        result: '',
+      })),
+      readFileToBuffer: vi.fn(async (filePath: string) => {
+        if (filePath.endsWith('.stdout')) return Buffer.from('ok');
+        if (filePath.endsWith('.stderr')) return Buffer.from('');
+        if (filePath.endsWith('.exit')) return Buffer.from('0');
+        if (filePath === '/etc/passwd') return Buffer.from('secret');
+        return null;
+      }),
+      destroy: vi.fn(async () => undefined),
+    };
+    const provider = new DaytonaRemoteExecutionProvider({
+      client: new DaytonaSandboxClient({
+        sandboxFactory: vi.fn(async () => session),
+      }),
+    });
+
+    const result = await provider.run(buildRequest({
+      artifactPaths: ['/etc/passwd'],
+    }));
+
+    expect(result.status).toBe('failed');
+    expect(result.stderr).toContain('must be relative or inside /workspace');
+    expect(session.readFileToBuffer).not.toHaveBeenCalledWith('/etc/passwd', 120);
+    expect(session.destroy).toHaveBeenCalled();
+  });
+
   it('marks timeout-like command failures as timed_out and still destroys the sandbox', async () => {
     const session: DaytonaSandboxSession = {
       sandboxId: 'daytona_456',

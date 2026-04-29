@@ -98,6 +98,76 @@ describe('VercelRemoteExecutionProvider', () => {
     expect(session.stop).toHaveBeenCalledWith(true);
   });
 
+  it('does not let request env override sandbox guardrail variables', async () => {
+    const session: VercelSandboxSession = {
+      sandboxId: 'sandbox_env',
+      status: 'running',
+      mkDir: vi.fn(async () => undefined),
+      writeFiles: vi.fn(async () => undefined),
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+      })),
+      readFileToBuffer: vi.fn(async () => null),
+      stop: vi.fn(async () => undefined),
+      extendTimeout: vi.fn(async () => undefined),
+    };
+    const provider = new VercelRemoteExecutionProvider({
+      client: new VercelSandboxClient({
+        sandboxFactory: vi.fn(async () => session),
+      }),
+    });
+
+    const result = await provider.run(buildRequest({
+      artifactPaths: [],
+      env: {
+        CI: 'false',
+        GUARDIAN_REMOTE_SANDBOX: '0',
+        FOO: 'bar',
+      },
+    }));
+
+    expect(result.status).toBe('succeeded');
+    expect(session.runCommand).toHaveBeenCalledWith(expect.objectContaining({
+      env: {
+        CI: 'true',
+        GUARDIAN_REMOTE_SANDBOX: '1',
+        FOO: 'bar',
+      },
+    }));
+  });
+
+  it('rejects artifact paths outside the remote workspace namespace', async () => {
+    const session: VercelSandboxSession = {
+      sandboxId: 'sandbox_artifacts',
+      status: 'running',
+      mkDir: vi.fn(async () => undefined),
+      writeFiles: vi.fn(async () => undefined),
+      runCommand: vi.fn(async () => ({
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+      })),
+      readFileToBuffer: vi.fn(async () => Buffer.from('secret')),
+      stop: vi.fn(async () => undefined),
+      extendTimeout: vi.fn(async () => undefined),
+    };
+    const provider = new VercelRemoteExecutionProvider({
+      client: new VercelSandboxClient({
+        sandboxFactory: vi.fn(async () => session),
+      }),
+    });
+
+    const result = await provider.run(buildRequest({
+      artifactPaths: ['/etc/passwd'],
+    }));
+
+    expect(result.status).toBe('failed');
+    expect(result.stderr).toContain('must be relative or inside /workspace');
+    expect(session.readFileToBuffer).not.toHaveBeenCalled();
+  });
+
   it('uses shell fallback when requested and still stops the sandbox on timeout-like failures', async () => {
     const session: VercelSandboxSession = {
       sandboxId: 'sandbox_456',

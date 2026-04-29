@@ -106,6 +106,21 @@ describe('VercelSandboxClient', () => {
     });
   });
 
+  it('fails closed when asked to use an unsupported CIDR allowlist', async () => {
+    const client = new VercelSandboxClient();
+
+    await expect(client.createSandbox({
+      target: {
+        ...TARGET,
+        networkMode: 'cidr_allowlist',
+        allowedCidrs: ['10.0.0.0/8'],
+      },
+      timeoutMs: 45_000,
+    })).rejects.toThrow(/does not support CIDR network allowlists/i);
+
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it('updates the wrapped status after a sandbox is stopped', async () => {
     createMock.mockResolvedValueOnce(createSandboxRecord());
 

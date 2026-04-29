@@ -51,20 +51,31 @@ function mapToSessionPath(sessionWorkspaceRoot: string, remotePath: string): str
   return path.posix.join(sessionWorkspaceRoot, normalized);
 }
 
+function isPathInsideRemoteRoot(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
 function resolveArtifactPath(sessionWorkspaceRoot: string, actualCwd: string, artifactPath: string): string {
-  if (path.posix.isAbsolute(artifactPath)) {
-    return artifactPath.startsWith(REMOTE_WORKSPACE_ROOT)
-      ? mapToSessionPath(sessionWorkspaceRoot, artifactPath)
-      : artifactPath;
+  const normalized = normalizeRemoteRelativePath(artifactPath);
+  if (path.posix.isAbsolute(normalized)) {
+    if (isPathInsideRemoteRoot(normalized, REMOTE_WORKSPACE_ROOT)) {
+      return mapToSessionPath(sessionWorkspaceRoot, normalized);
+    }
+    if (isPathInsideRemoteRoot(normalized, sessionWorkspaceRoot)) {
+      return normalized;
+    }
+    throw new Error(
+      `Remote artifact path '${artifactPath}' must be relative or inside ${REMOTE_WORKSPACE_ROOT}.`,
+    );
   }
-  return path.posix.join(actualCwd, normalizeRemoteRelativePath(artifactPath));
+  return path.posix.join(actualCwd, normalized);
 }
 
 function buildRemoteEnv(env: Record<string, string> | undefined): Record<string, string> {
   return {
+    ...(env ?? {}),
     CI: 'true',
     GUARDIAN_REMOTE_SANDBOX: '1',
-    ...(env ?? {}),
   };
 }
 
