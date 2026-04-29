@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_CONFIG, type AssistantCloudConfig } from '../../config/types.js';
 import {
+  buildRemoteExecutionTargetDiagnostics,
   listRemoteExecutionTargets,
   prioritizeReadyRemoteExecutionTargets,
   recommendWorkflowIsolation,
@@ -201,6 +202,44 @@ describe('remote execution policy', () => {
       backendKind: 'daytona_sandbox',
       profileId: 'daytona-main',
     });
+  });
+
+  it('reports default target drift and cached unreachable sandbox health', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      vercelProfiles: [{
+        id: 'vercel-main',
+        name: 'Main Vercel',
+        apiToken: 'vercel-secret',
+        teamId: 'team_123',
+        sandbox: { enabled: true, projectId: 'prj_123' },
+      }],
+    }), {
+      healthByTargetId: {
+        'vercel:vercel-main': {
+          state: 'unreachable',
+          reason: 'Vercel sandbox returned HTTP 502.',
+          checkedAt: 123,
+        },
+      },
+    });
+
+    const diagnostics = buildRemoteExecutionTargetDiagnostics(targets, 'vercel:missing-profile');
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'default_target_missing',
+        targetId: 'vercel:missing-profile',
+      }),
+      expect.objectContaining({
+        code: 'target_unreachable',
+        targetId: 'vercel:vercel-main',
+        message: expect.stringContaining('HTTP 502'),
+      }),
+      expect.objectContaining({
+        code: 'no_ready_targets',
+      }),
+    ]));
   });
 
   it('honors the configured default target without provider-specific workflow heuristics', () => {

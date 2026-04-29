@@ -44,6 +44,14 @@ export interface RemoteExecutionTargetDescriptor {
   routingReason?: string;
 }
 
+export interface RemoteExecutionTargetDiagnostic {
+  severity: 'info' | 'warning' | 'error';
+  code: 'default_target_missing' | 'default_target_not_ready' | 'target_unreachable' | 'no_ready_targets';
+  targetId?: string;
+  profileName?: string;
+  message: string;
+}
+
 export interface WorkflowIsolationRecommendation {
   level: 'none' | 'available' | 'recommended';
   backendKind?: RemoteExecutionBackendKind;
@@ -279,6 +287,61 @@ export function listRemoteExecutionTargets(
 
 export function isRemoteExecutionTargetReady(target: Pick<RemoteExecutionTargetDescriptor, 'capabilityState' | 'healthState'>): boolean {
   return target.capabilityState === 'ready' && target.healthState !== 'unreachable';
+}
+
+export function buildRemoteExecutionTargetDiagnostics(
+  targets: RemoteExecutionTargetDescriptor[],
+  defaultTargetId?: string | null,
+): RemoteExecutionTargetDiagnostic[] {
+  const diagnostics: RemoteExecutionTargetDiagnostic[] = [];
+  const trimmedDefaultTargetId = defaultTargetId?.trim();
+  const configuredDefaultTargetId = trimmedDefaultTargetId && trimmedDefaultTargetId !== 'automatic'
+    ? trimmedDefaultTargetId
+    : '';
+  const defaultTarget = configuredDefaultTargetId
+    ? targets.find((entry) => entry.id === configuredDefaultTargetId)
+    : null;
+
+  if (configuredDefaultTargetId && !defaultTarget) {
+    diagnostics.push({
+      severity: 'warning',
+      code: 'default_target_missing',
+      targetId: configuredDefaultTargetId,
+      message: `Configured default remote sandbox target '${configuredDefaultTargetId}' does not match any current Vercel or Daytona profile.`,
+    });
+  } else if (defaultTarget && !isRemoteExecutionTargetReady(defaultTarget)) {
+    const reason = defaultTarget.healthState === 'unreachable'
+      ? defaultTarget.healthReason || 'The last target health check marked it unreachable.'
+      : defaultTarget.reason;
+    diagnostics.push({
+      severity: 'warning',
+      code: 'default_target_not_ready',
+      targetId: defaultTarget.id,
+      profileName: defaultTarget.profileName,
+      message: `Configured default remote sandbox target '${defaultTarget.profileName}' is not ready: ${reason}`,
+    });
+  }
+
+  for (const target of targets) {
+    if (target.healthState !== 'unreachable') continue;
+    diagnostics.push({
+      severity: 'warning',
+      code: 'target_unreachable',
+      targetId: target.id,
+      profileName: target.profileName,
+      message: `Remote sandbox target '${target.profileName}' is currently unreachable: ${target.healthReason || 'last health check failed'}`,
+    });
+  }
+
+  if (targets.length > 0 && !targets.some((entry) => isRemoteExecutionTargetReady(entry))) {
+    diagnostics.push({
+      severity: 'warning',
+      code: 'no_ready_targets',
+      message: 'No ready remote sandbox targets are available for this coding workspace.',
+    });
+  }
+
+  return diagnostics;
 }
 
 function workflowIsolationOperations(type: CodeSessionWorkflowType): string[] {

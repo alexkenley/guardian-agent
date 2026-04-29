@@ -31,11 +31,13 @@ import {
   parseManagedPackageInstallCommand,
 } from '../runtime/package-install-trust.js';
 import {
+  buildRemoteExecutionTargetDiagnostics,
   isRemoteExecutionTargetReady,
   listRemoteExecutionTargets,
   prioritizeReadyRemoteExecutionTargets,
   type RemoteExecutionHealthState,
   type RemoteExecutionTargetDescriptor,
+  type RemoteExecutionTargetDiagnostic,
 } from '../runtime/remote-execution/policy.js';
 import {
   RemoteExecutionService,
@@ -1411,6 +1413,7 @@ export class ToolExecutor {
     codeSessionId: string;
     defaultTargetId: string | null;
     targets: RemoteExecutionTargetDescriptor[];
+    targetDiagnostics: RemoteExecutionTargetDiagnostic[];
     sandboxes: CodeSessionManagedSandbox[];
   }> {
     const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
@@ -1418,14 +1421,16 @@ export class ToolExecutor {
       throw new Error(`Code session '${input.sessionId}' was not found.`);
     }
     const targets = this.getRemoteExecutionTargets();
+    const defaultTargetId = this.cloudConfig.defaultRemoteExecutionTargetId?.trim() || null;
     const sandboxes = (await this.reconcileCodeSessionManagedSandboxRecords({
       session,
       targets,
     })).filter((record) => record.status !== 'released');
     return {
       codeSessionId: session.id,
-      defaultTargetId: this.cloudConfig.defaultRemoteExecutionTargetId?.trim() || null,
+      defaultTargetId,
       targets,
+      targetDiagnostics: buildRemoteExecutionTargetDiagnostics(targets, defaultTargetId),
       sandboxes,
     };
   }
@@ -1441,6 +1446,7 @@ export class ToolExecutor {
     codeSessionId: string;
     defaultTargetId: string | null;
     targets: RemoteExecutionTargetDescriptor[];
+    targetDiagnostics: RemoteExecutionTargetDiagnostic[];
     sandboxes: CodeSessionManagedSandbox[];
   }> {
     if (!this.options.codeSessionStore) {
@@ -1512,6 +1518,7 @@ export class ToolExecutor {
     codeSessionId: string;
     defaultTargetId: string | null;
     targets: RemoteExecutionTargetDescriptor[];
+    targetDiagnostics: RemoteExecutionTargetDiagnostic[];
     sandboxes: CodeSessionManagedSandbox[];
   }> {
     if (!this.options.codeSessionStore) {

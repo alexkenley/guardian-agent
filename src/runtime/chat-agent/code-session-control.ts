@@ -9,7 +9,7 @@ import {
 } from '../../chat-agent-helpers.js';
 import { resolveCodingBackendSessionTarget } from '../coding-backend-session-target.js';
 import type { CodeSessionManagedSandbox, CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
-import type { RemoteExecutionTargetDescriptor } from '../remote-execution/policy.js';
+import type { RemoteExecutionTargetDescriptor, RemoteExecutionTargetDiagnostic } from '../remote-execution/policy.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import { isWorkspaceSwitchPendingActionSatisfied } from '../pending-action-resume.js';
@@ -36,6 +36,7 @@ export type CodeSessionManagedSandboxGetter = (
 ) => Promise<{
   defaultTargetId?: string | null;
   targets?: RemoteExecutionTargetDescriptor[];
+  targetDiagnostics?: RemoteExecutionTargetDiagnostic[];
   sandboxes: CodeSessionManagedSandbox[];
 }>;
 
@@ -358,6 +359,7 @@ async function handleCodeSessionManagedSandboxes(input: {
   const ownerUserId = toString(session.ownerUserId).trim() || input.message.userId?.trim();
   let sandboxes = extractManagedSandboxesFromSession(session);
   let targets: RemoteExecutionTargetDescriptor[] = [];
+  let targetDiagnostics: RemoteExecutionTargetDiagnostic[] = [];
   let defaultTargetId = '';
 
   if (sessionId && input.getCodeSessionManagedSandboxes) {
@@ -368,6 +370,9 @@ async function handleCodeSessionManagedSandboxes(input: {
       }
       if (Array.isArray(refreshed.targets)) {
         targets = refreshed.targets;
+      }
+      if (Array.isArray(refreshed.targetDiagnostics)) {
+        targetDiagnostics = refreshed.targetDiagnostics;
       }
       defaultTargetId = toString(refreshed.defaultTargetId);
     } catch {
@@ -393,6 +398,12 @@ async function handleCodeSessionManagedSandboxes(input: {
     lines.push('Remote sandbox targets:');
     for (const target of targets) {
       lines.push(formatRemoteSandboxTargetLine(target, defaultTargetId));
+    }
+  }
+  if (targetDiagnostics.length > 0) {
+    lines.push('Remote sandbox diagnostics:');
+    for (const diagnostic of targetDiagnostics) {
+      lines.push(formatRemoteSandboxDiagnosticLine(diagnostic));
     }
   }
   return {
@@ -739,4 +750,12 @@ function formatRemoteSandboxTargetLine(target: RemoteExecutionTargetDescriptor, 
         ? 'no'
         : 'unknown';
   return `- ${formatValue(target.profileName || target.profileId)} | provider=${target.providerFamily} | backend=${target.backendKind} | capability=${target.capabilityState} | health=${formatValue(healthState)} | reachable=${reachable} | default=${isDefault ? 'yes' : 'no'} | profile=${formatValue(target.profileId)}${target.healthReason ? ` | note=${formatValue(target.healthReason)}` : ` | note=${formatValue(target.reason)}`}`;
+}
+
+function formatRemoteSandboxDiagnosticLine(diagnostic: RemoteExecutionTargetDiagnostic): string {
+  const formatValue = (value: string | number | boolean | undefined | null): string => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    return text || '(none)';
+  };
+  return `- severity=${formatValue(diagnostic.severity)} | code=${formatValue(diagnostic.code)}${diagnostic.targetId ? ` | target=${formatValue(diagnostic.targetId)}` : ''}${diagnostic.profileName ? ` | profile=${formatValue(diagnostic.profileName)}` : ''} | message=${formatValue(diagnostic.message)}`;
 }

@@ -2007,6 +2007,18 @@ function normalizeSandboxPanelState(sessionId, value = {}, existing = {}) {
         healthReason: typeof entry.healthReason === 'string' ? entry.healthReason : '',
       }))
     : (Array.isArray(existing.sandboxes) ? existing.sandboxes : []);
+  const targetDiagnostics = Array.isArray(value.targetDiagnostics)
+    ? value.targetDiagnostics
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry) => ({
+        severity: typeof entry.severity === 'string' ? entry.severity : 'info',
+        code: typeof entry.code === 'string' ? entry.code : '',
+        targetId: typeof entry.targetId === 'string' ? entry.targetId : '',
+        profileName: typeof entry.profileName === 'string' ? entry.profileName : '',
+        message: typeof entry.message === 'string' ? entry.message : '',
+      }))
+      .filter((entry) => entry.message)
+    : (Array.isArray(existing.targetDiagnostics) ? existing.targetDiagnostics : []);
   const defaultTargetId = typeof value.defaultTargetId === 'string' && value.defaultTargetId.trim()
     ? value.defaultTargetId.trim()
     : (typeof existing.defaultTargetId === 'string' ? existing.defaultTargetId : null);
@@ -2021,6 +2033,7 @@ function normalizeSandboxPanelState(sessionId, value = {}, existing = {}) {
     codeSessionId: sessionId,
     defaultTargetId: defaultTargetId || null,
     targets,
+    targetDiagnostics,
     sandboxes,
     loading: value.loading === true,
     error: typeof value.error === 'string' ? value.error : '',
@@ -6396,6 +6409,13 @@ function renderSandboxesPanel(activeSession) {
       </div>
       <div class="code-rail__subcopy">Managed sandboxes are optional. If both providers are configured, you can choose either one from here for heavier iterative work.</div>
       ${sandboxState.error ? `<div class="code-error">${esc(sandboxState.error)}</div>` : ''}
+      ${sandboxState.targetDiagnostics?.length > 0 ? `
+        <div class="empty-inline">
+          ${sandboxState.targetDiagnostics.map((entry) => `
+            <div><span class="badge ${entry.severity === 'error' ? 'badge-critical' : entry.severity === 'warning' ? 'badge-warn' : 'badge-info'}">${esc(String(entry.severity || 'info').toUpperCase())}</span> ${esc(entry.message)}</div>
+          `).join('')}
+        </div>
+      ` : ''}
       ${sandboxState.loading ? '<div class="empty-inline">Loading sandboxes...</div>' : ''}
       ${sandboxState.targets.length > 0 ? `
         <div class="code-session-form is-visible" style="margin-bottom:0.8rem">

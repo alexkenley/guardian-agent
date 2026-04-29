@@ -125,7 +125,7 @@ import type {
   CodeSessionUiState,
   CodeSessionWorkState,
 } from '../runtime/code-sessions.js';
-import type { RemoteExecutionTargetDescriptor } from '../runtime/remote-execution/policy.js';
+import type { RemoteExecutionTargetDescriptor, RemoteExecutionTargetDiagnostic } from '../runtime/remote-execution/policy.js';
 import type {
   DashboardCodeSessionTimelineResponse,
   DashboardRunDetail,
@@ -2348,6 +2348,7 @@ export interface DashboardCodeSessionSandboxesResponse {
   codeSessionId: string;
   defaultTargetId: string | null;
   targets: RemoteExecutionTargetDescriptor[];
+  targetDiagnostics?: RemoteExecutionTargetDiagnostic[];
   sandboxes: CodeSessionManagedSandbox[];
 }
 
