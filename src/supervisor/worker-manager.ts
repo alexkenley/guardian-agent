@@ -853,16 +853,18 @@ export class WorkerManager {
       nodeScoped: false,
     });
     this.completeExecutionGraphPendingAction(pendingAction, now());
+    const metadata: Record<string, unknown> = {
+      ...(continuationResult.metadata ?? {}),
+      executionGraph: {
+        graphId: suspension.graphId,
+        status: 'succeeded',
+        artifactIds: suspension.artifactIds,
+      },
+    };
+    reconcileSatisfiedDelegatedWorkerMetadata(metadata);
     return {
       content: continuationResult.content,
-      metadata: {
-        ...(continuationResult.metadata ?? {}),
-        executionGraph: {
-          graphId: suspension.graphId,
-          status: 'succeeded',
-          artifactIds: suspension.artifactIds,
-        },
-      },
+      metadata,
     };
   }
 
@@ -1556,6 +1558,7 @@ export class WorkerManager {
         ...(result.metadata ?? {}),
         ...buildDelegatedExecutionMetadata(sanitizedVerifiedEnvelope),
       };
+      reconcileSatisfiedDelegatedWorkerMetadata(verifiedMetadata, verifiedResult.decision);
       const verifiedResultPayload = {
         content: result.content,
         metadata: verifiedMetadata,
@@ -3233,6 +3236,23 @@ function buildDelegatedWorkerExecutionTraceMetadata(
       ? { workerExecutionPendingApprovalCount: workerExecution.pendingApprovalCount }
       : {}),
   };
+}
+
+function reconcileSatisfiedDelegatedWorkerMetadata(
+  metadata: Record<string, unknown>,
+  verification?: VerificationDecision,
+): void {
+  if (verification && verification.decision !== 'satisfied') return;
+  if (!verification && !isSatisfiedDelegatedResultMetadata(metadata)) return;
+  const workerExecution = readWorkerExecutionMetadata(metadata);
+  if (workerExecution?.lifecycle !== 'failed') return;
+  delete metadata.workerExecution;
+}
+
+function isSatisfiedDelegatedResultMetadata(metadata: Record<string, unknown>): boolean {
+  const envelope = readDelegatedResultEnvelope(metadata);
+  return envelope?.verification?.decision === 'satisfied'
+    || envelope?.runStatus === 'completed';
 }
 
 function buildPromptAdditionalSectionTraceMetadata(

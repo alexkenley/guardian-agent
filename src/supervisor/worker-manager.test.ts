@@ -1240,6 +1240,13 @@ describe('WorkerManager', () => {
           metadata: {
             skipTestDelegatedEnvelope: true,
             groundedSynthesis: { available: true },
+            workerExecution: {
+              lifecycle: 'failed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'degraded',
+              terminationReason: 'max_rounds',
+            },
           },
         };
       }
@@ -1327,6 +1334,7 @@ describe('WorkerManager', () => {
       reason: 'answer_only_retry',
       unsatisfiedStepIds: ['step_3'],
     });
+    expect(result.metadata?.workerExecution).toBeUndefined();
     const envelope = readDelegatedResultEnvelope(result.metadata);
     expect(envelope?.verification).toMatchObject({
       decision: 'satisfied',
@@ -7010,7 +7018,16 @@ describe('WorkerManager', () => {
       if (continuation?.approvalId === 'approval-automation-2') {
         return {
           content: 'Created the task and weekly automation.',
-          metadata: continuationToolMetadata('automation_save', 'succeeded'),
+          metadata: {
+            ...continuationToolMetadata('automation_save', 'succeeded'),
+            workerExecution: {
+              lifecycle: 'failed',
+              source: 'tool_loop',
+              completionReason: 'model_response',
+              responseQuality: 'final',
+              terminationReason: 'clean_exit',
+            },
+          },
         };
       }
       return {
@@ -7149,6 +7166,7 @@ describe('WorkerManager', () => {
     );
 
     expect(completed?.content).toBe('Created the task and weekly automation.');
+    expect(completed?.metadata?.workerExecution).toBeUndefined();
     const continuationToolTraces = intentRoutingTrace.record.mock.calls
       .map(([entry]) => entry)
       .filter((entry) => entry.stage === 'delegated_tool_call_completed');
