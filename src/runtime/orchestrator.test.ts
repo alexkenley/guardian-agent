@@ -183,6 +183,63 @@ describe('AssistantOrchestrator', () => {
     ]);
   });
 
+  it('marks queued request cancellation distinctly from failures', async () => {
+    const orchestrator = new AssistantOrchestrator();
+    const traces: string[] = [];
+    orchestrator.subscribe((trace) => {
+      if (trace.requestId === 'queued-cancel') {
+        traces.push(trace.status);
+      }
+    });
+
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const p1 = orchestrator.dispatch(
+      { agentId: 'default', userId: 'owner', channel: 'web', content: 'first' },
+      async () => {
+        await firstGate;
+        return { content: 'done' };
+      },
+    );
+
+    await sleep(10);
+
+    const p2 = orchestrator.dispatch(
+      {
+        requestId: 'queued-cancel',
+        agentId: 'default',
+        userId: 'owner',
+        channel: 'web',
+        content: 'second',
+      },
+      async () => ({ content: 'should-not-run' }),
+    );
+    const cancelled = p2.catch((err) => err);
+
+    orchestrator.cancelSession(
+      { agentId: 'default', userId: 'owner', channel: 'web' },
+      'Canceled from the web UI.',
+    );
+
+    const err = await cancelled;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe('Canceled from the web UI.');
+    expect(traces).toContain('cancelled');
+
+    releaseFirst?.();
+    await p1;
+
+    const state = orchestrator.getState();
+    const trace = state.traces.find((entry) => entry.requestId === 'queued-cancel');
+    expect(trace?.status).toBe('cancelled');
+    expect(trace?.completedAt).toBeTypeOf('number');
+    expect(trace?.endToEndMs).toBeGreaterThanOrEqual(0);
+    expect(state.summary.failedRequests).toBe(0);
+  });
+
   it('captures step-level traces from dispatch context', async () => {
     const orchestrator = new AssistantOrchestrator();
 

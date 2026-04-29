@@ -22,6 +22,7 @@ export type DashboardRunStatus =
   | 'verification_pending'
   | 'blocked'
   | 'interrupted'
+  | 'cancelled'
   | 'completed'
   | 'failed';
 
@@ -734,7 +735,8 @@ export class RunTimelineStore {
       const terminal = record.detail.summary.status === 'completed'
         || record.detail.summary.status === 'failed'
         || record.detail.summary.status === 'blocked'
-        || record.detail.summary.status === 'interrupted';
+        || record.detail.summary.status === 'interrupted'
+        || record.detail.summary.status === 'cancelled';
       if (!terminal) continue;
       if (now - record.detail.summary.lastUpdatedAt > this.completedRetentionMs) {
         this.runs.delete(runId);
@@ -895,6 +897,8 @@ function humanizeLiveSummaryStatus(status: DashboardRunStatus): string {
       return 'Blocked';
     case 'interrupted':
       return 'Interrupted';
+    case 'cancelled':
+      return 'Cancelled';
     case 'completed':
       return 'Completed';
     case 'failed':
@@ -975,7 +979,8 @@ function buildRunLiveSummary(
     || status === 'blocked'
     || status === 'awaiting_approval'
     || status === 'verification_pending'
-    || status === 'interrupted';
+    || status === 'interrupted'
+    || status === 'cancelled';
 
   if (terminalStatus) {
     while (normalizedItems.length > 0 && isGenericWorkingLiveSummaryTitle(normalizedItems[normalizedItems.length - 1]?.title)) {
@@ -1624,7 +1629,11 @@ function sanitizePreview(value: unknown): string | undefined {
 }
 
 function inferCompletedAt(baseStatus: DashboardRunStatus, lastUpdatedAt: number): number | undefined {
-  if (baseStatus === 'completed' || baseStatus === 'failed' || baseStatus === 'blocked' || baseStatus === 'interrupted') {
+  if (baseStatus === 'completed'
+    || baseStatus === 'failed'
+    || baseStatus === 'blocked'
+    || baseStatus === 'interrupted'
+    || baseStatus === 'cancelled') {
     return lastUpdatedAt;
   }
   return undefined;
@@ -1648,6 +1657,8 @@ function mapAssistantTraceStatus(status: AssistantDispatchTrace['status']): Dash
       return 'running';
     case 'failed':
       return 'failed';
+    case 'cancelled':
+      return 'cancelled';
     case 'succeeded':
     default:
       return 'completed';

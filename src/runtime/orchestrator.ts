@@ -52,7 +52,7 @@ export interface AssistantSessionState {
   responseSource?: ResponseSourceMetadata;
 }
 
-export type AssistantTraceStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+export type AssistantTraceStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type AssistantTraceStepStatus = 'running' | 'succeeded' | 'failed';
 
 export interface AssistantTraceStep {
@@ -374,13 +374,10 @@ export class AssistantOrchestrator {
     const session = this.sessions.get(key);
     if (!session) return;
 
-    const error = new Error(reason);
     const now = Date.now();
     for (const pending of session.queue) {
-      pending.trace.status = 'failed';
-      pending.trace.queueWaitMs = Math.max(0, now - pending.enqueuedAt);
-      this.emitTrace(pending.trace);
-      pending.reject(error);
+      this.cancelPendingTrace(session, pending, reason, now);
+      pending.reject(new Error(reason));
     }
     session.queue = [];
     session.queueDepth = 0;
@@ -539,11 +536,9 @@ export class AssistantOrchestrator {
   private async runPendingRequest(session: SessionRecord, pending: PendingRequest): Promise<void> {
     if (pending.input.abortSignal?.aborted) {
       session.running = false;
-      const queueWaitMs = Math.max(0, Date.now() - pending.enqueuedAt);
-      pending.trace.status = 'failed';
-      pending.trace.queueWaitMs = queueWaitMs;
-      this.emitTrace(pending.trace);
-      pending.reject(new Error(`Request '${pending.requestId}' canceled by user before execution.`));
+      const reason = `Request '${pending.requestId}' canceled by user before execution.`;
+      this.cancelPendingTrace(session, pending, reason, Date.now());
+      pending.reject(new Error(reason));
       return;
     }
 
@@ -666,23 +661,28 @@ export class AssistantOrchestrator {
       const executionMs = Math.max(0, completedAt - startedAt);
       const endToEndMs = Math.max(0, completedAt - pending.enqueuedAt);
       const errorText = err instanceof Error ? err.message : String(err);
+      const cancelled = pending.input.abortSignal?.aborted === true;
 
-      session.errorCount += 1;
-      session.totalExecutionMs += executionMs;
-      session.totalEndToEndMs += endToEndMs;
+      if (!cancelled) {
+        session.errorCount += 1;
+        session.totalExecutionMs += executionMs;
+        session.totalEndToEndMs += endToEndMs;
+      }
       session.lastExecutionMs = executionMs;
       session.lastEndToEndMs = endToEndMs;
       session.lastCompletedAt = completedAt;
       session.lastError = errorText;
 
-      trace.status = 'failed';
+      trace.status = cancelled ? 'cancelled' : 'failed';
       trace.completedAt = completedAt;
       trace.executionMs = executionMs;
       trace.endToEndMs = endToEndMs;
       trace.error = errorText;
       this.emitTrace(trace);
 
-      this.failedRequests += 1;
+      if (!cancelled) {
+        this.failedRequests += 1;
+      }
       pending.reject(err);
     } finally {
       session.running = false;
@@ -703,5 +703,24 @@ export class AssistantOrchestrator {
     for (const listener of this.listeners) {
       listener(snapshot);
     }
+  }
+
+  private cancelPendingTrace(
+    session: SessionRecord,
+    pending: PendingRequest,
+    reason: string,
+    completedAt: number,
+  ): void {
+    const queueWaitMs = Math.max(0, completedAt - pending.enqueuedAt);
+    pending.trace.status = 'cancelled';
+    pending.trace.completedAt = completedAt;
+    pending.trace.queueWaitMs = queueWaitMs;
+    pending.trace.endToEndMs = Math.max(0, completedAt - pending.enqueuedAt);
+    pending.trace.error = reason;
+    session.lastCompletedAt = completedAt;
+    session.lastQueueWaitMs = queueWaitMs;
+    session.lastEndToEndMs = pending.trace.endToEndMs;
+    session.lastError = reason;
+    this.emitTrace(pending.trace);
   }
 }

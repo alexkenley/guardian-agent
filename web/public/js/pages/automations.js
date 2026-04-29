@@ -3109,6 +3109,7 @@ function statusColor(status) {
   if (status === 'completed') return 'var(--success)';
   if (status === 'failed') return 'var(--error)';
   if (status === 'blocked') return 'var(--warning)';
+  if (status === 'cancelled') return 'var(--warning)';
   if (status === 'running') return 'var(--accent)';
   if (status === 'awaiting_approval') return 'var(--warning)';
   if (status === 'pending_approval') return 'var(--warning)';
@@ -3122,6 +3123,8 @@ function timelineStatusColor(status) {
     case 'failed':
       return 'var(--error)';
     case 'blocked':
+      return 'var(--warning)';
+    case 'cancelled':
       return 'var(--warning)';
     case 'running':
       return 'var(--accent)';

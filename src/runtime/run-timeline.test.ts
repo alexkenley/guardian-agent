@@ -213,6 +213,28 @@ describe('RunTimelineStore', () => {
     expect(run?.items[0]?.detail).toBe('Run Browser Read Smoke now.');
   });
 
+  it('surfaces cancelled assistant traces as terminal run status', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-cancelled',
+      runId: 'req-cancelled',
+      status: 'cancelled',
+      startedAt: undefined,
+      completedAt: undefined,
+      executionMs: undefined,
+      responsePreview: undefined,
+      error: 'Canceled by user.',
+      steps: [],
+      nodes: [],
+    }));
+
+    const run = store.getRun('req-cancelled');
+    expect(run?.summary.status).toBe('cancelled');
+    expect(run?.summary.completedAt).toBeTypeOf('number');
+    expect(run?.summary.error).toBe('Canceled by user.');
+    expect(run?.liveSummary.label).toBe('Cancelled');
+  });
+
   it('adds humanized orchestrator step items for ordinary assistant runs', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({

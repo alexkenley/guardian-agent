@@ -4583,7 +4583,10 @@ function renderSessionRunTimeline(session) {
 function mapTimelineRunTone(status) {
   if (status === 'completed') return 'completed';
   if (status === 'failed') return 'blocked';
-  if (status === 'blocked' || status === 'awaiting_approval' || status === 'verification_pending') return 'warn';
+  if (status === 'blocked'
+    || status === 'awaiting_approval'
+    || status === 'verification_pending'
+    || status === 'cancelled') return 'warn';
   if (status === 'running') return 'active';
   return 'active';
 }
