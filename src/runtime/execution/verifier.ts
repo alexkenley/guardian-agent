@@ -101,6 +101,10 @@ export function verifyDelegatedResult(input: {
     if (repoEvidenceFailure) {
       return repoEvidenceFailure;
     }
+    const repoDepthFailure = verifyRepoEvidenceDepth(input.envelope);
+    if (repoDepthFailure) {
+      return repoDepthFailure;
+    }
     const exactFileReferenceFailure = verifyExactFileReferenceRequirements(input.envelope);
     if (exactFileReferenceFailure) {
       return exactFileReferenceFailure;
@@ -544,6 +548,69 @@ function findRepoEvidenceStepIds(
       || category.trim() === 'runtime_evidence'
     )) === true)
     .map((step) => step.stepId);
+}
+
+function verifyRepoEvidenceDepth(
+  envelope: DelegatedResultEnvelope,
+): VerificationDecision | null {
+  const answer = envelope.finalUserAnswer?.trim() || '';
+  if (!answer || !contractLooksLikeImplementationLocationRequest(envelope)) {
+    return null;
+  }
+  const successfulReceiptIds = new Set(
+    envelope.evidenceReceipts
+      .filter((receipt) => receipt.status === 'succeeded')
+      .map((receipt) => receipt.receiptId),
+  );
+  const successfulRepoReceiptIds = new Set(
+    envelope.evidenceReceipts
+      .filter((receipt) => (
+        receipt.status === 'succeeded'
+        && receipt.sourceType === 'tool_call'
+        && typeof receipt.toolName === 'string'
+        && REPO_EVIDENCE_TOOL_NAMES.has(receipt.toolName)
+      ))
+      .map((receipt) => receipt.receiptId),
+  );
+  const successfulRepoReadReceiptIds = new Set(
+    envelope.evidenceReceipts
+      .filter((receipt) => receipt.status === 'succeeded' && receipt.sourceType === 'tool_call' && receipt.toolName === 'fs_read')
+      .map((receipt) => receipt.receiptId),
+  );
+  if (successfulRepoReceiptIds.size <= 0) {
+    return null;
+  }
+  const implementationClaims = envelope.claims.filter((claim) => (
+    claim.kind === 'implementation_file'
+    && claim.evidenceReceiptIds.some((receiptId) => successfulReceiptIds.has(receiptId))
+  ));
+  if (implementationClaims.length > 0) {
+    return null;
+  }
+  const repoReadFileClaims = envelope.claims.filter((claim) => (
+    claim.kind === 'file_reference'
+    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoReadReceiptIds.has(receiptId))
+  ));
+  if (repoReadFileClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadFileClaims)) {
+    return null;
+  }
+  const repoFileClaims = envelope.claims.filter((claim) => (
+    claim.kind === 'file_reference'
+    && claim.evidenceReceiptIds.some((receiptId) => successfulRepoReceiptIds.has(receiptId))
+  ));
+  if (repoFileClaims.length <= 0 || !finalAnswerCitesFileReference(answer, repoFileClaims)) {
+    return null;
+  }
+  const repoStepIds = findRepoEvidenceStepIds(envelope.taskContract.plan.steps);
+  const answerStepIds = findAnswerStepIds(envelope.taskContract.plan);
+  return {
+    decision: 'insufficient',
+    reasons: ['Delegated worker cited repo search-hit files for an implementation-location request without reading and confirming implementation files.'],
+    retryable: true,
+    requiredNextAction: 'Retry the delegated run with targeted repo inspection; read the likely implementation files before citing them as the answer.',
+    missingEvidenceKinds: ['implementation_file_claim'],
+    unsatisfiedStepIds: [...new Set([...repoStepIds, ...answerStepIds])],
+  };
 }
 
 interface RepoInspectionVerificationResult {
