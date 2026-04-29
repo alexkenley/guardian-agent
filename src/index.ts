@@ -436,7 +436,11 @@ function resolveSecurityTriageProviderName(cfg: GuardianAgentConfig): string {
   if (mode === 'external') {
     return findProviderByLocality(cfg, 'external') ?? cfg.defaultProvider;
   }
-  return findProviderByLocality(cfg, 'local')
+  if (cfg.llm[cfg.defaultProvider]?.enabled !== false) {
+    return cfg.defaultProvider;
+  }
+  return findProviderByTier(cfg, 'managed_cloud')
+    ?? findProviderByLocality(cfg, 'local')
     ?? findProviderByLocality(cfg, 'external')
     ?? cfg.defaultProvider;
 }
@@ -6127,17 +6131,8 @@ async function main(): Promise<void> {
   // Resolve local (Ollama) and external (OpenAI/Anthropic) providers for
   // inline evaluation and audit analysis.
   {
-    let localProvider: LLMProvider | undefined;
-    let externalLlmProvider: LLMProvider | undefined;
-    for (const [name, llmCfg] of Object.entries(config.llm)) {
-      const provider = runtime.getProvider(name);
-      if (!provider) continue;
-      if (getProviderLocality(llmCfg) === 'local' && !localProvider) {
-        localProvider = provider;
-      } else if (getProviderLocality(llmCfg) === 'external' && !externalLlmProvider) {
-        externalLlmProvider = provider;
-      }
-    }
+    const localProvider = localProviderName ? runtime.getProvider(localProviderName) : undefined;
+    const externalLlmProvider = externalProviderName ? runtime.getProvider(externalProviderName) : undefined;
     guardianAgentService.setProviders(localProvider, externalLlmProvider);
     // Sentinel audit shares the same provider resolution (prefers external for deeper analysis)
     sentinelAuditService.setProvider(externalLlmProvider ?? localProvider);
