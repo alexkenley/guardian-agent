@@ -39,6 +39,26 @@ The proven baseline from the archived durable graph plan includes:
 - Complex multi-domain read requests are app-proven across web/browser, repo search, memory, automations, and configured connectors.
 - Full verification recently passed with `npm run check`, `npm run build`, and `npm test`.
 
+## Progress Update - 2026-04-29
+
+Completed and proven in this follow-on wave:
+
+- Run/job UX exposes delegated, coding, and graph work as `running`, `blocked`, `failed`, `cancelled`, or `completed`, including retained cancelled terminal state.
+- Coding run cards derive workflow stage rails from existing `RunTimelineStore` and execution graph events, including inspect, plan, implement, approve, verify, and summarize.
+- Final-answer verification rejects support/test-only implementation evidence and requires mixed-source coverage for multi-domain answers.
+- Remote sandbox execution is routed through Intent Gateway as `coding_task` / `code_remote_exec`, not through the direct coding backend or automation output path.
+- Remote sandbox approval resume uses structured tool evidence. Vercel Production live verification returned exact `STDOUT:\n/vercel/sandbox`; duplicate same-command approval loops are suppressed.
+- Unreachable remote sandbox targets fail graph/job state cleanly. Daytona Main live verification returned HTTP 502 and produced graph `failed`, worker lifecycle `failed`, and run status `failed`.
+- Full source verification after the remote-exec slice passed with `npm run check`, `npm run build`, and `npm test -- --reporter=dot` across 316 test files and 3482 tests.
+
+Remaining work:
+
+- Continue live connector stress for Gmail/Google Workspace, Microsoft 365/Outlook/calendar, WHM/cPanel, memory, automations, browser reads, and repo search/write.
+- Continue complex multi-domain synthesis/search sweeps and tighten final-answer verification if live traces show evidence coverage gaps.
+- Inspect the Coding Run Card in live UI for stage/status clarity and polish.
+- Complete the end-phase Daytona/Vercel sandbox capability quality pass: improve status/error diagnostics, profile drift handling, and sandbox reachability reporting.
+- Diagnose whether Daytona Main HTTP 502 is external service drift, local profile/config drift, or a Guardian diagnostics gap.
+
 ## Priority 1: Long-Running Run And Job UX
 
 Goal: long-running graph, delegated, connector, and coding requests should feel inspectable rather than stuck or lost when they exceed an HTTP response window.
