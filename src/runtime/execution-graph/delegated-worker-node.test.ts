@@ -8,8 +8,10 @@ import {
   buildDelegatedWorkerStartProjection,
   buildDelegatedWorkerTerminalProjection,
   normalizeDelegatedGraphBlockerKind,
+  startDelegatedWorkerGraphRun,
 } from './delegated-worker-node.js';
 import type { VerificationDecision } from '../execution/types.js';
+import type { ExecutionGraphEvent } from './graph-events.js';
 
 describe('delegated worker graph node helpers', () => {
   it('builds delegated worker start projection events', () => {
@@ -135,6 +137,71 @@ describe('delegated worker graph node helpers', () => {
       }],
       edges: [],
     });
+  });
+
+  it('starts a delegated worker graph run through graph-owned start assembly', () => {
+    const createdGraphs: unknown[] = [];
+    const appendedEvents: ExecutionGraphEvent[] = [];
+    const timelineEvents: ExecutionGraphEvent[] = [];
+
+    const run = startDelegatedWorkerGraphRun({
+      graphStore: {
+        createGraph: (input) => createdGraphs.push(input),
+        appendEvent: (event) => appendedEvents.push(event),
+      },
+      runTimeline: {
+        ingestExecutionGraphEvent: (event) => timelineEvents.push(event),
+      },
+      context: {
+        graphId: 'execution-graph:delegated-task:start-run:delegated-worker',
+        executionId: 'delegated-task:start-run',
+        rootExecutionId: 'root-start-run',
+        requestId: 'request-start-run',
+        runId: 'request-start-run',
+        channel: 'web',
+        agentId: 'agent-1',
+        userId: 'user-1',
+        title: 'Workspace Implementer',
+      },
+      intent: {
+        route: 'coding_task',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect repository.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        entities: {},
+      },
+      securityContext: {
+        agentId: 'agent-1',
+        userId: 'user-1',
+        channel: 'web',
+      },
+      ownerAgentId: 'agent-1',
+      executionProfileName: 'managed-cloud',
+      summary: 'Delegated to Workspace Implementer.',
+      payload: {
+        taskContractKind: 'repo_inspection',
+      },
+      timestamp: 3_456,
+    });
+
+    expect(run.sequence).toBe(2);
+    expect(run.context.graphId).toBe('execution-graph:delegated-task:start-run:delegated-worker');
+    expect(createdGraphs).toHaveLength(1);
+    expect(appendedEvents).toHaveLength(2);
+    expect(timelineEvents).toEqual(appendedEvents);
+    expect(appendedEvents.map((event) => [
+      event.kind,
+      event.nodeKind,
+      event.payload.controller,
+      event.payload.taskContractKind,
+    ])).toEqual([
+      ['graph_started', undefined, 'delegated_worker', 'repo_inspection'],
+      ['node_started', 'delegated_worker', undefined, 'repo_inspection'],
+    ]);
   });
 
   it('builds completed terminal verification projection events', () => {

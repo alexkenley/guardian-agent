@@ -41,6 +41,15 @@ export interface DelegatedWorkerGraphRun {
   sequence: number;
 }
 
+export interface DelegatedWorkerGraphStoreWriter {
+  createGraph(input: CreateExecutionGraphInput): unknown;
+  appendEvent(event: ExecutionGraphEvent): unknown;
+}
+
+export interface DelegatedWorkerGraphTimelineWriter {
+  ingestExecutionGraphEvent(event: ExecutionGraphEvent): unknown;
+}
+
 export interface DelegatedWorkerGraphJobMetadata {
   graphId: string;
   nodeId: string;
@@ -113,6 +122,20 @@ export interface DelegatedWorkerStartProjectionInput {
   decision: IntentGatewayDecision;
   summary: string;
   payload?: Record<string, unknown>;
+}
+
+export interface StartDelegatedWorkerGraphRunInput {
+  graphStore: DelegatedWorkerGraphStoreWriter;
+  runTimeline?: DelegatedWorkerGraphTimelineWriter | null;
+  context: BuildDelegatedWorkerGraphContextInput;
+  intent: IntentGatewayDecision;
+  securityContext?: ExecutionSecurityContext;
+  trigger?: ExecutionGraphTrigger;
+  ownerAgentId?: string;
+  executionProfileName?: string;
+  summary: string;
+  payload?: Record<string, unknown>;
+  timestamp: number;
 }
 
 export interface DelegatedWorkerStartProjection {
@@ -282,6 +305,35 @@ export function buildDelegatedWorkerStartProjection(
     ...(input.payload ?? {}),
   }, 'node:started');
   return { events, sequence };
+}
+
+export function startDelegatedWorkerGraphRun(
+  input: StartDelegatedWorkerGraphRunInput,
+): DelegatedWorkerGraphRun {
+  const context = buildDelegatedWorkerGraphContext(input.context);
+  input.graphStore.createGraph(buildDelegatedWorkerGraphInput({
+    context,
+    intent: input.intent,
+    securityContext: input.securityContext,
+    trigger: input.trigger,
+    ownerAgentId: input.ownerAgentId,
+    executionProfileName: input.executionProfileName,
+  }));
+  const run: DelegatedWorkerGraphRun = { context, sequence: 0 };
+  const projection = buildDelegatedWorkerStartProjection({
+    context,
+    sequenceStart: run.sequence,
+    timestamp: input.timestamp,
+    decision: input.intent,
+    summary: input.summary,
+    payload: input.payload,
+  });
+  run.sequence = projection.sequence;
+  for (const event of projection.events) {
+    input.runTimeline?.ingestExecutionGraphEvent(event);
+    input.graphStore.appendEvent(event);
+  }
+  return run;
 }
 
 export function buildDelegatedWorkerTerminalProjection(

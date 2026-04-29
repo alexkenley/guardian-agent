@@ -1454,6 +1454,16 @@ Checkpoint after the large-source repo search grounding cleanup:
 - The rebuilt app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` confirmed the live API was running.
 - Live API replay with request id `codex-live-search-uplift-42806` proved the original missed-call-site shape: `fs_search` returned both `src/supervisor/worker-manager.ts` occurrences for `emitMutationResumeGraphEvent` (import and production call) and the definition in `src/runtime/execution-graph/mutation-node.ts`.
 
+Checkpoint after the delegated-worker graph-start ownership cleanup:
+
+- `src/runtime/execution-graph/delegated-worker-node.ts` now owns delegated-worker graph start assembly through `startDelegatedWorkerGraphRun`: context construction, graph input creation, start projection, graph-store event append, and run-timeline projection.
+- `WorkerManager` now supplies only broker-safe request metadata, security context, trigger, execution profile label, task-contract trace metadata, and timestamp for delegated-worker graph startup. It no longer assembles delegated-worker graph input or start lifecycle events inline.
+- This is a boundary cleanup only: worker dispatch, brokered tool authority, pending-action handling, provider/profile selection, and Intent Gateway routing are unchanged.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/delegated-worker-node.test.ts src/supervisor/worker-manager.test.ts` reported 55 passing tests.
+- Local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3418 tests).
+- The rebuilt app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` and `GET http://localhost:3000/api/providers` confirmed the live API/provider state. `GET /api/routing/status` is not an app endpoint.
+- Live API replay with request id `codex-live-graph-start-42807` proved delegated graph startup still works after the ownership move: the mixed web + repo + memory request completed through `ollama-cloud-tools` / `glm-4.7`, returned a completed `executionGraph`, satisfied delegated verification, emitted web/search/memory receipts, and showed no provider fallback.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.

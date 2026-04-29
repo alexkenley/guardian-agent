@@ -64,12 +64,10 @@ import {
   type DirectReasoningGraphContext,
 } from '../runtime/execution-graph/direct-reasoning-node.js';
 import {
-  buildDelegatedWorkerGraphContext,
   buildDelegatedWorkerGraphCompletion,
   buildDelegatedWorkerGraphFailure,
-  buildDelegatedWorkerGraphInput,
   buildDelegatedWorkerRunningMetadata,
-  buildDelegatedWorkerStartProjection,
+  startDelegatedWorkerGraphRun,
   type DelegatedWorkerGraphCompletion,
   type DelegatedWorkerGraphJobMetadata,
   type DelegatedWorkerGraphRun,
@@ -1504,23 +1502,24 @@ export class WorkerManager {
     const parentExecutionId = input.request.delegation?.executionId;
     const codeContext = input.request.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
     const codeSessionId = input.request.delegation?.codeSessionId ?? codeContext?.sessionId;
-    const context = buildDelegatedWorkerGraphContext({
-      graphId: `execution-graph:${input.taskRunId}:delegated-worker`,
-      executionId: input.taskRunId,
-      taskExecutionId: input.taskRunId,
-      rootExecutionId,
-      ...(parentExecutionId ? { parentExecutionId } : {}),
-      requestId: input.requestId,
-      runId: input.requestId,
-      channel: input.request.message.channel,
-      agentId: input.target.agentId,
-      userId: input.request.userId,
-      ...(codeSessionId ? { codeSessionId } : {}),
-      title: describeDelegatedTarget(input.target),
-      decision: input.intentDecision,
-    });
-    this.observability.executionGraphStore.createGraph(buildDelegatedWorkerGraphInput({
-      context,
+    return startDelegatedWorkerGraphRun({
+      graphStore: this.observability.executionGraphStore,
+      runTimeline: this.observability.runTimeline,
+      context: {
+        graphId: `execution-graph:${input.taskRunId}:delegated-worker`,
+        executionId: input.taskRunId,
+        taskExecutionId: input.taskRunId,
+        rootExecutionId,
+        ...(parentExecutionId ? { parentExecutionId } : {}),
+        requestId: input.requestId,
+        runId: input.requestId,
+        channel: input.request.message.channel,
+        agentId: input.target.agentId,
+        userId: input.request.userId,
+        ...(codeSessionId ? { codeSessionId } : {}),
+        title: describeDelegatedTarget(input.target),
+        decision: input.intentDecision,
+      },
       intent: input.intentDecision,
       securityContext: {
         agentId: input.target.agentId,
@@ -1536,22 +1535,10 @@ export class WorkerManager {
       },
       ownerAgentId: input.target.agentId,
       executionProfileName: input.request.executionProfile?.id ?? input.request.executionProfile?.providerName,
-    }));
-    const run: DelegatedWorkerGraphRun = { context, sequence: 0 };
-    const projection = buildDelegatedWorkerStartProjection({
-      context,
-      sequenceStart: run.sequence,
       timestamp: this.observability.now?.() ?? Date.now(),
-      decision: input.intentDecision,
       summary: input.detail,
       payload: buildDelegatedTaskContractTraceMetadata(input.taskContract),
     });
-    run.sequence = projection.sequence;
-    for (const event of projection.events) {
-      this.observability.runTimeline?.ingestExecutionGraphEvent(event);
-      this.observability.executionGraphStore?.appendEvent(event);
-    }
-    return run;
   }
 
   private completeDelegatedWorkerGraph(
