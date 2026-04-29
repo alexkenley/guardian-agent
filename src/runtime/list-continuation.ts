@@ -87,8 +87,10 @@ export function hasPagedListFollowUpRequest(
   content: string,
   _turnRelation: IntentGatewayDecision['turnRelation'] | undefined,
 ): boolean {
-  return /\b(additional|more|remaining|next|other)\b/i.test(content)
-    || /\brest\b/.test(content);
+  return /\b(additional|more|remaining|next)\b/i.test(content)
+    || /\brest\b/.test(content)
+    || /\bother\s+\d{1,3}\b/i.test(content)
+    || /\bother\s+(?:items|results|entries|messages|emails|automations|links|pages)\b/i.test(content);
 }
 
 export function resolvePagedListContinuationRoute(input: {

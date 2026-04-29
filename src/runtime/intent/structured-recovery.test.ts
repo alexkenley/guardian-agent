@@ -119,6 +119,63 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.preferredAnswerPath).toBe('derived.workload');
   });
 
+  it('keeps exact-answer turns direct when paged-list continuation state is active', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Answer the self-contained exact-response request directly.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      entities: {},
+    }, {
+      sourceContent: 'Reply with exactly this marker and no other text: POSTGRAPH-FRESH-42801',
+      continuity: {
+        continuityKey: 'default:owner',
+        linkedSurfaceCount: 12,
+        continuationStateKind: 'automation_catalog_list',
+      },
+    });
+
+    expect(decision.route).toBe('general_assistant');
+    expect(decision.executionClass).toBe('direct_assistant');
+    expect(decision.requiresToolSynthesis).toBe(false);
+    expect(decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('repairs automation list requests that drift into authoring back to automation control', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'automation_authoring',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'List saved automations.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+      simpleVsComplex: 'complex',
+    }, {
+      sourceContent: 'List my saved automations. Keep the answer short and include only names and whether each is enabled.',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('automation_control');
+    expect(decision.operation).toBe('read');
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('repairs explicit conversation transcript references into follow-up turns when continuity is available', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',

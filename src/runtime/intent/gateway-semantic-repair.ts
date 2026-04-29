@@ -95,7 +95,11 @@ export function repairStructuredIntentGatewayRoute(
   if (route === 'unknown' && explicitAutomationAuthoring) {
     return 'automation_authoring';
   }
-  if (route === 'unknown' && explicitAutomationControl) {
+  if (
+    (route === 'unknown' || (route === 'automation_authoring' && operation !== 'create'))
+    && explicitAutomationControl
+    && !explicitAutomationAuthoring
+  ) {
     return 'automation_control';
   }
   if (route === 'unknown' && explicitProviderConfig) {

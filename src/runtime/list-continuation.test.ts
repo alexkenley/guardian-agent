@@ -151,4 +151,12 @@ describe('list-continuation', () => {
       turnRelation: 'new_request',
     })).toBeNull();
   });
+
+  it('does not treat exact-answer wording as a paged-list follow-up', () => {
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'automation_catalog_list',
+      content: 'Reply with exactly this marker and no other text: POSTGRAPH-FRESH-42801',
+      turnRelation: 'new_request',
+    })).toBeNull();
+  });
 });
