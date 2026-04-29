@@ -70,7 +70,6 @@ import {
 } from './runtime/code-workspace-map.js';
 import { resolveManagedPlaywrightLaunch } from './runtime/playwright-launch.js';
 import { CodingBackendService } from './runtime/coding-backend-service.js';
-import { listRemoteExecutionTargets } from './runtime/remote-execution/policy.js';
 import {
   assessCodeWorkspaceTrustSync,
   getEffectiveCodeWorkspaceTrustState,
@@ -1357,7 +1356,7 @@ function buildDashboardCallbacks(
         session.workState.workspaceTrust,
         session.workState.workspaceTrustReview,
       ) ?? session.workState.workspaceTrust?.state ?? null,
-      remoteExecutionTargets: listRemoteExecutionTargets(configRef.current.assistant.tools.cloud),
+      remoteExecutionTargets: toolExecutor.getRemoteExecutionTargets(),
     });
     const updated = codeSessionStore.updateSession({
       sessionId: session.id,

@@ -6232,16 +6232,16 @@ function renderSessionCard(session) {
 
 function renderSandboxTargetOption(target, sandboxState) {
   const backend = describeRemoteExecutionBackend(target);
-  const isReady = target.capabilityState === 'ready' && target.healthState !== 'unreachable';
+  const capabilityReady = target.capabilityState === 'ready';
   const selected = sandboxState?.selectedTargetId === target.id;
-  const statusBadge = isReady
-    ? '<span class="badge badge-info">READY</span>'
+  const statusBadge = capabilityReady
+    ? '<span class="badge badge-info">CAPABILITY READY</span>'
     : `<span class="badge badge-warn">${esc(String(target.capabilityState || 'unavailable').toUpperCase())}</span>`;
   const healthBadge = target.healthState === 'healthy'
-    ? '<span class="badge badge-success">READY</span>'
+    ? '<span class="badge badge-success">REACHABLE</span>'
     : target.healthState === 'unreachable'
       ? '<span class="badge badge-warn">UNREACHABLE</span>'
-      : '';
+      : '<span class="badge badge-idle">HEALTH UNKNOWN</span>';
   const networkSummary = target.networkMode === 'domain_allowlist'
     ? `${target.allowedDomains?.length || 0} allowed domain${(target.allowedDomains?.length || 0) === 1 ? '' : 's'}`
     : target.networkMode === 'cidr_allowlist'

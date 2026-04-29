@@ -730,6 +730,13 @@ function formatRemoteSandboxTargetLine(target: RemoteExecutionTargetDescriptor, 
     return text || '(none)';
   };
   const isDefault = defaultTargetId && target.id === defaultTargetId;
-  const reachable = target.capabilityState === 'ready' && target.healthState !== 'unreachable';
-  return `- ${formatValue(target.profileName || target.profileId)} | provider=${target.providerFamily} | backend=${target.backendKind} | capability=${target.capabilityState} | reachable=${reachable ? 'yes' : 'no'} | default=${isDefault ? 'yes' : 'no'} | profile=${formatValue(target.profileId)}${target.healthReason ? ` | note=${formatValue(target.healthReason)}` : ` | note=${formatValue(target.reason)}`}`;
+  const healthState = target.healthState || 'unknown';
+  const reachable = target.capabilityState !== 'ready'
+    ? 'no'
+    : healthState === 'healthy'
+      ? 'yes'
+      : healthState === 'unreachable'
+        ? 'no'
+        : 'unknown';
+  return `- ${formatValue(target.profileName || target.profileId)} | provider=${target.providerFamily} | backend=${target.backendKind} | capability=${target.capabilityState} | health=${formatValue(healthState)} | reachable=${reachable} | default=${isDefault ? 'yes' : 'no'} | profile=${formatValue(target.profileId)}${target.healthReason ? ` | note=${formatValue(target.healthReason)}` : ` | note=${formatValue(target.reason)}`}`;
 }

@@ -221,6 +221,84 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
     expect(result?.content).toContain('reachable=no');
   });
 
+  it('reports unknown reachability when a configured remote target has no health probe yet', async () => {
+    const executeDirectCodeSessionTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'code_session_current') {
+        return {
+          success: true,
+          output: {
+            session: {
+              id: 'session-1',
+              ownerUserId: 'owner',
+              title: 'Guardian Agent',
+              workspaceRoot: 'S:\\Development\\GuardianAgent',
+              resolvedRoot: 'S:\\Development\\GuardianAgent',
+              workState: {
+                managedSandboxes: [],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+    const getCodeSessionManagedSandboxes = vi.fn(async () => ({
+      defaultTargetId: 'vercel:vercel-prod',
+      targets: [
+        {
+          id: 'vercel:vercel-prod',
+          profileId: 'vercel-prod',
+          profileName: 'Vercel Production',
+          providerFamily: 'vercel',
+          backendKind: 'vercel_sandbox',
+          capabilityState: 'ready',
+          reason: 'Ready for bounded remote sandbox execution.',
+          networkMode: 'allow_all',
+          allowedDomains: [],
+          allowedCidrs: [],
+        },
+      ],
+      sandboxes: [],
+    }));
+
+    const result = await tryDirectCodeSessionControlFromGateway({
+      toolsEnabled: true,
+      executeDirectCodeSessionTool,
+      getCodeSessionManagedSandboxes,
+      getActivePendingAction: vi.fn(() => null),
+      completePendingAction: vi.fn(),
+      resumeCodingTask: vi.fn(async () => null),
+      onMessage: vi.fn(async () => ({ content: 'unexpected' })),
+      message: createMessage({
+        content: 'Check Vercel status.',
+      }),
+      ctx: createCtx(),
+      decision: createDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        entities: {},
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Check Vercel sandbox status.',
+            expectedToolCategories: ['remote_sandbox_status'],
+            required: true,
+          },
+        ],
+      }),
+    });
+
+    expect(getCodeSessionManagedSandboxes).toHaveBeenCalledWith('session-1', 'owner');
+    expect(result?.content).toContain('provider=vercel');
+    expect(result?.content).toContain('capability=ready');
+    expect(result?.content).toContain('health=unknown');
+    expect(result?.content).toContain('reachable=unknown');
+  });
+
   it('reports when the current coding session has no attached managed sandboxes', async () => {
     const executeDirectCodeSessionTool = vi.fn(async () => ({
       success: true,
