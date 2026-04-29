@@ -114,6 +114,7 @@ import {
   completeGraphWriteSpecSynthesisNode,
 } from '../runtime/execution-graph/synthesis-node.js';
 import {
+  buildMutationToolRequest,
   emitMutationResumeGraphEvent,
   executeWriteSpecMutationNode,
   resumeWriteSpecMutationNodeAfterApproval,
@@ -721,7 +722,18 @@ export class WorkerManager {
         writeSpecArtifactId: writeSpec.artifactId,
       }, `${synthesisNodeId}:completed`, { nodeId: synthesisNodeId, nodeKind: 'synthesize' });
 
-      const toolRequest = buildGraphMutationToolRequest(input.request, input.requestId, codeContext, graphExecutionProfile);
+      const toolRequest = buildMutationToolRequest({
+        requestId: input.requestId,
+        agentId: input.request.agentId,
+        userId: input.request.userId,
+        surfaceId: input.request.message.surfaceId,
+        principalId: input.request.message.principalId ?? input.request.userId,
+        principalRole: input.request.message.principalRole ?? 'owner',
+        channel: input.request.message.channel,
+        codeContext,
+        toolContextMode: graphExecutionProfile?.toolContextMode,
+        activeSkillIds: input.request.activeSkills?.map((skill) => skill.id) ?? [],
+      });
       const mutationContext: MutationNodeExecutionContext = {
         graphId,
         executionId: input.taskRunId,
@@ -3928,27 +3940,6 @@ function buildDelegatedWorkerRunningDetail(
   const profileSuffix = profileLabel ? ` using ${profileLabel}` : '';
   const sessionSuffix = codeSessionId?.trim() ? ` in code session ${codeSessionId.trim()}` : '';
   return `${targetLabel} is working${profileSuffix}${sessionSuffix}.`;
-}
-
-function buildGraphMutationToolRequest(
-  request: WorkerMessageRequest,
-  requestId: string,
-  codeContext: ToolExecutionRequest['codeContext'] | undefined,
-  executionProfile: SelectedExecutionProfile | undefined,
-): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
-  return {
-    origin: 'assistant',
-    requestId,
-    agentId: request.agentId,
-    userId: request.userId,
-    surfaceId: request.message.surfaceId,
-    principalId: request.message.principalId ?? request.userId,
-    principalRole: request.message.principalRole ?? 'owner',
-    channel: request.message.channel,
-    ...(codeContext ? { codeContext } : {}),
-    toolContextMode: executionProfile?.toolContextMode,
-    activeSkills: request.activeSkills?.map((skill) => skill.id) ?? [],
-  };
 }
 
 function buildToolResultFromApprovalDecision(

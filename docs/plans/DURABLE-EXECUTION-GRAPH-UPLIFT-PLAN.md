@@ -1492,6 +1492,15 @@ Checkpoint after the delegated task-contract trace metadata ownership cleanup:
 - Local gates passed after the cleanup: `npm run check` and `npm run build`.
 - Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
 
+Checkpoint after the mutation-node tool-request envelope cleanup:
+
+- `src/runtime/execution-graph/mutation-node.ts` now owns `buildMutationToolRequest`, the request-envelope shape used when graph mutation nodes ask supervisor-owned `ToolExecutor` to run approved mutation tools.
+- `WorkerManager` still supplies runtime values, execution-profile tool-context mode, active skill ids, and the actual `ToolExecutor` callback. It no longer carries a local graph mutation request-envelope helper.
+- This is a mutation-node ownership cleanup only. It does not change routing, write-spec synthesis, approval policy, filesystem authority, tool execution, provider/profile selection, or brokered-worker isolation.
+- Focused coverage passed: `npx vitest run src/runtime/execution-graph/mutation-node.test.ts src/supervisor/worker-manager.test.ts` reported 55 passing tests.
+- Local gates passed after the cleanup: `npm run check` and `npm run build`.
+- Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
+
 ### Phase 8: Web UI And Operator Observability
 
 Goal: System tab shows one coherent graph timeline.

@@ -18,6 +18,19 @@ export type SupervisorToolExecutor = (
   request: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
 ) => Promise<Record<string, unknown>>;
 
+export interface BuildMutationToolRequestInput {
+  requestId: string;
+  agentId?: string;
+  userId?: string;
+  surfaceId?: string;
+  principalId?: string;
+  principalRole?: ToolExecutionRequest['principalRole'];
+  channel?: string;
+  codeContext?: ToolExecutionRequest['codeContext'];
+  toolContextMode?: ToolExecutionRequest['toolContextMode'];
+  activeSkillIds?: string[];
+}
+
 export interface MutationNodeExecutionContext {
   graphId: string;
   executionId: string;
@@ -68,6 +81,24 @@ export interface ResumeWriteSpecMutationNodeAfterApprovalInput {
   context: MutationNodeExecutionContext;
   verifyReadBack?: boolean;
   approvalId?: string;
+}
+
+export function buildMutationToolRequest(
+  input: BuildMutationToolRequestInput,
+): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
+  return {
+    origin: 'assistant',
+    requestId: input.requestId,
+    agentId: input.agentId,
+    userId: input.userId,
+    surfaceId: input.surfaceId,
+    principalId: input.principalId ?? input.userId,
+    principalRole: input.principalRole ?? 'owner',
+    channel: input.channel,
+    ...(input.codeContext ? { codeContext: input.codeContext } : {}),
+    toolContextMode: input.toolContextMode,
+    activeSkills: input.activeSkillIds ?? [],
+  };
 }
 
 export async function executeWriteSpecMutationNode(

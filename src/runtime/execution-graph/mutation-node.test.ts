@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ToolExecutionRequest } from '../../tools/types.js';
 import { buildSearchResultSetArtifact, buildWriteSpecArtifact } from './graph-artifacts.js';
 import {
+  buildMutationToolRequest,
   buildMutationResumeGraphEvent,
   emitMutationResumeGraphEvent,
   executeWriteSpecMutationNode,
@@ -10,6 +11,37 @@ import {
 } from './mutation-node.js';
 
 describe('execution graph mutation node', () => {
+  it('builds supervisor-owned tool request envelopes for mutation nodes', () => {
+    expect(buildMutationToolRequest({
+      requestId: 'request-1',
+      agentId: 'guardian',
+      userId: 'user-1',
+      surfaceId: 'surface-1',
+      channel: 'web',
+      codeContext: {
+        workspaceRoot: 'S:/Development/GuardianAgent',
+        sessionId: 'code-1',
+      },
+      toolContextMode: 'tight',
+      activeSkillIds: ['repo-search'],
+    })).toEqual({
+      origin: 'assistant',
+      requestId: 'request-1',
+      agentId: 'guardian',
+      userId: 'user-1',
+      surfaceId: 'surface-1',
+      principalId: 'user-1',
+      principalRole: 'owner',
+      channel: 'web',
+      codeContext: {
+        workspaceRoot: 'S:/Development/GuardianAgent',
+        sessionId: 'code-1',
+      },
+      toolContextMode: 'tight',
+      activeSkills: ['repo-search'],
+    });
+  });
+
   it('executes WriteSpec through supervisor ToolExecutor and verifies read-back content', async () => {
     const content = 'direct reasoning tool calls flow into RunTimelineStore\n';
     const writeSpec = buildWriteSpecArtifact({
