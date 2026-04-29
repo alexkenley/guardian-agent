@@ -7279,6 +7279,47 @@ describe('ToolExecutor', () => {
     expect(contentMatch?.snippet).toContain('Code GRC');
   });
 
+  it('searches large text files by content with the default search budget', async () => {
+    const root = createExecutorRoot();
+    mkdirSync(join(root, 'src'), { recursive: true });
+    await writeFile(
+      join(root, 'src', 'large-source.ts'),
+      `import { largeSourceSearchMarker } from './large-source.js';\n${'const filler = "keep scanning";\n'.repeat(6_000)}largeSourceSearchMarker({ kind: 'graph_completed' });\n`,
+      'utf-8',
+    );
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_search',
+      args: { path: '.', query: 'largeSourceSearchMarker', mode: 'content' },
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    const output = result.output as {
+      maxFileBytes: number;
+      matches: Array<{ relativePath: string; matchType: string; snippet?: string }>;
+    };
+    expect(output.maxFileBytes).toBe(1_000_000);
+    const largeSourceMatches = output.matches.filter((match) => match.relativePath === 'src/large-source.ts');
+    expect(largeSourceMatches).toHaveLength(2);
+    expect(output.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relativePath: 'src/large-source.ts',
+        matchType: 'content',
+        snippet: expect.stringContaining("kind: 'graph_completed'"),
+      }),
+    ]));
+  });
+
   it('accepts Windows-style separators in file paths', async () => {
     const root = createExecutorRoot();
     mkdirSync(join(root, 'docs'), { recursive: true });

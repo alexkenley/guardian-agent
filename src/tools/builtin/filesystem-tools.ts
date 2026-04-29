@@ -140,6 +140,12 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
     async (args, request) => {
       const rawPath = asString(args.path, '.');
       const query = requireString(args.query, 'query').trim();
+      if (!query) {
+        return {
+          success: false,
+          error: 'query is required',
+        };
+      }
       const mode = asString(args.mode, 'name').trim().toLowerCase();
       if (!['name', 'content', 'auto'].includes(mode)) {
         return {
@@ -154,7 +160,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
       const maxResults = Math.max(1, Math.min(maxSearchResults, asNumber(args.maxResults, 25)));
       const maxDepth = Math.max(0, Math.min(40, asNumber(args.maxDepth, 12)));
       const maxFiles = Math.max(50, Math.min(maxSearchFiles, asNumber(args.maxFiles, 20_000)));
-      const maxFileBytes = Math.max(256, Math.min(maxSearchFileBytes, asNumber(args.maxFileBytes, 120_000)));
+      const maxFileBytes = Math.max(256, Math.min(maxSearchFileBytes, asNumber(args.maxFileBytes, maxSearchFileBytes)));
       const caseSensitive = !!args.caseSensitive;
       const normalizedQuery = caseSensitive ? query : query.toLowerCase();
       const searchNames = mode === 'name' || mode === 'auto';
@@ -214,20 +220,32 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
 
           if (!searchContent) continue;
 
+          let fileStats;
+          try {
+            fileStats = await stat(fullPath);
+          } catch {
+            continue;
+          }
+          if (fileStats.size > maxFileBytes) {
+            continue;
+          }
+
           let content: Buffer;
           try {
             content = await readFile(fullPath);
           } catch {
             continue;
           }
-          if (content.byteLength > maxFileBytes || looksBinary(content)) {
+          if (looksBinary(content)) {
             continue;
           }
 
           const text = content.toString('utf-8');
           const haystack = caseSensitive ? text : text.toLowerCase();
-          const idx = haystack.indexOf(normalizedQuery);
-          if (idx >= 0) {
+          let searchFrom = 0;
+          while (matches.length < maxResults) {
+            const idx = haystack.indexOf(normalizedQuery, searchFrom);
+            if (idx < 0) break;
             matches.push({
               path: fullPath,
               relativePath,
@@ -235,6 +253,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
               lineNumber: countLineNumberAtIndex(text, idx),
               snippet: makeContentSnippet(text, idx, query.length),
             });
+            searchFrom = idx + Math.max(normalizedQuery.length, 1);
           }
         }
       }
@@ -248,6 +267,7 @@ export function registerBuiltinFilesystemTools(context: FilesystemToolRegistrarC
           mode,
           caseSensitive,
           maxResults,
+          maxFileBytes,
           scannedDirs,
           scannedFiles,
           truncated,

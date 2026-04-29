@@ -28,6 +28,7 @@ As of 2026-04-29:
 - Browser tasks now follow the same planned-step ownership rule: simple browser-only read actions may direct-dispatch, but read-plus-answer plans defer to the delegated managed-cloud tool loop, where `browser_read`/`browser_links`/`browser_extract`/`browser_state` receipts satisfy read evidence before the final answer step is verified.
 - The read-only manual/API lane has proven the harder repo-inspection prompts on `ollama-cloud-coding` / `glm-5.1` without frontier escalation, including "files implementing run timeline rendering" and "which web pages consume `run-timeline-context.js`".
 - Exact-file synthesis coverage for reverse dependency/consumer questions is handled in evidence selection, synthesis coverage, path canonicalization, and gateway recovery normalization, not by intent-routing keyword interception.
+- Repo search grounding now scans normal large TypeScript source files under the shared search budget and returns multiple content occurrences per file, so exact-symbol questions can surface both definitions and production call sites without routing-specific search exceptions.
 - Do not move to broader hybrid write behavior until the next slice preserves the proven app-facing API sweep for fresh-surface isolation, same-surface continuity, approval continuity, security refusal, and managed-cloud provider metadata.
 
 ### 2026-04-27 Handoff Status
@@ -1440,6 +1441,18 @@ Checkpoint after the mutation approval-resume event ownership cleanup:
 - Focused coverage passed: `npx vitest run src/runtime/execution-graph/mutation-node.test.ts src/supervisor/worker-manager.test.ts` reported 54 passing tests.
 - Full local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3415 tests).
 - Approval-continuity harness passed after the cleanup: `node scripts/test-web-approvals.mjs`.
+
+Checkpoint after the large-source repo search grounding cleanup:
+
+- `fs_search` now defaults content scanning to the shared tool-executor search budget instead of the old 120 KB per-file limit, while still respecting configured maximum file bytes and skipping oversized files before reading them.
+- Content search now records multiple bounded occurrences per file. Exact-symbol prompts can expose both import and call-site snippets from a large production file instead of only the first occurrence.
+- `code_symbol_search` now uses the same 1 MB source-file budget as the shared search tool, so coding symbol lookup and direct workspace search have consistent large-source behavior.
+- This is a tool-layer grounding fix, not an Intent Gateway route change: no keyword/regex routing, channel-specific exception, or compatibility shim was added.
+- Focused coverage passed: `npx vitest run src/tools/executor.test.ts` reported 209 passing tests.
+- Local gates passed after the cleanup: `npm run check`, `npm run build`, and full `npm test` (316 files, 3417 tests).
+- Cross-domain regression coverage passed after the cleanup: `node scripts/test-cross-domain-orchestration-stress.mjs`.
+- The rebuilt app was restarted with `scripts/start-dev-windows.ps1 -StartOnly`; `GET http://localhost:3000/api/status` confirmed the live API was running.
+- Live API replay with request id `codex-live-search-uplift-42806` proved the original missed-call-site shape: `fs_search` returned both `src/supervisor/worker-manager.ts` occurrences for `emitMutationResumeGraphEvent` (import and production call) and the definition in `src/runtime/execution-graph/mutation-node.ts`.
 
 ### Phase 8: Web UI And Operator Observability
 
