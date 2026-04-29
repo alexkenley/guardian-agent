@@ -117,6 +117,7 @@ export async function tryDirectCodingBackendDelegation(
   if (!deps.tools?.isEnabled()) return null;
   const decision = input.decision;
   if (!decision || decision.route !== 'coding_task') return null;
+  if (decision.entities.codingRemoteExecRequested === true) return null;
 
   const { userId: pendingUserId, channel: pendingChannel } = deps.parsePendingActionUserKey(input.userKey);
   const backendId = normalizeCodingBackendSelection(decision.entities.codingBackend);

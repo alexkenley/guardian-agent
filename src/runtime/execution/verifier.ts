@@ -385,7 +385,10 @@ function buildBaseDelegatedTaskContract(
   decision: IntentGatewayDecision | null | undefined,
 ): Omit<DelegatedTaskContract, 'plan'> {
   const summary = resolveDelegatedTaskSummary(decision);
-  if (decision?.route === 'coding_task' && decision.operation === 'run') {
+  if (
+    decision?.route === 'coding_task'
+    && (decision.operation === 'run' || decision.entities.codingRemoteExecRequested === true)
+  ) {
     return {
       kind: 'tool_execution',
       route: decision.route,

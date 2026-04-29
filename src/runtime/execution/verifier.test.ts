@@ -2729,5 +2729,48 @@ describe('verifyDelegatedResult', () => {
         missingEvidenceKinds: expect.arrayContaining(['readonly_violation']),
       });
     });
+
+    it('treats structured remote sandbox execution as tool execution even when the operation drifts to read', () => {
+      const taskContract = buildDelegatedTaskContract({
+        route: 'coding_task',
+        confidence: 'low',
+        operation: 'read',
+        summary: 'Run pwd in the remote sandbox and return exact stdout.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Inspect the relevant repo files and collect grounded repo evidence.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Answer with grounded findings from the inspected repo files.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+        entities: {
+          codingRemoteExecRequested: true,
+          command: 'pwd',
+          profileId: 'Vercel Production',
+        },
+      });
+
+      expect(taskContract.kind).toBe('tool_execution');
+      expect(taskContract.plan.steps[0]).toMatchObject({
+        kind: 'tool_call',
+        expectedToolCategories: ['code_remote_exec'],
+      });
+    });
   });
 });

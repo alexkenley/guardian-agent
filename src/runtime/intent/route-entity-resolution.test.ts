@@ -196,6 +196,29 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('resolves route-only remote sandbox runs into coding remote-exec entities', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      {
+        sourceContent: 'Run `pwd` in the remote sandbox using the Daytona Main profile and report exact stdout.',
+      },
+      'coding_task',
+      'run',
+      'classifier.route_only_fallback',
+    );
+
+    expect(result.entities).toMatchObject({
+      command: 'pwd',
+      codingRemoteExecRequested: true,
+      profileId: 'Daytona Main',
+    });
+    expect(result.provenance).toMatchObject({
+      command: 'resolver.coding',
+      codingRemoteExecRequested: 'resolver.coding',
+      profileId: 'resolver.coding',
+    });
+  });
+
   it('infers explicit built-in tool names and profile ids for general assistant tool requests', () => {
     const result = resolveIntentGatewayEntities(
       {},

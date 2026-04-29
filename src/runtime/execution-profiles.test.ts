@@ -785,6 +785,60 @@ describe('execution profiles', () => {
     expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'search']);
   });
 
+  it('keeps delegated remote sandbox execution as run even with read-only fallback planned steps', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'coding_task',
+        operation: 'run',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+          command: 'pwd',
+          profileId: 'Daytona Main',
+        },
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Inspect repo context from fallback routing.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return exact stdout.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'coding_task',
+      operation: 'run',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+      entities: {
+        codingRemoteExecRequested: true,
+        command: 'pwd',
+        profileId: 'Daytona Main',
+      },
+    });
+  });
+
   it('derives coding-workspace intent when pre-routed gateway metadata is absent', () => {
     const delegatedDecision = resolveDelegatedExecutionDecision({
       gatewayDecision: null,

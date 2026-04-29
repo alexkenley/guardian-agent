@@ -774,8 +774,10 @@ function deriveDelegatedExecutionDecision(input: {
   const lenses = new Set(descriptor.lenses ?? []);
   const readOperation = deriveDelegatedReadOperation(base);
   const mutateOperation = lenses.has('provider-admin') ? 'update' : 'run';
-  const codingWorkspaceOperation = descriptor.role === 'implementer'
-    && !hasStructuredReadOnlyEvidencePlan(base)
+  const codingWorkspaceOperation = base.entities?.codingRemoteExecRequested === true
+    ? 'run'
+    : descriptor.role === 'implementer'
+      && !hasStructuredReadOnlyEvidencePlan(base)
     ? mutateOperation
     : readOperation;
   const preferredDirectTier = base.preferredTier

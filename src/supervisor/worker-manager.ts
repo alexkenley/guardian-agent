@@ -827,6 +827,48 @@ export class WorkerManager {
       };
     }
 
+    const terminalState = resolveWorkerSuspensionContinuationTerminalState(continuationResult);
+    if (terminalState.status === 'failed') {
+      emitWorkerSuspensionGraphEvent({
+        suspension,
+        kind: 'node_failed',
+        payloadDetails: {
+          reason: terminalState.reason,
+          artifactIds: suspension.artifactIds,
+        },
+        eventKey: 'node-failed-after-approval',
+        graphStore: this.observability.executionGraphStore,
+        runTimeline: this.observability.runTimeline,
+        now: this.observability.now,
+      });
+      emitWorkerSuspensionGraphEvent({
+        suspension,
+        kind: 'graph_failed',
+        payloadDetails: {
+          reason: terminalState.reason,
+          artifactIds: suspension.artifactIds,
+        },
+        eventKey: 'graph-failed-after-approval',
+        graphStore: this.observability.executionGraphStore,
+        runTimeline: this.observability.runTimeline,
+        now: this.observability.now,
+        nodeScoped: false,
+      });
+      this.completeExecutionGraphPendingAction(pendingAction, now());
+      return {
+        content: continuationResult.content,
+        metadata: {
+          ...(continuationResult.metadata ?? {}),
+          executionGraph: {
+            graphId: suspension.graphId,
+            status: 'failed',
+            artifactIds: suspension.artifactIds,
+            reason: terminalState.reason,
+          },
+        },
+      };
+    }
+
     emitWorkerSuspensionGraphEvent({
       suspension,
       kind: 'node_completed',
@@ -3253,6 +3295,33 @@ function isSatisfiedDelegatedResultMetadata(metadata: Record<string, unknown>): 
   const envelope = readDelegatedResultEnvelope(metadata);
   return envelope?.verification?.decision === 'satisfied'
     || envelope?.runStatus === 'completed';
+}
+
+function resolveWorkerSuspensionContinuationTerminalState(
+  result: { content: string; metadata?: Record<string, unknown> },
+): { status: 'completed' | 'failed'; reason?: string } {
+  const envelope = readDelegatedResultEnvelope(result.metadata);
+  if (envelope?.verification?.decision === 'satisfied' || envelope?.runStatus === 'completed') {
+    return { status: 'completed' };
+  }
+  if (envelope?.runStatus === 'failed' || envelope?.runStatus === 'incomplete' || envelope?.runStatus === 'max_turns') {
+    return {
+      status: 'failed',
+      reason: envelope.operatorSummary?.trim()
+        || result.content.trim()
+        || `Delegated worker resumed with run status '${envelope.runStatus}'.`,
+    };
+  }
+  const workerExecution = readWorkerExecutionMetadata(result.metadata);
+  if (workerExecution?.lifecycle === 'failed') {
+    return {
+      status: 'failed',
+      reason: result.content.trim()
+        || workerExecution.completionReason
+        || 'Delegated worker resumed with failed worker execution metadata.',
+    };
+  }
+  return { status: 'completed' };
 }
 
 function buildPromptAdditionalSectionTraceMetadata(

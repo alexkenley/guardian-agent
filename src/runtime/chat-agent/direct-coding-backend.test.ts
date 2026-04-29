@@ -122,6 +122,44 @@ function makeDeps(overrides: Partial<DirectCodingBackendDeps> = {}): DirectCodin
 }
 
 describe('direct coding backend delegation', () => {
+  it('leaves structured remote sandbox execution requests for remote execution routing', async () => {
+    const executeModelTool = vi.fn(async () => ({ success: true }));
+    const ensureExplicitCodingTaskWorkspaceTarget = vi.fn(async () => ({ status: 'unchanged' as const }));
+
+    const response = await tryDirectCodingBackendDelegation(
+      {
+        message: makeMessage('Run pwd in the remote sandbox using the Vercel Production profile.'),
+        ctx: TEST_CONTEXT,
+        userKey: 'user-1:web',
+        decision: makeDecision({
+          entities: {
+            codingBackend: 'codex',
+            codingBackendRequested: true,
+            codingRemoteExecRequested: true,
+            profileId: 'vercel-production',
+            command: 'pwd',
+          },
+        }),
+        codeContext: {
+          sessionId: 'code-1',
+          workspaceRoot: 'S:/Development/GuardianAgent',
+        },
+      },
+      makeDeps({
+        tools: {
+          isEnabled: () => true,
+          executeModelTool,
+          getApprovalSummaries: () => new Map(),
+        } as DirectCodingBackendDeps['tools'],
+        ensureExplicitCodingTaskWorkspaceTarget,
+      }),
+    );
+
+    expect(response).toBeNull();
+    expect(executeModelTool).not.toHaveBeenCalled();
+    expect(ensureExplicitCodingTaskWorkspaceTarget).not.toHaveBeenCalled();
+  });
+
   it('runs direct coding backend tasks through the shared tool executor', async () => {
     const executeModelTool = vi.fn(async () => ({
       success: true,

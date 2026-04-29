@@ -84,6 +84,29 @@ export function buildPlannedTask(
     ? normalizedGatewaySteps.map((step) => applyDefaultExpectedToolCategories(step, contract))
     : [];
 
+  if (contract.kind === 'tool_execution' && decision?.entities.codingRemoteExecRequested === true) {
+    return {
+      planId: buildPlanId(decision?.route ?? contract.route, decision?.operation ?? contract.operation, 2),
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'tool_call',
+          summary: contract.summary?.trim() || 'Run the requested command in the remote sandbox.',
+          expectedToolCategories: ['code_remote_exec'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'answer',
+          summary: 'Return the remote sandbox command result requested by the user.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+      allowAdditionalSteps: true,
+    };
+  }
+
   const toolSynthesisFallback = buildReadOnlyToolSynthesisFallbackPlan(
     decision,
     contract,

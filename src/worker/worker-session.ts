@@ -79,6 +79,7 @@ import {
 import {
   buildDelegatedTaskContract,
 } from '../runtime/execution/verifier.js';
+import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildStepReceipts,
   computeWorkerRunStatus,
@@ -109,7 +110,6 @@ import {
   readWorkerAutomationAuthoringResumeMetadata,
 } from './automation-resume.js';
 import { BrokerClient } from '../broker/broker-client.js';
-import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
 import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
 import {
@@ -159,6 +159,7 @@ interface SuspendedToolCall {
   toolCallId: string;
   jobId: string;
   name: string;
+  argsPreview?: string;
 }
 
 interface SuspendedToolLoopSession {
@@ -1160,11 +1161,22 @@ function readWorkerCompletionReason(metadata: Record<string, unknown> | undefine
     : undefined;
 }
 
-function shouldSynthesizeApprovalContinuationFallback(
+function resolveApprovalContinuationSynthesisReason(
   result: { content: string; metadata?: Record<string, unknown> },
-): boolean {
-  return isEmptyResponseFallbackContent(result.content)
-    || readWorkerCompletionReason(result.metadata) === 'empty_response_fallback';
+): string | null {
+  const envelope = readDelegatedResultEnvelope(result.metadata);
+  if (
+    isEmptyResponseFallbackContent(result.content)
+    || readWorkerCompletionReason(result.metadata) === 'empty_response_fallback'
+  ) {
+    return 'empty_response_after_approval';
+  }
+  const workerExecution = readWorkerExecutionMetadata(result.metadata);
+  if (workerExecution?.lifecycle !== 'failed') return null;
+  if (envelope?.runStatus === 'failed' || envelope?.runStatus === 'incomplete' || envelope?.runStatus === 'max_turns') {
+    return 'verifier_rejected_after_approval';
+  }
+  return null;
 }
 
 function buildApprovalContinuationToolReceipt(input: {
@@ -1359,6 +1371,105 @@ function buildApprovalContinuationSynthesisMessages(input: {
       ].join('\n'),
     },
   ];
+}
+
+function parseChatMessageJsonObject(content: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(content);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildStructuredCodeRemoteExecApprovalAnswer(input: {
+  resumedMessages: ChatMessage[];
+  approvedReceipts: EvidenceReceipt[];
+}): string | null {
+  const hasApprovedRemoteExec = input.approvedReceipts.some((receipt) => (
+    receipt.status === 'succeeded'
+    && receipt.toolName === 'code_remote_exec'
+  ));
+  if (!hasApprovedRemoteExec) return null;
+  for (const message of [...input.resumedMessages].reverse()) {
+    if (message.role !== 'tool' || !message.content.trim()) continue;
+    const payload = parseChatMessageJsonObject(message.content);
+    if (payload?.success !== true) continue;
+    const output = isRecord(payload.output) ? payload.output : null;
+    if (typeof output?.stdout === 'string') {
+      return `STDOUT:\n${output.stdout.trimEnd()}`;
+    }
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      const message = payload.message.trim();
+      const stdoutMarker = message.match(/(?:^|\b)STDOUT:\s*\r?\n([\s\S]*)$/u);
+      if (stdoutMarker?.[1] !== undefined) {
+        return `STDOUT:\n${stdoutMarker[1].trimEnd()}`;
+      }
+      const parsedMessage = parseChatMessageJsonObject(message);
+      if (typeof parsedMessage?.stdout === 'string') {
+        return `STDOUT:\n${parsedMessage.stdout.trimEnd()}`;
+      }
+      const parsedOutput = isRecord(parsedMessage?.output) ? parsedMessage.output : null;
+      if (typeof parsedOutput?.stdout === 'string') {
+        return `STDOUT:\n${parsedOutput.stdout.trimEnd()}`;
+      }
+      return message;
+    }
+  }
+  return null;
+}
+
+function readPendingRemoteExecApprovalArgs(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  const pendingAction = isRecord(metadata?.pendingAction) ? metadata.pendingAction : null;
+  const blocker = isRecord(pendingAction?.blocker) ? pendingAction.blocker : null;
+  const summaries = Array.isArray(blocker?.approvalSummaries) ? blocker.approvalSummaries : [];
+  return summaries.flatMap((summary) => {
+    if (!isRecord(summary) || summary.toolName !== 'code_remote_exec') return [];
+    if (typeof summary.argsPreview !== 'string' || !summary.argsPreview.trim()) return [];
+    const args = parseChatMessageJsonObject(summary.argsPreview);
+    return args ? [args] : [];
+  });
+}
+
+function normalizeRemoteExecProfile(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return value.trim().toLowerCase().replace(/production/gu, 'prod').replace(/[^a-z0-9]+/gu, '');
+}
+
+function areRemoteExecProfilesEquivalent(left: unknown, right: unknown): boolean {
+  const normalizedLeft = normalizeRemoteExecProfile(left);
+  const normalizedRight = normalizeRemoteExecProfile(right);
+  if (!normalizedLeft || !normalizedRight) return true;
+  return normalizedLeft === normalizedRight;
+}
+
+function areRemoteExecCommandsEquivalent(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  const leftCommand = typeof left.command === 'string' ? left.command.trim() : '';
+  const rightCommand = typeof right.command === 'string' ? right.command.trim() : '';
+  return !!leftCommand
+    && leftCommand === rightCommand
+    && areRemoteExecProfilesEquivalent(left.profile ?? left.profileId, right.profile ?? right.profileId);
+}
+
+function hasRedundantRemoteExecPending(input: {
+  metadata: Record<string, unknown> | undefined;
+  suspended: SuspendedToolLoopSession;
+}): boolean {
+  const pendingArgs = readPendingRemoteExecApprovalArgs(input.metadata);
+  if (pendingArgs.length <= 0) return false;
+  if (pendingArgs.some((args) => Array.isArray(args.artifactPaths) && args.artifactPaths.length > 0)) {
+    return true;
+  }
+  const approvedArgs = input.suspended.pendingTools
+    .filter((pending) => pending.name === 'code_remote_exec')
+    .map((pending) => (
+      typeof pending.argsPreview === 'string' && pending.argsPreview.trim()
+        ? parseChatMessageJsonObject(pending.argsPreview)
+        : null
+    ))
+    .filter((args): args is Record<string, unknown> => !!args);
+  if (approvedArgs.length <= 0) return false;
+  return pendingArgs.some((pending) => approvedArgs.some((approved) => areRemoteExecCommandsEquivalent(approved, pending)));
 }
 
 function buildExecutionProfileResponseSource(
@@ -2858,6 +2969,7 @@ export class BrokeredWorkerSession {
     const approvedEvents: ExecutionEvent[] = [];
     const codeContext = suspended.originalMessage.metadata?.codeContext as { workspaceRoot?: string } | undefined;
     const workspaceRoot = codeContext?.workspaceRoot;
+    const approvalContinuation = readApprovalOutcomeContinuationMetadata(params.message.metadata);
     for (const pending of suspended.pendingTools) {
       const result = await this.client.getApprovalResult(pending.approvalId);
       const timestamp = Date.now();
@@ -2873,13 +2985,22 @@ export class BrokeredWorkerSession {
         receipt,
         timestamp,
       }));
+      const continuationResultMessage = approvalContinuation?.approvalId === pending.approvalId
+        ? approvalContinuation.resultMessage
+        : undefined;
+      const resultMessage = typeof continuationResultMessage === 'string' && continuationResultMessage.trim()
+        ? continuationResultMessage.trim()
+        : typeof result.message === 'string' && result.message.trim()
+        ? result.message.trim()
+        : undefined;
       const toolPayload = result.success === true
-        ? buildToolResultPayloadFromJob({
-          status: 'succeeded',
-          resultPreview: typeof result.message === 'string' && result.output === undefined
-            ? result.message
-            : JSON.stringify(result.output),
-        })
+        ? {
+          success: true,
+          approvalContinuationGuidance: 'Use this approved result directly when it satisfies the original request. Do not repeat the same approved tool call solely to reveal the same output.',
+          ...(resultMessage ? { message: resultMessage } : {}),
+          ...(result.output !== undefined ? { output: result.output } : {}),
+          ...(!resultMessage && result.output === undefined ? { message: 'Executed successfully.' } : {}),
+        }
         : { success: false, error: result.message ?? 'Approval was denied.' };
       resumedMessages.push({
         role: 'tool',
@@ -2942,33 +3063,67 @@ export class BrokeredWorkerSession {
     let responseSource = readResponseSourceMetadata(input.resumed.metadata)
       ?? buildExecutionProfileResponseSource(input.suspended.executionProfile);
     let synthesisMetadata: Record<string, unknown> | undefined;
-    if (shouldSynthesizeApprovalContinuationFallback(input.resumed)) {
+    const redundantRemoteExecAnswer = hasRedundantRemoteExecPending({
+      metadata: input.resumed.metadata,
+      suspended: input.suspended,
+    })
+      ? buildStructuredCodeRemoteExecApprovalAnswer({
+        resumedMessages: input.resumedMessages,
+        approvedReceipts: input.approvedReceipts,
+      })
+      : null;
+    if (redundantRemoteExecAnswer) {
+      finalAnswer = redundantRemoteExecAnswer;
+      synthesisMetadata = {
+        available: true,
+        reason: 'structured_tool_result_after_approval',
+        approvedReceiptCount: input.approvedReceipts.length,
+      };
+    }
+    let synthesisReason = resolveApprovalContinuationSynthesisReason(input.resumed);
+    const structuredAnswer = synthesisReason === 'verifier_rejected_after_approval'
+      ? buildStructuredCodeRemoteExecApprovalAnswer({
+        resumedMessages: input.resumedMessages,
+        approvedReceipts: input.approvedReceipts,
+      })
+      : null;
+    if (
+      synthesisReason === 'verifier_rejected_after_approval'
+      && !input.approvedReceipts.some((receipt) => receipt.status === 'succeeded' && receipt.toolName === 'code_remote_exec')
+    ) {
+      synthesisReason = null;
+    }
+    if (!redundantRemoteExecAnswer && synthesisReason) {
       if (usefulReceiptCount <= 0) {
         return null;
       }
-      const response = await input.chatFn(
-        buildApprovalContinuationSynthesisMessages({
-          originalMessage: input.suspended.originalMessage,
-          resumedMessages: input.resumedMessages,
-          approvedReceipts: input.approvedReceipts,
-          sourceEnvelope,
-        }),
-        {
-          tools: [],
-          maxTokens: 2_000,
-          temperature: 0,
-        },
-      );
-      finalAnswer = response.content.trim();
-      if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
-        return null;
+      if (structuredAnswer) {
+        finalAnswer = structuredAnswer;
+      } else {
+        const response = await input.chatFn(
+          buildApprovalContinuationSynthesisMessages({
+            originalMessage: input.suspended.originalMessage,
+            resumedMessages: input.resumedMessages,
+            approvedReceipts: input.approvedReceipts,
+            sourceEnvelope,
+          }),
+          {
+            tools: [],
+            maxTokens: 2_000,
+            temperature: 0,
+          },
+        );
+        finalAnswer = response.content.trim();
+        if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
+          return null;
+        }
+        responseSource = buildChatResponseSource(response as BrokeredChatResponse, input.suspended.executionProfile, {
+          usedFallback: false,
+        });
       }
-      responseSource = buildChatResponseSource(response as BrokeredChatResponse, input.suspended.executionProfile, {
-        usedFallback: false,
-      });
       synthesisMetadata = {
         available: true,
-        reason: 'empty_response_after_approval',
+        reason: structuredAnswer ? 'structured_tool_result_after_approval' : synthesisReason,
         approvedReceiptCount: input.approvedReceipts.length,
       };
     } else if (!finalAnswer || isEmptyResponseFallbackContent(finalAnswer)) {
@@ -3000,10 +3155,20 @@ export class BrokeredWorkerSession {
       selectedExecutionProfile: input.suspended.executionProfile,
       stopReason: 'end_turn',
     });
+    const resumedMetadata = input.resumed.metadata ?? {};
+    const baseMetadata = redundantRemoteExecAnswer
+      ? Object.fromEntries(
+        Object.entries(resumedMetadata).filter(([key]) => (
+          key !== 'pendingAction'
+          && key !== 'continueConversationAfterApproval'
+          && key !== 'workerSuspension'
+        )),
+      )
+      : resumedMetadata;
     return {
       content: finalAnswer,
       metadata: {
-        ...(input.resumed.metadata ?? {}),
+        ...baseMetadata,
         ...buildDelegatedExecutionMetadata(envelope),
         ...(synthesisMetadata ? { approvalContinuationSynthesis: synthesisMetadata } : {}),
         ...(responseSource ? { responseSource } : {}),
@@ -3402,11 +3567,15 @@ export class BrokeredWorkerSession {
       workerLoopBudget.contextBudget,
       (toolCall, toolResult) => {
         if (toolResult.status === 'pending_approval' && typeof toolResult.approvalId === 'string' && typeof toolResult.jobId === 'string') {
+          const approvalSummary = isRecord(toolResult.approvalSummary) ? toolResult.approvalSummary : null;
           pendingTools.push({
             approvalId: toolResult.approvalId,
             toolCallId: toolCall.id,
             jobId: toolResult.jobId,
             name: toolCall.name,
+            ...(typeof approvalSummary?.argsPreview === 'string'
+              ? { argsPreview: approvalSummary.argsPreview }
+              : {}),
           });
         }
       },

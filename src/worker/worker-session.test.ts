@@ -1566,6 +1566,463 @@ describe('BrokeredWorkerSession automation control', () => {
     ).toHaveLength(1);
   });
 
+  it('re-synthesizes approval continuations when verifier rejects an ungrounded resumed answer', async () => {
+    const exactToolMessage = 'Remote sandbox command completed on \'Vercel Production\'. STDOUT:\n/vercel/sandbox';
+    const finalAnswer = 'STDOUT:\n/vercel/sandbox';
+    let toolLoopCalls = 0;
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed remote exec requests should not reclassify the turn.');
+      }
+      if (
+        options?.tools?.length === 0
+        && messages.some((message) => message.content.includes('approval-continuation grounded synthesis'))
+      ) {
+        const prompt = messages.map((message) => message.content).join('\n');
+        expect(prompt).toContain('Remote sandbox command completed on \'Vercel Production\'');
+        expect(prompt).toContain('/vercel/sandbox');
+        return {
+          content: finalAnswer,
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool') {
+        return {
+          content: 'The remote command succeeded, but the exact stdout is embedded in a truncated payload and not fully visible.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'code_remote_exec')) {
+        toolLoopCalls += 1;
+        expect(toolLoopCalls).toBe(1);
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-remote-1',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'pwd', profile: 'Vercel Production' }),
+          }],
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat tool call ${firstTool ?? 'unknown'}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        risk: 'mutating',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            profile: { type: 'string' },
+          },
+          required: ['command'],
+        },
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: false,
+        status: 'pending_approval',
+        jobId: 'job-remote-1',
+        approvalId: 'approval-remote-vercel-1',
+        message: 'code_remote_exec is awaiting approval.',
+        approvalSummary: {
+          toolName: 'code_remote_exec',
+          argsPreview: '{"command":"pwd","profile":"Vercel Production"}',
+        },
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(async () => ({
+        success: true,
+        status: 'approved',
+        jobId: 'job-remote-1',
+        message: exactToolMessage,
+        output: {
+          backendKind: 'vercel_sandbox',
+          profileId: 'vercel-prod',
+          largePayload: 'x'.repeat(2_000),
+          stdout: '/vercel/sandbox',
+        },
+      })),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-vercel-approval-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Run `pwd` in the remote sandbox using the Vercel Production profile and report exact stdout.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata({
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'session-123',
+          },
+        }, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Run a remote sandbox command and report exact stdout.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            requiresToolSynthesis: true,
+            entities: {
+              codingRemoteExecRequested: true,
+              profileId: 'Vercel Production',
+            },
+          },
+        }),
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-vercel-approval-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-remote-vercel-1',
+          decision: 'approved',
+          resultMessage: exactToolMessage,
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(resumed.content).toBe(finalAnswer);
+    expect(resumed.metadata).toMatchObject({
+      approvalContinuationSynthesis: {
+        available: true,
+        reason: 'structured_tool_result_after_approval',
+      },
+      delegatedResult: {
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+      },
+    });
+  });
+
+  it('uses successful remote exec approval messages when stdout output is unavailable during resume', async () => {
+    const exactToolMessage = 'Remote sandbox command completed on \'Vercel Production\'. STDOUT:\n/vercel/sandbox';
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed remote exec requests should not reclassify the turn.');
+      }
+      if (options?.tools?.length === 0) {
+        throw new Error('Structured remote exec approval messages should not need model synthesis.');
+      }
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === 'tool') {
+        return {
+          content: 'The command succeeded, but the stdout is not visible in the truncated evidence.',
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (options?.tools?.some((tool: { name: string }) => tool.name === 'code_remote_exec')) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-remote-message-1',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'pwd', profile: 'Vercel Production' }),
+          }],
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat tool call ${firstTool ?? 'unknown'}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        risk: 'mutating',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            profile: { type: 'string' },
+          },
+          required: ['command'],
+        },
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: false,
+        status: 'pending_approval',
+        jobId: 'job-remote-message-1',
+        approvalId: 'approval-remote-message-1',
+        message: 'code_remote_exec is awaiting approval.',
+        approvalSummary: {
+          toolName: 'code_remote_exec',
+          argsPreview: '{"command":"pwd","profile":"Vercel Production"}',
+        },
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(async () => ({
+        success: true,
+        status: 'approved',
+        jobId: 'job-remote-message-1',
+        message: exactToolMessage,
+      })),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-vercel-message-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Run `pwd` in the remote sandbox using the Vercel Production profile and report exact stdout.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Run a remote sandbox command and report exact stdout.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            requiresToolSynthesis: true,
+            entities: {
+              codingRemoteExecRequested: true,
+              profileId: 'Vercel Production',
+            },
+          },
+        }),
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-vercel-message-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-remote-message-1',
+          decision: 'approved',
+          resultMessage: exactToolMessage,
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(resumed.content).toBe('STDOUT:\n/vercel/sandbox');
+    expect(resumed.metadata).toMatchObject({
+      approvalContinuationSynthesis: {
+        available: true,
+        reason: 'structured_tool_result_after_approval',
+      },
+      delegatedResult: {
+        runStatus: 'completed',
+        finalUserAnswer: 'STDOUT:\n/vercel/sandbox',
+      },
+    });
+  });
+
+  it('finalizes from approved remote exec output when continuation asks for the same command approval again', async () => {
+    const exactToolMessage = 'Remote sandbox command completed on \'Vercel Production\'. STDOUT:\n/vercel/sandbox';
+    const llmChat = vi.fn(async (messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed remote exec requests should not reclassify the turn.');
+      }
+      if (options?.tools?.length === 0) {
+        throw new Error('Duplicate remote exec approval should be reconciled from approved tool output.');
+      }
+      const hasFirstToolResult = messages.some((message) => message.role === 'tool' && message.toolCallId === 'call-remote-dup-1');
+      if (!hasFirstToolResult) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-remote-dup-1',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'pwd', profile: 'Vercel Production' }),
+          }],
+        } satisfies ChatResponse;
+      }
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [{
+          id: 'call-remote-dup-2',
+          name: 'code_remote_exec',
+          arguments: JSON.stringify({ command: 'pwd', cwd: '/repo', profile: 'vercel-prod' }),
+        }],
+      } satisfies ChatResponse;
+    });
+
+    let callToolCount = 0;
+    const callTool = vi.fn(async () => {
+      callToolCount += 1;
+      if (callToolCount === 1) {
+        return {
+          success: false,
+          status: 'pending_approval',
+          jobId: 'job-remote-dup-1',
+          approvalId: 'approval-remote-dup-1',
+          message: 'code_remote_exec is awaiting approval.',
+          approvalSummary: {
+            toolName: 'code_remote_exec',
+            argsPreview: '{"command":"pwd","profile":"Vercel Production"}',
+          },
+        };
+      }
+      return {
+        success: false,
+        status: 'pending_approval',
+        jobId: 'job-remote-dup-2',
+        approvalId: 'approval-remote-dup-2',
+        message: 'code_remote_exec is awaiting approval.',
+        approvalSummary: {
+          toolName: 'code_remote_exec',
+          argsPreview: '{"command":"pwd","cwd":"/repo","profile":"vercel-prod"}',
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        risk: 'mutating',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            cwd: { type: 'string' },
+            profile: { type: 'string' },
+          },
+          required: ['command'],
+        },
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(async () => ({
+        success: true,
+        status: 'approved',
+        jobId: 'job-remote-dup-1',
+        message: exactToolMessage,
+        output: {
+          backendKind: 'vercel_sandbox',
+          profileId: 'vercel-prod',
+          stdout: '/vercel/sandbox',
+        },
+      })),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-vercel-dup-start',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Run `pwd` in the remote sandbox using the Vercel Production profile and report exact stdout.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Run a remote sandbox command and report exact stdout.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            requiresToolSynthesis: true,
+            entities: {
+              codingRemoteExecRequested: true,
+              profileId: 'Vercel Production',
+            },
+          },
+        }),
+      },
+    });
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-vercel-dup-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-remote-dup-1',
+          decision: 'approved',
+          resultMessage: exactToolMessage,
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(resumed.content).toBe('STDOUT:\n/vercel/sandbox');
+    expect(resumed.metadata?.pendingAction).toBeUndefined();
+    expect(resumed.metadata).toMatchObject({
+      approvalContinuationSynthesis: {
+        available: true,
+        reason: 'structured_tool_result_after_approval',
+      },
+      delegatedResult: {
+        runStatus: 'completed',
+        finalUserAnswer: 'STDOUT:\n/vercel/sandbox',
+      },
+    });
+  });
+
   it('captures matched fs_search file refs for exact-file delegated repo inspections instead of the search root', async () => {
     const llmChat = vi.fn(async (messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
