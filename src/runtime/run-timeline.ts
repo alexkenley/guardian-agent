@@ -6,6 +6,7 @@ import type {
   CodeSessionRecord,
   CodeSessionVerificationEntry,
 } from './code-sessions.js';
+import type { CodeSessionWorkflowState, CodeSessionWorkflowStage } from './coding-workflows.js';
 import type { AssistantDispatchTrace, WorkflowTraceNode } from './orchestrator.js';
 import type { ExecutionEvent } from './execution/types.js';
 import type { ExecutionGraphEvent } from './execution-graph/graph-events.js';
@@ -331,6 +332,7 @@ export class RunTimelineStore {
     const verification = Array.isArray(session.workState.verification)
       ? session.workState.verification
       : [];
+    const workflow = session.workState.workflow ?? null;
 
     const touchedRunIds = new Set<string>();
     const pendingCounts = new Map<string, number>();
@@ -393,6 +395,10 @@ export class RunTimelineStore {
       });
     }
 
+    if (workflow) {
+      touchedRunIds.add(resolveRunId(session.id, undefined));
+    }
+
     for (const runId of touchedRunIds) {
       const existing = this.runs.get(runId);
       this.commitRun(runId, {
@@ -402,6 +408,7 @@ export class RunTimelineStore {
           pendingApprovalCount: pendingCounts.get(runId) ?? 0,
           verificationPendingCount: verificationPendingCounts.get(runId) ?? 0,
         },
+        ...(workflow ? { items: [buildCodeWorkflowStageItem(runId, workflow)] } : {}),
       });
     }
   }
@@ -1082,6 +1089,61 @@ function buildApprovalResolvedItem(
   };
 }
 
+function buildCodeWorkflowStageItem(
+  runId: string,
+  workflow: CodeSessionWorkflowState,
+): DashboardRunTimelineItem {
+  return {
+    id: `workflow:${workflow.recipeId}:${workflow.currentStage}`,
+    runId,
+    timestamp: workflow.updatedAt,
+    type: 'note',
+    status: mapCodeWorkflowStageItemStatus(workflow),
+    source: 'code_session',
+    title: `Coding stage: ${humanizeWorkflowStage(workflow.currentStage)}`,
+    detail: buildCodeWorkflowStageDetail(workflow),
+  };
+}
+
+function mapCodeWorkflowStageItemStatus(
+  workflow: CodeSessionWorkflowState,
+): DashboardRunTimelineItem['status'] {
+  if (workflow.status === 'blocked') return 'blocked';
+  if (workflow.status === 'completed') return 'succeeded';
+  if (workflow.verificationState === 'failed') return 'failed';
+  if (workflow.status === 'in_progress') return 'running';
+  return 'info';
+}
+
+function buildCodeWorkflowStageDetail(workflow: CodeSessionWorkflowState): string | undefined {
+  const detail = [
+    workflow.blockedReason,
+    workflow.nextAction,
+    workflow.verificationState && workflow.verificationState !== 'not_started'
+      ? `Verification: ${humanizeWorkflowValue(workflow.verificationState)}.`
+      : undefined,
+    workflow.isolation?.level && workflow.isolation.level !== 'none'
+      ? `Isolation: ${humanizeWorkflowValue(workflow.isolation.level)}${workflow.isolation.profileName ? ` on ${workflow.isolation.profileName}` : ''}.`
+      : undefined,
+  ]
+    .map((value) => sanitizeTimelineText(value))
+    .filter((value): value is string => !!value)
+    .join(' ');
+  return detail || undefined;
+}
+
+function humanizeWorkflowStage(stage: CodeSessionWorkflowStage): string {
+  return humanizeWorkflowValue(stage);
+}
+
+function humanizeWorkflowValue(value: string): string {
+  return value
+    .split(/[_-]+/u)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ');
+}
+
 function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimestamp: number): DashboardRunTimelineItem[] {
   const remoteDetail = job.remoteExecution?.profileName
     ? `Remote sandbox: ${job.remoteExecution.profileName}${job.remoteExecution.leaseReused ? ' (lease reused)' : ''}.`
@@ -1734,6 +1796,9 @@ function deriveCodeSessionBaseStatus(
   if (runVerification.some((entry) => entry.status === 'fail')) return 'failed';
   if (runVerification.some((entry) => entry.status === 'not_run')) return 'running';
   if (runJobs.length > 0 || runVerification.length > 0) return 'completed';
+  if (session.workState.workflow?.status === 'blocked') return 'blocked';
+  if (session.workState.workflow?.status === 'in_progress') return 'running';
+  if (session.workState.workflow?.status === 'completed') return 'completed';
   return 'queued';
 }
 

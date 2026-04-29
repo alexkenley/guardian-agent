@@ -199,6 +199,38 @@ describe('RunTimelineStore', () => {
     expect(run?.items.some((item) => item.title === 'OpenAI Codex CLI is working' && item.detail === 'Running targeted tests for auth helpers.')).toBe(true);
   });
 
+  it('creates a coding workflow stage run before tool jobs exist', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestCodeSession(createCodeSession('code-workflow', 220, {
+      workflow: {
+        type: 'implementation',
+        recipeId: 'coding.inspect-plan-implement-verify',
+        label: 'Implementation',
+        summary: 'Inspect, plan, implement, verify, and summarize.',
+        verificationMode: 'required',
+        currentStage: 'plan',
+        status: 'in_progress',
+        verificationState: 'pending',
+        nextAction: 'Write a bounded implementation plan and call out the intended verification.',
+        updatedAt: 220,
+      },
+    }));
+
+    const run = store.getRun('code-session:code-workflow:unscoped');
+    expect(run?.summary.kind).toBe('code_session');
+    expect(run?.summary.status).toBe('running');
+    expect(run?.summary.codeSessionId).toBe('code-workflow');
+    expect(run?.liveSummary.label).toBe('Coding stage: Plan');
+    expect(run?.items).toContainEqual(expect.objectContaining({
+      id: 'workflow:coding.inspect-plan-implement-verify:plan',
+      type: 'note',
+      source: 'code_session',
+      status: 'running',
+      title: 'Coding stage: Plan',
+      detail: 'Write a bounded implementation plan and call out the intended verification. Verification: Pending.',
+    }));
+  });
+
   it('strips the web-ui context prefix from assistant run titles and details', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({
