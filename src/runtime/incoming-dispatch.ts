@@ -406,6 +406,7 @@ export function createIncomingDispatchPreparer(args: {
       ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
       ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
       ...(typeof continuity?.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: continuity.linkedSurfaceCount } : {}),
+      ...(continuity?.continuationStateKind ? { continuationStateKind: continuity.continuationStateKind } : {}),
       ...(input.details ?? {}),
     };
     args.intentRoutingTrace.record({

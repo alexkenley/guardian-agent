@@ -22,6 +22,7 @@ import {
   inferProviderConfigOperation,
   isExplicitProviderConfigRequest,
 } from './entity-resolvers/provider-config.js';
+import { resolvePagedListContinuationRoute } from '../list-continuation.js';
 import {
   isExplicitCodingExecutionRequest,
   isExplicitCodingSessionControlRequest,
@@ -62,7 +63,15 @@ export function repairStructuredIntentGatewayRoute(
     || explicitRepoInspection
     || explicitRepoPlanning
     || explicitRemoteSandbox;
+  const pagedListContinuationRoute = resolvePagedListContinuationRoute({
+    continuationStateKind: repairContext?.continuity?.continuationStateKind,
+    content: rawSourceContent,
+    turnRelation,
+  });
 
+  if (pagedListContinuationRoute) {
+    return pagedListContinuationRoute;
+  }
   if (route === 'ui_control' && explicitAutomationControl) {
     return 'automation_control';
   }
@@ -153,6 +162,15 @@ export function repairStructuredIntentGatewayOperation(
   }
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';
+  }
+  if (
+    route === resolvePagedListContinuationRoute({
+      continuationStateKind: repairContext?.continuity?.continuationStateKind,
+      content: rawSourceContent,
+      turnRelation,
+    })
+  ) {
+    return 'read';
   }
   if (route === 'security_task' && isRawCredentialDisclosureRequest(rawSourceContent)) {
     return 'read';

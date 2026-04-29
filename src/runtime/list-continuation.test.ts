@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildPagedListContinuationState, resolvePagedListWindow } from './list-continuation.js';
+import {
+  buildPagedListContinuationState,
+  resolvePagedListContinuationRoute,
+  resolvePagedListWindow,
+} from './list-continuation.js';
 
 describe('list-continuation', () => {
   it('advances to the requested additional page size for follow-up list requests', () => {
@@ -112,5 +116,31 @@ describe('list-continuation', () => {
       limit: 27,
       total: 47,
     });
+  });
+
+  it('maps active paged-list continuation state to the owning route for follow-up turns', () => {
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'automation_catalog_list',
+      content: 'And the rest',
+      turnRelation: 'follow_up',
+    })).toBe('automation_control');
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'm365_unread_list',
+      content: 'Show the next 10',
+      turnRelation: 'follow_up',
+    })).toBe('email_task');
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'browser_links_list',
+      content: 'More',
+      turnRelation: 'follow_up',
+    })).toBe('browser_task');
+  });
+
+  it('does not map paged-list continuation state for standalone new requests', () => {
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'automation_catalog_list',
+      content: 'Search this workspace for the REST API implementation.',
+      turnRelation: 'new_request',
+    })).toBeNull();
   });
 });

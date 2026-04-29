@@ -142,6 +142,57 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.turnRelation).toBe('follow_up');
   });
 
+  it('repairs stale code-session classifications back to the active paged-list continuation owner', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search workspace for emitMutationResumeGraphEvent definition and usage',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Search workspace for emitMutationResumeGraphEvent definition and usage.',
+          expectedToolCategories: ['search', 'read'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Answer with the remaining result.',
+          required: true,
+        },
+      ],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'And the rest',
+      continuity: {
+        continuityKey: 'default:owner',
+        linkedSurfaceCount: 1,
+        continuationStateKind: 'automation_catalog_list',
+        activeExecutionRefs: ['execution:previous-automation-list'],
+      },
+    });
+
+    expect(decision.route).toBe('automation_control');
+    expect(decision.operation).toBe('read');
+    expect(decision.requiresRepoGrounding).toBe(false);
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+    expect(decision.provenance).toMatchObject({
+      route: 'repair.structured',
+      operation: 'repair.structured',
+      requiresRepoGrounding: 'derived.workload',
+      requiresToolSynthesis: 'derived.workload',
+    });
+  });
+
   it('does not repair transcript-reference wording into a follow-up without continuity context', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',

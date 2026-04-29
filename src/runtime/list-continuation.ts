@@ -7,6 +7,8 @@ export interface PagedListWindow {
   total: number;
 }
 
+export type PagedListContinuationRoute = 'automation_control' | 'browser_task' | 'email_task';
+
 const DEFAULT_PAGE_SIZE = 20;
 
 export function buildPagedListContinuationState(
@@ -86,6 +88,30 @@ export function hasPagedListFollowUpRequest(
   _turnRelation: IntentGatewayDecision['turnRelation'] | undefined,
 ): boolean {
   return /\b(additional|more|remaining|rest|next|other)\b/i.test(content);
+}
+
+export function resolvePagedListContinuationRoute(input: {
+  continuationStateKind?: string | null;
+  content: string;
+  turnRelation?: IntentGatewayDecision['turnRelation'];
+}): PagedListContinuationRoute | null {
+  if (input.turnRelation !== 'follow_up') return null;
+  if (!hasPagedListFollowUpRequest(input.content, input.turnRelation)) return null;
+  switch (input.continuationStateKind) {
+    case 'automation_catalog_list':
+      return 'automation_control';
+    case 'browser_links_list':
+      return 'browser_task';
+    case 'gmail_unread_list':
+    case 'gmail_recent_senders_list':
+    case 'gmail_recent_summary_list':
+    case 'm365_unread_list':
+    case 'm365_recent_senders_list':
+    case 'm365_recent_summary_list':
+      return 'email_task';
+    default:
+      return null;
+  }
 }
 
 function wantsRemainingItems(content: string): boolean {
