@@ -937,6 +937,97 @@ describe('verifyDelegatedResult', () => {
     expect(decision.reasons.join(' ')).toContain('not backed by read or code-symbol confirmation');
   });
 
+  it('rejects mixed-domain implementation-location answers that cite support files even when those files were read', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search web, repo, and memory evidence before answering.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'search', summary: 'Search the web for the title of https://example.com.', expectedToolCategories: ['web_search'], required: true },
+        { kind: 'search', summary: 'Search this workspace for where execution graph mutation approval resume events are emitted.', expectedToolCategories: ['fs_search', 'fs_read'], required: true },
+        { kind: 'search', summary: 'Search memory for SMOKE-MEM-42801.', expectedToolCategories: ['memory_search'], required: true },
+        { kind: 'answer', summary: 'Return three short bullets with what each source found.', required: true, dependsOn: ['step_1', 'step_2', 'step_3'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Web: https://example.com title is "Example Domain".',
+      '- Workspace: `emitMutationResumeGraphEvent` is defined in `src/runtime/execution-graph/mutation-node.ts` and called in `src/tools/executor.test.ts`.',
+      '- Memory: Found SMOKE-MEM-42801.',
+    ].join('\n');
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-web'], summary: 'Found title.', startedAt: 1, endedAt: 2 },
+          { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-repo'], summary: 'Read a support-file match.', startedAt: 3, endedAt: 4 },
+          { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-memory'], summary: 'Found memory marker.', startedAt: 5, endedAt: 6 },
+          { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['answer:1'], summary: finalAnswer, startedAt: 7, endedAt: 8 },
+        ],
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-web',
+            sourceType: 'tool_call',
+            toolName: 'web_search',
+            status: 'succeeded',
+            refs: ['https://example.com/'],
+            summary: 'Found title Example Domain.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-repo',
+            sourceType: 'tool_call',
+            toolName: 'fs_read',
+            status: 'succeeded',
+            refs: ['src/tools/executor.test.ts'],
+            summary: 'Read support file mentioning emitMutationResumeGraphEvent.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+          {
+            receiptId: 'receipt-memory',
+            sourceType: 'tool_call',
+            toolName: 'memory_search',
+            status: 'succeeded',
+            refs: ['memory:smoke'],
+            summary: 'Found SMOKE-MEM-42801.',
+            startedAt: 5,
+            endedAt: 6,
+          },
+        ],
+        claims: [{
+          claimId: 'answer:1:answer',
+          kind: 'answer',
+          subject: 'final_answer',
+          value: finalAnswer,
+          evidenceReceiptIds: ['answer:1'],
+          confidence: 1,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'insufficient',
+      retryable: true,
+      missingEvidenceKinds: ['implementation_file_claim'],
+      unsatisfiedStepIds: ['step_2', 'step_4'],
+    });
+  });
+
   it('accepts mixed-domain implementation-location answers backed by implementation file reads', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',

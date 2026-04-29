@@ -585,9 +585,11 @@ function verifyRepoEvidenceDepth(
   if (successfulRepoReceiptIds.size <= 0) {
     return null;
   }
+  const supportArtifactsAreTargets = contractTargetsSupportArtifacts(envelope);
   const implementationClaims = envelope.claims.filter((claim) => (
     claim.kind === 'implementation_file'
     && claim.evidenceReceiptIds.some((receiptId) => successfulReceiptIds.has(receiptId))
+    && (supportArtifactsAreTargets || !isSupportFileReference(claim.subject, claim.value))
   ));
   if (implementationClaims.length > 0) {
     return null;
@@ -595,6 +597,7 @@ function verifyRepoEvidenceDepth(
   const repoReadReceiptClaims = buildFileClaimsFromReceipts(
     envelope,
     (receipt) => successfulRepoConfirmationReceiptIds.has(receipt.receiptId),
+    supportArtifactsAreTargets ? undefined : isProductionFileReference,
   );
   if (repoReadReceiptClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadReceiptClaims)) {
     return null;
@@ -602,6 +605,7 @@ function verifyRepoEvidenceDepth(
   const repoReadFileClaims = envelope.claims.filter((claim) => (
     claim.kind === 'file_reference'
     && claim.evidenceReceiptIds.some((receiptId) => successfulRepoConfirmationReceiptIds.has(receiptId))
+    && (supportArtifactsAreTargets || isProductionFileReference(claim.subject, claim.value))
   ));
   if (repoReadFileClaims.length > 0 && finalAnswerCitesFileReference(answer, repoReadFileClaims)) {
     return null;
@@ -653,6 +657,7 @@ function verifyRepoEvidenceDepth(
 function buildFileClaimsFromReceipts(
   envelope: DelegatedResultEnvelope,
   includeReceipt: (receipt: DelegatedResultEnvelope['evidenceReceipts'][number]) => boolean,
+  includeRef: ((ref: string) => boolean) | undefined = undefined,
 ): Claim[] {
   const claims: Claim[] = [];
   for (const receipt of envelope.evidenceReceipts) {
@@ -660,6 +665,7 @@ function buildFileClaimsFromReceipts(
     for (const ref of receipt.refs) {
       const normalized = ref.trim();
       if (!normalized || isGenericFileReferenceCandidate(normalized.replace(/\\/g, '/').toLowerCase())) continue;
+      if (includeRef && !includeRef(normalized)) continue;
       claims.push({
         claimId: `${receipt.receiptId}:receipt-ref:${normalized}`,
         kind: 'file_reference',
@@ -896,4 +902,30 @@ function buildComparableFileReferenceVariants(value: string | undefined): string
 function isGenericFileReferenceCandidate(value: string): boolean {
   if (!value || value.length <= 2) return true;
   return ['src', 'docs', 'lib', 'test', 'tests', 'bin', 'public', 'root'].includes(value);
+}
+
+function contractTargetsSupportArtifacts(envelope: DelegatedResultEnvelope): boolean {
+  const summaries = [
+    envelope.taskContract.summary,
+    ...envelope.taskContract.plan.steps.map((step) => step.summary),
+  ]
+    .filter((summary): summary is string => typeof summary === 'string' && summary.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+  return /\b(?:tests?|test\s+files?|docs?|documentation|fixtures?|examples|example\s+files?|samples?)\b/u.test(summaries);
+}
+
+function isProductionFileReference(...values: Array<string | undefined>): boolean {
+  return !isSupportFileReference(...values);
+}
+
+function isSupportFileReference(...values: Array<string | undefined>): boolean {
+  return values.some((value) => {
+    const normalized = normalizeFileReferenceText(value);
+    if (!normalized) return false;
+    return /(?:^|\/)(?:__tests__|tests?|fixtures?|examples?|samples?)(?:\/|$)/u.test(normalized)
+      || /\.(?:test|spec)\.[cm]?[tj]sx?$/u.test(normalized)
+      || /(?:^|\/)docs(?:\/|$)/u.test(normalized)
+      || /(?:^|\/)README(?:\.|$)/iu.test(normalized);
+  });
 }
