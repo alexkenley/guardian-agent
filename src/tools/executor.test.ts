@@ -3,8 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolExecutor } from './executor.js';
@@ -5007,6 +5007,42 @@ describe('ToolExecutor', () => {
     expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot]);
   });
 
+  it('denies policy path expansion to broad user-profile roots before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+      },
+    });
+
+    const broadRoot = process.platform === 'win32' ? 'C:\\Users' : dirname(homedir());
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_path',
+        value: broadRoot,
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message).toMatch(/broad user-profile root/i);
+    expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot]);
+  });
+
   it('denies policy domain expansion to private metadata hosts before creating approval', async () => {
     const globalRoot = createExecutorRoot();
     const onPolicyUpdate = vi.fn();
@@ -5044,6 +5080,42 @@ describe('ToolExecutor', () => {
     expect(result.message).toMatch(/cannot add private\/internal address '169\.254\.169\.254'/i);
     expect(executor.getPolicy().sandbox.allowedDomains).toEqual(['localhost']);
     expect(onPolicyUpdate).not.toHaveBeenCalled();
+  });
+
+  it('denies auto-approval policy changes for shell execution tools before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+        toolPolicies: true,
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'set_tool_policy_auto',
+        value: 'shell_safe',
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message).toMatch(/cannot be changed to auto-approve from chat/i);
+    expect(executor.getPolicy().toolPolicies.shell_safe).toBeUndefined();
   });
 
   it('treats add_path for a subdirectory of an already-allowed root as a no-op before creating approval', async () => {

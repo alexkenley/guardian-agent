@@ -6,7 +6,8 @@ import Ajv from 'ajv';
 import { randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
-import { delimiter, isAbsolute, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { sanitizeShellArgs, scanWriteContent, validateArgSize } from '../guardian/argument-sanitizer.js';
 import {
   classifyParsedCommandExecution,
@@ -189,6 +190,12 @@ const MAX_TOOL_CALLS_PER_CHAIN = 100;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 50;
 const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
 const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
+const HIGH_RISK_AUTO_POLICY_TOOLS = new Set([
+  'shell_safe',
+  'run_command',
+  'code_remote_exec',
+  'coding_backend_run',
+]);
 const MANAGED_SANDBOX_RECONCILE_INTERVAL_MS = 30_000;
 const DEGRADED_PACKAGE_MANAGER_HINT = 'assistant.tools.sandbox.degradedFallback.allowPackageManagers';
 const POSIX_SHELL_BUILTINS = new Set(['type']);
@@ -426,6 +433,40 @@ function getPolicyDomainUpdateBlockReason(action: string, value: unknown): strin
   } catch {
     return null;
   }
+}
+
+function normalizePolicyPathForComparison(rawPath: string): string {
+  return resolve(normalizePathForHost(rawPath))
+    .replace(/[\\/]+$/, '')
+    .toLowerCase();
+}
+
+function getBroadPolicyPathExpansionBlockReason(action: string, value: unknown): string | null {
+  if (action.trim() !== 'add_path') return null;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const normalized = normalizePolicyPathForComparison(value);
+  const home = homedir();
+  const blockedRoots = [
+    home,
+    dirname(home),
+    process.platform === 'win32' && process.env.SystemDrive
+      ? `${process.env.SystemDrive}\\Users`
+      : '',
+  ]
+    .filter(Boolean)
+    .map((candidate) => normalizePolicyPathForComparison(candidate));
+  return blockedRoots.includes(normalized)
+    ? `Action 'update_tool_policy' blocked: path '${value}' is a broad user-profile root. Add a specific project or data directory instead.`
+    : null;
+}
+
+function getToolPolicyAutoBlockReason(action: string, value: unknown): string | null {
+  if (action.trim() !== 'set_tool_policy_auto') return null;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const toolName = value.trim();
+  return HIGH_RISK_AUTO_POLICY_TOOLS.has(toolName)
+    ? `Action 'update_tool_policy' blocked: tool '${toolName}' cannot be changed to auto-approve from chat. Keep approval enabled or adjust policy manually after reviewing the risk.`
+    : null;
 }
 
 type ToolPreflightRequest = string | { name: string; args?: Record<string, unknown> };
@@ -4699,6 +4740,10 @@ export class ToolExecutor {
     request?: Partial<ToolExecutionRequest>,
   ): Promise<string | null> {
     if (toolName === 'update_tool_policy') {
+      const broadPolicyPathBlockReason = getBroadPolicyPathExpansionBlockReason(asString(args.action), args.value);
+      if (broadPolicyPathBlockReason) return broadPolicyPathBlockReason;
+      const toolPolicyAutoBlockReason = getToolPolicyAutoBlockReason(asString(args.action), args.value);
+      if (toolPolicyAutoBlockReason) return toolPolicyAutoBlockReason;
       const domainUpdateBlockReason = getPolicyDomainUpdateBlockReason(asString(args.action), args.value);
       if (domainUpdateBlockReason) return domainUpdateBlockReason;
     }

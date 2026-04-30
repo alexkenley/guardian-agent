@@ -323,10 +323,13 @@ function buildPolicyBlockedClarificationPrompt(
   const bullets = samples
     .map(({ toolName, message }) => `- ${toolName}: ${message || 'blocked by tool policy.'}`)
     .join('\n');
+  const nextStep = samples.some((sample) => sample.toolName === 'update_tool_policy')
+    ? 'Choose a narrower, non-sensitive target or adjust policy manually after reviewing the risk, then retry.'
+    : 'Approve an allowlist update (for example via update_tool_policy with action "add_path", "add_domain", or "add_command"), or tell me a different target that is already allowed, and I will retry.';
   return [
     'I could not complete the requested action because tool policy blocked it.',
     bullets,
-    'Approve an allowlist update (for example via update_tool_policy with action "add_path", "add_domain", or "add_command"), or tell me a different target that is already allowed, and I will retry.',
+    nextStep,
   ].join('\n\n');
 }
 
