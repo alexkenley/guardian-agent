@@ -214,7 +214,7 @@ async function renderSecurityLogTab(panel, state = {}) {
   const includeAcknowledged = state.includeAcknowledged === true;
   const includeInactive = state.includeInactive === true;
 
-  const [alerts, auditSummary, auditEvents, posture, containment] = await Promise.all([
+  const [alerts, auditSummary, auditEvents, auditVerify, posture, containment] = await Promise.all([
     api.securityAlerts({
       limit: 100,
       query: query || undefined,
@@ -226,6 +226,7 @@ async function renderSecurityLogTab(panel, state = {}) {
     }).catch(() => defaultSecurityAlertsResponse()),
     api.auditSummary().catch(() => defaultAuditSummaryResponse()),
     api.audit({ limit: 100 }).catch(() => []),
+    api.verifyAuditChain().catch(() => defaultAuditChainStatusResponse()),
     api.securityPosture().catch(() => defaultSecurityPostureResponse()),
     api.securityContainment().catch(() => defaultSecurityContainmentResponse()),
   ]);
@@ -281,8 +282,11 @@ async function renderSecurityLogTab(panel, state = {}) {
       </div>
       ${renderAlertQueue(alerts.alerts || [])}
     </section>
-    ${renderCollapsibleSection('Audit History', renderAuditHistory(auditEvents), {
-      summary: `${auditSummary.totalEvents || 0} ${pluralize(auditSummary.totalEvents || 0, 'event')} in the current window`,
+    ${renderCollapsibleSection('Audit History', `
+      ${renderAuditChainStatus(auditVerify)}
+      ${renderAuditHistory(auditEvents)}
+    `, {
+      summary: `${auditSummary.totalEvents || 0} ${pluralize(auditSummary.totalEvents || 0, 'event')} in the current window · ${formatAuditChainStatusForDisplay(auditVerify)}`,
     })}
   `;
 
@@ -292,6 +296,9 @@ async function renderSecurityLogTab(panel, state = {}) {
 
 function bindSecurityLogInteractions(panel, state) {
   panel.querySelector('#security-log-refresh')?.addEventListener('click', () => {
+    renderSecurityLogTab(panel, readSecurityLogState(panel));
+  });
+  panel.querySelector('#security-log-verify-audit')?.addEventListener('click', () => {
     renderSecurityLogTab(panel, readSecurityLogState(panel));
   });
   panel.querySelectorAll('#security-log-query, #security-log-source, #security-log-severity, #security-log-status, #security-log-ack, #security-log-inactive')
@@ -844,6 +851,28 @@ function renderAuditHistory(events) {
       </table>
     </div>
   `;
+}
+
+function renderAuditChainStatus(result) {
+  const tone = result?.valid === false ? 'critical' : result?.available === false ? 'warning' : 'success';
+  return `
+    <div class="security-inline-summary security-inline-summary--${escAttr(tone)}">
+      <span>${esc(formatAuditChainStatusForDisplay(result))}</span>
+      <button class="btn btn-secondary btn-sm" id="security-log-verify-audit" type="button">Verify Audit Chain</button>
+    </div>
+  `;
+}
+
+export function formatAuditChainStatusForDisplay(result) {
+  if (result?.valid === true) {
+    const total = Number(result.totalEntries || 0);
+    return `Audit chain verified (${total} ${total === 1 ? 'entry' : 'entries'})`;
+  }
+  if (result?.valid === false) {
+    const brokenAt = Number.isFinite(Number(result.brokenAt)) ? ` at entry ${Number(result.brokenAt)}` : '';
+    return `Audit chain verification failed${brokenAt}`;
+  }
+  return 'Audit chain verification unavailable';
 }
 
 function renderAlertInvestigationDetails(alert) {
@@ -1822,6 +1851,14 @@ function defaultAuditSummaryResponse() {
     topControllers: [],
     windowStart: 0,
     windowEnd: 0,
+  };
+}
+
+function defaultAuditChainStatusResponse() {
+  return {
+    valid: undefined,
+    available: false,
+    totalEntries: 0,
   };
 }
 

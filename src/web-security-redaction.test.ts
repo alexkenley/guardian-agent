@@ -54,4 +54,14 @@ describe('Security page redaction helpers', () => {
       details: { reason: 'cooldown' },
     })).toBe('No AI triage (cooldown window)');
   });
+
+  it('summarizes audit-chain verification state for Security Log', async () => {
+    installSecurityPageDomStubs();
+
+    const { formatAuditChainStatusForDisplay } = await import('../web/public/js/pages/security.js');
+
+    expect(formatAuditChainStatusForDisplay({ valid: true, totalEntries: 2 })).toBe('Audit chain verified (2 entries)');
+    expect(formatAuditChainStatusForDisplay({ valid: false, brokenAt: 7 })).toBe('Audit chain verification failed at entry 7');
+    expect(formatAuditChainStatusForDisplay({ available: false })).toBe('Audit chain verification unavailable');
+  });
 });
