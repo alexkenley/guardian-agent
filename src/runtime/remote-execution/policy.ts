@@ -6,6 +6,12 @@ export type RemoteExecutionBackendKind = 'vercel_sandbox' | 'daytona_sandbox';
 export type RemoteExecutionCapabilityState = 'disabled' | 'incomplete' | 'ready';
 export type RemoteExecutionNetworkMode = 'deny_all' | 'allow_all' | 'domain_allowlist' | 'cidr_allowlist';
 export type RemoteExecutionHealthState = 'unknown' | 'healthy' | 'unreachable';
+export type RemoteExecutionDiagnosticCause =
+  | 'external_service_unreachable'
+  | 'local_profile_config'
+  | 'guardian_policy_config'
+  | 'sandbox_lifecycle'
+  | 'unknown';
 
 export interface RemoteExecutionTargetHealthSummary {
   state: RemoteExecutionHealthState;
@@ -14,6 +20,7 @@ export interface RemoteExecutionTargetHealthSummary {
   durationMs?: number;
   leaseId?: string;
   sandboxId?: string;
+  cause?: RemoteExecutionDiagnosticCause;
 }
 
 export interface RemoteExecutionTargetDescriptor {
@@ -37,6 +44,7 @@ export interface RemoteExecutionTargetDescriptor {
   snapshotLabel?: string;
   healthState?: RemoteExecutionHealthState;
   healthReason?: string;
+  healthCause?: RemoteExecutionDiagnosticCause;
   healthCheckedAt?: number;
   healthDurationMs?: number;
   activeLeaseId?: string;
@@ -49,6 +57,8 @@ export interface RemoteExecutionTargetDiagnostic {
   code: 'default_target_missing' | 'default_target_not_ready' | 'target_unreachable' | 'no_ready_targets';
   targetId?: string;
   profileName?: string;
+  likelyCause?: RemoteExecutionDiagnosticCause;
+  nextAction?: string;
   message: string;
 }
 
@@ -172,6 +182,39 @@ function inferNetworkMode(input: {
   return 'allow_all';
 }
 
+export function classifyRemoteExecutionDiagnosticCause(reason: string | undefined): RemoteExecutionDiagnosticCause {
+  const normalized = reason?.trim().toLowerCase() ?? '';
+  if (!normalized) return 'unknown';
+  if (/\b(host .+ not in alloweddomains|alloweddomains|allowed domains|policy|deny_all|domain allowlist)\b/.test(normalized)) {
+    return 'guardian_policy_config';
+  }
+  if (/\b(no credential|credential.*missing|api key|api token|token|teamid|projectid|invalid apiurl|disabled|not ready|not configured|profile .*not found|unknown .*profile|default remote sandbox target .+ does not match)\b/.test(normalized)) {
+    return 'local_profile_config';
+  }
+  if (/\b(http 5\d\d|status code 5\d\d|bad gateway|gateway timeout|service unavailable|upstream|proxy|toolbox|fetch failed|socket hang up|econnreset|econnrefused)\b/.test(normalized)) {
+    return 'external_service_unreachable';
+  }
+  if (/\b(stopped|stopping|expired|deleted|deleting|terminated|failed|error state|not reusable|lifecycle state|sandbox .*state)\b/.test(normalized)) {
+    return 'sandbox_lifecycle';
+  }
+  return 'unknown';
+}
+
+function nextActionForRemoteExecutionCause(cause: RemoteExecutionDiagnosticCause): string {
+  switch (cause) {
+    case 'external_service_unreachable':
+      return 'Retry later or verify the provider control plane/status page before changing local config.';
+    case 'local_profile_config':
+      return 'Review the configured remote sandbox profile fields and resolved credential reference.';
+    case 'guardian_policy_config':
+      return 'Update the Guardian allowed-domain/network policy for the intended control-plane host, then retry.';
+    case 'sandbox_lifecycle':
+      return 'Refresh the managed sandbox, restart it if supported, or release and create a new sandbox.';
+    default:
+      return 'Inspect the run trace and provider status details before changing configuration.';
+  }
+}
+
 export function listRemoteExecutionTargets(
   cloud: AssistantCloudConfig | null | undefined,
   options: {
@@ -228,6 +271,7 @@ export function listRemoteExecutionTargets(
       snapshotLabel: baseSnapshotId,
       healthState: health?.state,
       healthReason: health?.reason,
+      healthCause: health?.cause ?? classifyRemoteExecutionDiagnosticCause(health?.reason),
       healthCheckedAt: health?.checkedAt,
       healthDurationMs: health?.durationMs,
       activeLeaseId: health?.leaseId,
@@ -276,6 +320,7 @@ export function listRemoteExecutionTargets(
       snapshotLabel: snapshot,
       healthState: health?.state,
       healthReason: health?.reason,
+      healthCause: health?.cause ?? classifyRemoteExecutionDiagnosticCause(health?.reason),
       healthCheckedAt: health?.checkedAt,
       healthDurationMs: health?.durationMs,
       activeLeaseId: health?.leaseId,
@@ -307,28 +352,36 @@ export function buildRemoteExecutionTargetDiagnostics(
       severity: 'warning',
       code: 'default_target_missing',
       targetId: configuredDefaultTargetId,
+      likelyCause: 'local_profile_config',
+      nextAction: nextActionForRemoteExecutionCause('local_profile_config'),
       message: `Configured default remote sandbox target '${configuredDefaultTargetId}' does not match any current Vercel or Daytona profile.`,
     });
   } else if (defaultTarget && !isRemoteExecutionTargetReady(defaultTarget)) {
     const reason = defaultTarget.healthState === 'unreachable'
       ? defaultTarget.healthReason || 'The last target health check marked it unreachable.'
       : defaultTarget.reason;
+    const likelyCause = defaultTarget.healthCause ?? classifyRemoteExecutionDiagnosticCause(reason);
     diagnostics.push({
       severity: 'warning',
       code: 'default_target_not_ready',
       targetId: defaultTarget.id,
       profileName: defaultTarget.profileName,
+      likelyCause,
+      nextAction: nextActionForRemoteExecutionCause(likelyCause),
       message: `Configured default remote sandbox target '${defaultTarget.profileName}' is not ready: ${reason}`,
     });
   }
 
   for (const target of targets) {
     if (target.healthState !== 'unreachable') continue;
+    const likelyCause = target.healthCause ?? classifyRemoteExecutionDiagnosticCause(target.healthReason);
     diagnostics.push({
       severity: 'warning',
       code: 'target_unreachable',
       targetId: target.id,
       profileName: target.profileName,
+      likelyCause,
+      nextAction: nextActionForRemoteExecutionCause(likelyCause),
       message: `Remote sandbox target '${target.profileName}' is currently unreachable: ${target.healthReason || 'last health check failed'}`,
     });
   }

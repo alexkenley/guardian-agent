@@ -155,6 +155,7 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
           allowedCidrs: [],
           healthState: 'unreachable',
           healthReason: 'HTTP 502 from Daytona control plane.',
+          healthCause: 'external_service_unreachable',
         },
       ],
       targetDiagnostics: [{
@@ -162,6 +163,8 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
         code: 'target_unreachable',
         targetId: 'daytona:daytona-main',
         profileName: 'Daytona Main',
+        likelyCause: 'external_service_unreachable',
+        nextAction: 'Retry later or verify the provider control plane/status page before changing local config.',
         message: 'Remote sandbox target \'Daytona Main\' is currently unreachable: HTTP 502 from Daytona control plane.',
       }],
       sandboxes: [
@@ -226,8 +229,10 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
     expect(result?.content).toContain('Remote sandbox targets:');
     expect(result?.content).toContain('provider=daytona');
     expect(result?.content).toContain('reachable=no');
+    expect(result?.content).toContain('likelyCause=external_service_unreachable');
     expect(result?.content).toContain('Remote sandbox diagnostics:');
     expect(result?.content).toContain('code=target_unreachable');
+    expect(result?.content).toContain('nextAction=Retry later or verify the provider control plane/status page before changing local config.');
   });
 
   it('reports unknown reachability when a configured remote target has no health probe yet', async () => {

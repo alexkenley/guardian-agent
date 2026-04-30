@@ -2,7 +2,10 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { basename, relative, resolve } from 'node:path';
 import path from 'node:path';
 
-import type { RemoteExecutionTargetHealthSummary } from './policy.js';
+import {
+  classifyRemoteExecutionDiagnosticCause,
+  type RemoteExecutionTargetHealthSummary,
+} from './policy.js';
 import type {
   RemoteExecutionLease,
   RemoteExecutionLeaseAcquireRequest,
@@ -141,6 +144,7 @@ function toHealthSummary(input: {
     durationMs: input.durationMs,
     leaseId: input.leaseId,
     sandboxId: input.sandboxId,
+    cause: classifyRemoteExecutionDiagnosticCause(input.reason),
   };
 }
 

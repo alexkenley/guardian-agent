@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, type AssistantCloudConfig } from '../../config/types.js';
 import {
   buildRemoteExecutionTargetDiagnostics,
+  classifyRemoteExecutionDiagnosticCause,
   listRemoteExecutionTargets,
   prioritizeReadyRemoteExecutionTargets,
   recommendWorkflowIsolation,
@@ -230,16 +231,26 @@ describe('remote execution policy', () => {
       expect.objectContaining({
         code: 'default_target_missing',
         targetId: 'vercel:missing-profile',
+        likelyCause: 'local_profile_config',
       }),
       expect.objectContaining({
         code: 'target_unreachable',
         targetId: 'vercel:vercel-main',
+        likelyCause: 'external_service_unreachable',
+        nextAction: expect.stringContaining('provider control plane'),
         message: expect.stringContaining('HTTP 502'),
       }),
       expect.objectContaining({
         code: 'no_ready_targets',
       }),
     ]));
+  });
+
+  it('classifies remote sandbox diagnostic causes without exposing credential values', () => {
+    expect(classifyRemoteExecutionDiagnosticCause('Request failed with status code 502')).toBe('external_service_unreachable');
+    expect(classifyRemoteExecutionDiagnosticCause("Host 'sandbox.example.com' is not in allowedDomains.")).toBe('guardian_policy_config');
+    expect(classifyRemoteExecutionDiagnosticCause("Daytona profile 'main' does not have a resolved API key.")).toBe('local_profile_config');
+    expect(classifyRemoteExecutionDiagnosticCause("Managed Vercel sandbox is stopped (status: stopped).")).toBe('sandbox_lifecycle');
   });
 
   it('honors the configured default target without provider-specific workflow heuristics', () => {

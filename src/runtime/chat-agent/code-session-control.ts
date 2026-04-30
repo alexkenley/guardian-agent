@@ -749,7 +749,7 @@ function formatRemoteSandboxTargetLine(target: RemoteExecutionTargetDescriptor, 
       : healthState === 'unreachable'
         ? 'no'
         : 'unknown';
-  return `- ${formatValue(target.profileName || target.profileId)} | provider=${target.providerFamily} | backend=${target.backendKind} | capability=${target.capabilityState} | health=${formatValue(healthState)} | reachable=${reachable} | default=${isDefault ? 'yes' : 'no'} | profile=${formatValue(target.profileId)}${target.healthReason ? ` | note=${formatValue(target.healthReason)}` : ` | note=${formatValue(target.reason)}`}`;
+  return `- ${formatValue(target.profileName || target.profileId)} | provider=${target.providerFamily} | backend=${target.backendKind} | capability=${target.capabilityState} | health=${formatValue(healthState)} | reachable=${reachable} | default=${isDefault ? 'yes' : 'no'} | profile=${formatValue(target.profileId)}${target.healthCause ? ` | likelyCause=${formatValue(target.healthCause)}` : ''}${target.healthReason ? ` | note=${formatValue(target.healthReason)}` : ` | note=${formatValue(target.reason)}`}`;
 }
 
 function formatRemoteSandboxDiagnosticLine(diagnostic: RemoteExecutionTargetDiagnostic): string {
@@ -757,5 +757,5 @@ function formatRemoteSandboxDiagnosticLine(diagnostic: RemoteExecutionTargetDiag
     const text = String(value ?? '').replace(/\s+/g, ' ').trim();
     return text || '(none)';
   };
-  return `- severity=${formatValue(diagnostic.severity)} | code=${formatValue(diagnostic.code)}${diagnostic.targetId ? ` | target=${formatValue(diagnostic.targetId)}` : ''}${diagnostic.profileName ? ` | profile=${formatValue(diagnostic.profileName)}` : ''} | message=${formatValue(diagnostic.message)}`;
+  return `- severity=${formatValue(diagnostic.severity)} | code=${formatValue(diagnostic.code)}${diagnostic.targetId ? ` | target=${formatValue(diagnostic.targetId)}` : ''}${diagnostic.profileName ? ` | profile=${formatValue(diagnostic.profileName)}` : ''}${diagnostic.likelyCause ? ` | likelyCause=${formatValue(diagnostic.likelyCause)}` : ''}${diagnostic.nextAction ? ` | nextAction=${formatValue(diagnostic.nextAction)}` : ''} | message=${formatValue(diagnostic.message)}`;
 }
