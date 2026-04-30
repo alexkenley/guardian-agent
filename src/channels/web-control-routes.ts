@@ -41,6 +41,22 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function normalizeApprovalDecision(value: unknown): 'approved' | 'denied' | undefined {
+  if (typeof value !== 'string') return undefined;
+  switch (value.trim().toLowerCase()) {
+    case 'approve':
+    case 'approved':
+      return 'approved';
+    case 'deny':
+    case 'denied':
+    case 'reject':
+    case 'rejected':
+      return 'denied';
+    default:
+      return undefined;
+  }
+}
+
 function sendBadRequestError(res: ServerResponse, err: unknown): void {
   sendJSON(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
 }
@@ -382,14 +398,15 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
     try {
       const parsed = await readJsonBody<{
         approvalId?: string;
-        decision?: 'approved' | 'denied';
+        decision?: unknown;
         actor?: string;
         userId?: string;
         channel?: string;
         surfaceId?: string;
         reason?: string;
       }>(req, context.maxBodyBytes);
-      if (!parsed.approvalId || !parsed.decision) {
+      const decision = normalizeApprovalDecision(parsed.decision);
+      if (!parsed.approvalId || !decision) {
         sendJSON(res, 400, { error: 'approvalId and decision are required' });
         return true;
       }
@@ -399,7 +416,7 @@ export async function handleWebControlRoutes(context: WebControlRoutesContext): 
       const surfaceId = resolveWebSurfaceId(trimOptionalString(parsed.surfaceId));
       const result = await dashboard.onToolsApprovalDecision({
         approvalId: parsed.approvalId,
-        decision: parsed.decision,
+        decision,
         actor: principal.principalId,
         actorRole: principal.principalRole,
         userId,

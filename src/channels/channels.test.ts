@@ -5415,12 +5415,13 @@ describe('WebChannel', () => {
     });
 
     it('POST /api/tools/approvals/decision forwards surface identity to onToolsApprovalDecision', async () => {
-      const calls: Array<{ approvalId: string; userId?: string; channel?: string; surfaceId?: string }> = [];
+      const calls: Array<{ approvalId: string; decision: string; userId?: string; channel?: string; surfaceId?: string }> = [];
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,
         onToolsApprovalDecision: async (input) => {
           calls.push({
             approvalId: input.approvalId,
+            decision: input.decision,
             userId: input.userId,
             channel: input.channel,
             surfaceId: input.surfaceId,
@@ -5447,9 +5448,51 @@ describe('WebChannel', () => {
       expect(res.status).toBe(200);
       expect(calls).toEqual([{
         approvalId: 'approval-memory-1',
+        decision: 'approved',
         userId: 'web-user',
         channel: 'web',
         surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
+    it('POST /api/tools/approvals/decision normalizes deny aliases and rejects unknown decisions', async () => {
+      const calls: Array<{ approvalId: string; decision: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onToolsApprovalDecision: async (input) => {
+          calls.push({
+            approvalId: input.approvalId,
+            decision: input.decision,
+          });
+          return { success: true, message: input.decision };
+        },
+      };
+
+      web = new WebChannel({ port: 18980, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const denyRes = await fetch('http://localhost:18980/api/tools/approvals/decision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          approvalId: 'approval-memory-2',
+          decision: 'deny',
+        }),
+      });
+      const unknownRes = await fetch('http://localhost:18980/api/tools/approvals/decision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          approvalId: 'approval-memory-3',
+          decision: 'maybe',
+        }),
+      });
+
+      expect(denyRes.status).toBe(200);
+      expect(unknownRes.status).toBe(400);
+      expect(calls).toEqual([{
+        approvalId: 'approval-memory-2',
+        decision: 'denied',
       }]);
     });
 
