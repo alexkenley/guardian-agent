@@ -3,6 +3,7 @@ import type { AuditEvent, AuditEventType, AuditLog, AuditSeverity } from '../gua
 import type { EventBus } from '../queue/event-bus.js';
 import { createLogger } from '../util/logging.js';
 import type { AssistantNotificationsConfig } from '../config/types.js';
+import { redactSensitiveText, redactSensitiveValue } from '../util/crypto-guardrails.js';
 
 const log = createLogger('notifications');
 
@@ -146,7 +147,7 @@ export class NotificationService {
   }
 
   private buildNotification(event: AuditEvent): SecurityNotification | null {
-    const description = extractNotificationDescription(event);
+    const description = redactSensitiveText(extractNotificationDescription(event));
     const dedupeKey = [
       event.type,
       event.agentId,
@@ -164,7 +165,7 @@ export class NotificationService {
       title: summarizeTitle(event),
       description,
       dedupeKey,
-      details: { ...event.details },
+      details: redactNotificationDetails(event.details),
     };
   }
 
@@ -298,7 +299,7 @@ function summarizeSecurityTriageFinding(details: Record<string, unknown>): strin
 }
 
 function compactNotificationText(text: string): string {
-  const normalized = text
+  const normalized = redactSensitiveText(text)
     .replace(/<br\s*\/?>/gi, ' ')
     .replace(/[`*_#>]/g, '')
     .replace(/\|/g, ' ')
@@ -308,6 +309,29 @@ function compactNotificationText(text: string): string {
     return normalized || 'No additional detail provided.';
   }
   return `${normalized.slice(0, 237).trimEnd()}...`;
+}
+
+function redactNotificationDetails(details: Record<string, unknown>): Record<string, unknown> {
+  const keyRedacted = redactSensitiveValue(details);
+  const valueRedacted = redactNotificationStrings(keyRedacted);
+  return isRecord(valueRedacted) ? valueRedacted : {};
+}
+
+function redactNotificationStrings(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactSensitiveText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactNotificationStrings(item));
+  }
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      out[key] = redactNotificationStrings(child);
+    }
+    return out;
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

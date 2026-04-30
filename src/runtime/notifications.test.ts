@@ -448,4 +448,41 @@ describe('NotificationService', () => {
     }));
     expect(sendCli).toHaveBeenCalledTimes(1);
   });
+
+  it('redacts secret-like values from notification text and payload details', async () => {
+    const auditLog = new AuditLog();
+    const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;
+    const sendCli = vi.fn().mockResolvedValue(undefined);
+    const sendTelegram = vi.fn().mockResolvedValue(undefined);
+    const service = new NotificationService({
+      config: makeConfig({ auditEventTypes: ['agent_error'] }),
+      auditLog,
+      eventBus,
+      senders: { sendCli, sendTelegram },
+    });
+
+    service.start();
+    auditLog.record({
+      type: 'agent_error',
+      severity: 'warn',
+      agentId: 'connector',
+      details: {
+        description: 'Provider failed with Authorization: Bearer abcdefghijklmnopqrstuvwxyz',
+        apiKey: 'sk-live-secret-value-123456',
+        nested: {
+          error: 'refresh_token=plain-secret-token-value',
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    const emittedPayload = vi.mocked(eventBus.emit).mock.calls[0]?.[0]?.payload;
+    expect(JSON.stringify(emittedPayload)).toContain('[REDACTED]');
+    expect(JSON.stringify(emittedPayload)).not.toContain('abcdefghijklmnopqrstuvwxyz');
+    expect(JSON.stringify(emittedPayload)).not.toContain('sk-live-secret-value');
+    expect(JSON.stringify(emittedPayload)).not.toContain('plain-secret-token-value');
+    expect(sendCli).toHaveBeenCalledWith(expect.stringContaining('Bearer [REDACTED]'));
+    expect(sendCli).not.toHaveBeenCalledWith(expect.stringContaining('abcdefghijklmnopqrstuvwxyz'));
+    expect(sendTelegram).not.toHaveBeenCalledWith(expect.stringContaining('plain-secret-token-value'));
+  });
 });
