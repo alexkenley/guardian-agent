@@ -186,6 +186,41 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('defers planned security tool orchestration to the graph path', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'security_task',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'tool_call',
+            summary: 'Inspect security posture.',
+            expectedToolCategories: ['security_posture_status'],
+            required: true,
+          },
+          {
+            kind: 'tool_call',
+            summary: 'Inspect cloud status.',
+            expectedToolCategories: ['whm_status'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return a concise status summary.',
+            required: true,
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('keeps unknown-operation memory routes on memory handlers so direct parsing can disambiguate read vs write', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({ route: 'memory_task', operation: 'unknown' }),

@@ -181,6 +181,13 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
     });
   }
 
+  if (decision.route === 'security_task') {
+    return requiredSteps.length > 0
+      || decision.requiresToolSynthesis === true
+      || decision.preferredAnswerPath === 'tool_loop'
+      || decision.simpleVsComplex === 'complex';
+  }
+
   return false;
 }
 

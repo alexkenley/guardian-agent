@@ -220,6 +220,38 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['security_guardrail']);
   });
 
+  it('defers planned security tool orchestration to graph synthesis', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'security_task',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'tool_call',
+            summary: 'Read Assistant Security summary.',
+            expectedToolCategories: ['assistant_security_summary'],
+            required: true,
+          },
+          {
+            kind: 'tool_call',
+            summary: 'Read WHM status.',
+            expectedToolCategories: ['whm_status'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return concise security and cloud status.',
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
   it('maps structured managed sandbox status reads to coding session control', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({
