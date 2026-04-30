@@ -32,9 +32,11 @@ import {
 } from '../runtime/package-install-trust.js';
 import {
   buildRemoteExecutionTargetDiagnostics,
+  classifyRemoteExecutionDiagnosticCause,
   isRemoteExecutionTargetReady,
   listRemoteExecutionTargets,
   prioritizeReadyRemoteExecutionTargets,
+  type RemoteExecutionDiagnosticCause,
   type RemoteExecutionHealthState,
   type RemoteExecutionTargetDescriptor,
   type RemoteExecutionTargetDiagnostic,
@@ -1281,6 +1283,7 @@ export class ToolExecutor {
       trackedRemotePaths: [...lease.trackedRemotePaths],
       healthState: descriptor.healthState,
       healthReason: descriptor.healthReason,
+      healthCause: descriptor.healthCause,
       healthCheckedAt: this.now(),
       healthDurationMs: descriptor.healthDurationMs,
     };
@@ -1298,7 +1301,32 @@ export class ToolExecutor {
           ? `Active leased sandbox is attached to code session '${input.activeLease.codeSessionId}'.`
           : 'Active leased sandbox is available.')
       : undefined;
+    const targetMissingReason = !input.target
+      ? `Managed sandbox target '${input.record.profileName}' can no longer be resolved. Re-enable or reconfigure that remote target.`
+      : undefined;
     const targetUnavailable = input.target?.healthState === 'unreachable';
+    const healthReason = input.activeLease
+      ? activeLeaseReason
+      : targetMissingReason ?? (targetUnavailable ? (input.target?.healthReason ?? input.record.healthReason) : input.record.healthReason);
+    const healthCause: RemoteExecutionDiagnosticCause | undefined = input.activeLease
+      ? undefined
+      : targetMissingReason
+        ? 'local_profile_config'
+        : targetUnavailable
+          ? (input.target?.healthCause ?? classifyRemoteExecutionDiagnosticCause(healthReason))
+          : input.record.healthCause;
+    const healthCheckedAt = input.activeLease
+      ? input.activeLease.lastUsedAt
+      : targetMissingReason
+        ? this.now()
+        : targetUnavailable
+          ? (input.target?.healthCheckedAt ?? input.record.healthCheckedAt)
+          : input.record.healthCheckedAt;
+    const healthDurationMs = targetMissingReason
+      ? 0
+      : targetUnavailable
+        ? (input.target?.healthDurationMs ?? input.record.healthDurationMs)
+        : input.record.healthDurationMs;
     return {
       ...input.record,
       sandboxId: input.activeLease?.sandboxId ?? input.record.sandboxId,
@@ -1318,22 +1346,17 @@ export class ToolExecutor {
           fallback: input.record.status,
         })
         : this.resolveManagedSandboxStatus({
-          healthState: targetUnavailable ? 'unreachable' : input.record.healthState,
+          healthState: targetMissingReason || targetUnavailable ? 'unreachable' : input.record.healthState,
           state,
           fallback: input.record.status,
         }),
       healthState: input.activeLease
         ? 'healthy'
-        : (targetUnavailable ? 'unreachable' : input.record.healthState),
-      healthReason: input.activeLease
-        ? activeLeaseReason
-        : (targetUnavailable ? (input.target?.healthReason ?? input.record.healthReason) : input.record.healthReason),
-      healthCheckedAt: input.activeLease
-        ? input.activeLease.lastUsedAt
-        : (targetUnavailable ? (input.target?.healthCheckedAt ?? input.record.healthCheckedAt) : input.record.healthCheckedAt),
-      healthDurationMs: targetUnavailable
-        ? (input.target?.healthDurationMs ?? input.record.healthDurationMs)
-        : input.record.healthDurationMs,
+        : (targetMissingReason || targetUnavailable ? 'unreachable' : input.record.healthState),
+      healthReason,
+      healthCause,
+      healthCheckedAt,
+      healthDurationMs,
     };
   }
 
@@ -1386,6 +1409,7 @@ export class ToolExecutor {
             }),
             healthState: inspection.healthState,
             healthReason: inspection.reason,
+            healthCause: classifyRemoteExecutionDiagnosticCause(inspection.reason),
             healthCheckedAt: inspection.checkedAt,
             healthDurationMs: inspection.durationMs,
           };

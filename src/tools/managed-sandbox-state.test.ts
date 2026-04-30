@@ -209,4 +209,74 @@ describe('ToolExecutor Managed Sandbox State', () => {
     expect(sandbox.status).toBe('stopped');
     expect(sandbox.state).toBeUndefined();
   });
+
+  it('marks managed sandbox records unreachable when their configured target disappears', async () => {
+    const sandbox: any = {
+      leaseId: 'lease-1',
+      targetId: 'daytona:daytona-main',
+      backendKind: 'daytona_sandbox',
+      profileId: 'daytona-main',
+      profileName: 'Daytona Main',
+      sandboxId: 'sandbox-1',
+      localWorkspaceRoot: root,
+      remoteWorkspaceRoot: '/remote/workspace',
+      status: 'active' as const,
+      state: 'running',
+      acquiredAt: 1,
+      lastUsedAt: 1,
+      trackedRemotePaths: [],
+    };
+    const session = {
+      id: 'session-1',
+      ownerUserId: 'user-1',
+      resolvedRoot: root,
+      workspaceRoot: root,
+      workState: { managedSandboxes: [sandbox] },
+    };
+    const store: any = {
+      updateSession: vi.fn(),
+      resolveForRequest: () => ({ session }),
+      listSessionsForUser: () => [],
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      allowedDomains: ['app.daytona.io'],
+      codeSessionStore: store,
+      remoteExecutionService: {
+        runBoundedJob: vi.fn(),
+        getKnownTargetHealth: () => ({}),
+        listActiveLeases: () => [],
+      },
+      cloudConfig: createCloudConfig({
+        enabled: true,
+        daytonaProfiles: [],
+      }),
+    });
+
+    vi.spyOn(executor as any, 'getCodeSessionRecord').mockReturnValue(session);
+
+    const result = await executor.getCodeSessionManagedSandboxStatus({
+      sessionId: 'session-1',
+      ownerUserId: 'user-1',
+    });
+
+    expect(result.sandboxes[0]).toMatchObject({
+      status: 'unreachable',
+      healthState: 'unreachable',
+      healthCause: 'local_profile_config',
+      healthReason: expect.stringContaining('can no longer be resolved'),
+    });
+    expect(store.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      ownerUserId: 'user-1',
+      workState: {
+        managedSandboxes: [expect.objectContaining({
+          status: 'unreachable',
+          healthCause: 'local_profile_config',
+        })],
+      },
+    }));
+  });
 });

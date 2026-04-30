@@ -34,6 +34,7 @@ import {
 } from './coding-workflows.js';
 import type {
   RemoteExecutionBackendKind,
+  RemoteExecutionDiagnosticCause,
   RemoteExecutionHealthState,
 } from './remote-execution/policy.js';
 
@@ -107,6 +108,7 @@ export interface CodeSessionManagedSandbox {
   trackedRemotePaths: string[];
   healthState?: RemoteExecutionHealthState;
   healthReason?: string;
+  healthCause?: RemoteExecutionDiagnosticCause;
   healthCheckedAt?: number;
   healthDurationMs?: number;
 }
