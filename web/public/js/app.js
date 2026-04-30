@@ -34,6 +34,8 @@ let pendingInvalidationPayloads = [];
 let securityAlertTray = null;
 let appStarted = false;
 let authRecoveryInProgress = false;
+let navigationInFlight = false;
+let navigationQueued = false;
 const DENSE_CHAT_PANEL_ROUTES = new Set(['automations', 'config']);
 
 // ─── Auth ────────────────────────────────────────────────
@@ -442,8 +444,28 @@ async function navigate() {
 
   lastCommittedHash = nextHash;
 
-  // Render page, passing options like tab deep-link
-  route.render(content, { tab: params.get('tab') });
+  // Render page, passing options like tab deep-link.
+  await route.render(content, { tab: params.get('tab') });
+}
+
+function scheduleNavigation() {
+  if (navigationInFlight) {
+    navigationQueued = true;
+    return;
+  }
+
+  navigationInFlight = true;
+  void (async () => {
+    try {
+      await navigate();
+    } finally {
+      navigationInFlight = false;
+      if (navigationQueued) {
+        navigationQueued = false;
+        scheduleNavigation();
+      }
+    }
+  })();
 }
 
 function startClock() {
@@ -511,9 +533,9 @@ function startApp() {
   }
 
   window.addEventListener('hashchange', () => {
-    void navigate();
+    scheduleNavigation();
   });
-  void navigate();
+  scheduleNavigation();
 
   // Killswitch button
   const killBtn = document.getElementById('killswitch-btn');
