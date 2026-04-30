@@ -673,8 +673,8 @@ function renderTopActiveSignals(topAlerts, assistantSummary, intelSummary) {
     items.push(renderFocusItem({
       badgeLabel: alert.severity,
       badgeClass: `status-${alert.severity}`,
-      title: alert.subject || `${formatSecuritySource(alert.source)} signal`,
-      detail: alert.description,
+      title: securityDisplayText(alert.subject || `${formatSecuritySource(alert.source)} signal`),
+      detail: securityDisplayText(alert.description),
       meta: `${formatSecuritySource(alert.source)} · ${formatRelativeTime(alert.timestamp || alert.lastSeenAt)}`,
     }));
   }
@@ -713,8 +713,8 @@ function renderNeedsAttention(alerts, assistantSummary, intelSummary) {
     items.push(renderFocusItem({
       badgeLabel: alert.severity || 'alert',
       badgeClass: `status-${alert.severity || 'warning'}`,
-      title: alert.subject || alert.type || 'Security alert',
-      detail: alert.description || 'Open Security Log for the full alert detail and actions.',
+      title: securityDisplayText(alert.subject || alert.type || 'Security alert'),
+      detail: securityDisplayText(alert.description || 'Open Security Log for the full alert detail and actions.'),
       meta: `${formatSecuritySource(alert.source)} · ${formatRelativeTime(alert.lastSeenAt || alert.timestamp)} · ${alert.status || 'active'}`,
     }));
   }
@@ -802,8 +802,8 @@ function renderAlertQueue(alerts, auditEvents = []) {
               <td>${esc(formatSecuritySource(alert.source))}</td>
               <td>${esc(alert.type)}</td>
               <td>
-                <div>${esc(alert.description)}</div>
-                <div class="table-muted">${esc(alert.subject || '')}</div>
+                <div>${esc(securityDisplayText(alert.description))}</div>
+                <div class="table-muted">${esc(securityDisplayText(alert.subject || ''))}</div>
                 ${renderAlertInvestigationDetails(alert, auditEvents)}
               </td>
               <td>
@@ -842,7 +842,7 @@ function renderAuditHistory(events) {
               <td>${esc(event.type)}</td>
               <td>${esc(event.agentId || 'system')}</td>
               <td>
-                <div>${esc(shortDescriptionFromAudit(event))}</div>
+                <div>${esc(securityDisplayText(shortDescriptionFromAudit(event)))}</div>
                 ${renderAuditInvestigationDetails(event)}
               </td>
             </tr>
@@ -943,7 +943,7 @@ function renderInvestigationTextSection(title, items) {
     <section class="security-entry-details__section">
       <h4>${esc(title)}</h4>
       <ul class="security-entry-details__list">
-        ${values.map((item) => `<li>${esc(item)}</li>`).join('')}
+        ${values.map((item) => `<li>${esc(securityDisplayText(item))}</li>`).join('')}
       </ul>
     </section>
   `;
@@ -959,7 +959,7 @@ function renderInvestigationFactSection(title, facts) {
         ${values.map((item) => `
           <div class="security-entry-details__fact">
             <div class="security-entry-details__fact-label">${esc(item.label)}</div>
-            <div class="security-entry-details__fact-value">${esc(item.value)}</div>
+            <div class="security-entry-details__fact-value">${esc(securityDisplayText(item.value))}</div>
           </div>
         `).join('')}
       </div>
@@ -984,7 +984,7 @@ function normalizeFactItems(items) {
       && item.value.trim() !== 'the affected target')
     .map((item) => ({
       label: item.label.trim(),
-      value: item.value.trim(),
+      value: securityDisplayText(item.value.trim()),
     }));
 }
 
@@ -1804,9 +1804,9 @@ function formatTimestamp(timestamp) {
 }
 
 function shortDescriptionFromAudit(event) {
-  if (typeof event?.details?.description === 'string' && event.details.description.trim()) return event.details.description.trim();
-  if (typeof event?.details?.reason === 'string' && event.details.reason.trim()) return event.details.reason.trim();
-  return event?.type || 'Audit event';
+  if (typeof event?.details?.description === 'string' && event.details.description.trim()) return securityDisplayText(event.details.description.trim());
+  if (typeof event?.details?.reason === 'string' && event.details.reason.trim()) return securityDisplayText(event.details.reason.trim());
+  return securityDisplayText(event?.type || 'Audit event');
 }
 
 function safeJson(value) {
@@ -1841,11 +1841,17 @@ function isSensitiveDisplayKey(key) {
   return /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|bearer|authorization|client[_-]?secret|credential|cookie|password|passwd|secret|token)/i.test(String(key || ''));
 }
 
-function redactSecurityTextForDisplay(value) {
+function securityDisplayText(value) {
+  return redactSecurityTextForDisplay(String(value ?? ''));
+}
+
+export function redactSecurityTextForDisplay(value) {
   return String(value || '')
     .replace(/\b(authorization)\s*[:=]\s*(?:Bearer\s+)?["']?[^"',;\s)}\]]{4,}/gi, '$1: [REDACTED]')
     .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|credential|password|passwd|secret|token)\s*[:=]\s*["']?[^"',;\s)}\]]{4,}/gi, '$1=[REDACTED]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{12,}/gi, 'Bearer [REDACTED]')
+    .replace(/\bya29\.[A-Za-z0-9._-]{12,}/g, 'ya29.[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, 'jwt_[REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, 'sk-[REDACTED]')
     .replace(/\bghp_[A-Za-z0-9_]{12,}/g, 'ghp_[REDACTED]')
     .replace(/\bxox[baprs]-[A-Za-z0-9-]{12,}/gi, 'xox[REDACTED]')
@@ -1854,7 +1860,7 @@ function redactSecurityTextForDisplay(value) {
 
 function resolveInvestigationSubject(value, fallback) {
   if (typeof value === 'string' && value.trim() && value.trim() !== '-') {
-    return value.trim();
+    return securityDisplayText(value.trim());
   }
   return fallback || 'the affected target';
 }

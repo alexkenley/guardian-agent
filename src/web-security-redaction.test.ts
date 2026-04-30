@@ -39,6 +39,23 @@ describe('Security page redaction helpers', () => {
     expect(JSON.stringify(redacted)).not.toContain('abcdefghijklmnopqrstuvwxyz');
   });
 
+  it('redacts OAuth and JWT-shaped tokens from visible security summary text', async () => {
+    installSecurityPageDomStubs();
+
+    const { redactSecurityTextForDisplay } = await import('../web/public/js/pages/security.js');
+    const text = [
+      'Google refresh failed with ya29.a0AfH6SMBabcdefghijklmnopqrstuvwxyz0123456789',
+      'Provider returned eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnopqrstuvwxyz012345',
+    ].join(' ');
+
+    const redacted = redactSecurityTextForDisplay(text);
+
+    expect(redacted).toContain('ya29.[REDACTED]');
+    expect(redacted).toContain('jwt_[REDACTED]');
+    expect(redacted).not.toContain('a0AfH6SMBabcdefghijklmnopqrstuvwxyz');
+    expect(redacted).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+  });
+
   it('explains whether Security activity entries ran AI triage', async () => {
     installSecurityPageDomStubs();
 
