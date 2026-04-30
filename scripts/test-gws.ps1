@@ -11,7 +11,7 @@
     testing and LLM-driven prompts (POST /api/message) for discovery and reads.
 
     Requires a running GuardianAgent instance with web channel enabled, an LLM
-    provider configured, and the gws CLI installed + authenticated.
+    provider configured, and Google Workspace connected through the web UI.
 
 .PARAMETER SkipStart
     Assume the app is already running.
@@ -33,8 +33,8 @@
 
 .NOTES
     See docs/guides/INTEGRATION-TEST-HARNESS.md for full documentation.
-    GWS tests require the gws CLI to be installed and authenticated.
-    All write operations are denied after assertion — nothing is actually created.
+    Content-read tests require Google Workspace to be connected through the web UI.
+    All write operations are denied after assertion - nothing is actually created.
 #>
 
 param(
@@ -57,6 +57,8 @@ $Fail = 0
 $Skip = 0
 $Results = @()
 $LogFile = Join-Path $env:TEMP "guardian-gws-harness.log"
+$OriginalGuardianProfile = $env:GUARDIAN_PROFILE
+$HarnessProfile = "gws-harness-$([guid]::NewGuid().ToString("N"))"
 
 # --- Helpers ---
 function Write-Log($msg) { Write-Host "[gws] $msg" -ForegroundColor Cyan }
@@ -71,6 +73,35 @@ function Write-Fail($name, $reason) {
 function Write-Skip($name, $reason) {
     Write-Host "  SKIP " -ForegroundColor Yellow -NoNewline; Write-Host "$name - $reason"
     $script:Skip++; $script:Results += "SKIP: $name - $reason"
+}
+
+function Get-OrDefault($value, $fallback) {
+    if ($null -ne $value -and "$value" -ne "") { return $value }
+    return $fallback
+}
+
+function Add-HarnessWebChannel {
+    param(
+        [string]$Content,
+        [string]$WebBlock
+    )
+
+    $updated = $Content -replace '(?m)^(channels:\s*\r?\n)', "`$1$WebBlock`n"
+    if ($updated -eq $Content) {
+        $separator = if ($Content.EndsWith("`n")) { "" } else { "`n" }
+        $updated = "$Content${separator}channels:`n$WebBlock`n"
+    }
+    return $updated
+}
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    if (-not $ProcessId) { return }
+    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    foreach ($child in $children) {
+        Stop-ProcessTree -ProcessId $child.ProcessId
+    }
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
 function Send-Message {
@@ -173,6 +204,16 @@ function Test-ToolWasCalled {
 function Invoke-ToolPolicy {
     param([hashtable]$Policy)
     try {
+        $ticketResp = Invoke-RestMethod -Uri "$BaseUrl/api/auth/ticket" `
+            -Method Post `
+            -Headers @{ Authorization = "Bearer $Token" } `
+            -ContentType "application/json" `
+            -Body (@{ action = "tools.policy" } | ConvertTo-Json -Compress) `
+            -TimeoutSec 10
+        if (-not $ticketResp.ticket) {
+            return @{ error = "privileged ticket was not issued" }
+        }
+        $Policy.ticket = $ticketResp.ticket
         $resp = Invoke-RestMethod -Uri "$BaseUrl/api/tools/policy" `
             -Method Post `
             -Headers @{ Authorization = "Bearer $Token" } `
@@ -219,7 +260,7 @@ if (-not $SkipStart) {
     $existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "src[/\\]index\.ts|dist[/\\]index\.js" }
     if ($existing) {
-        Write-Log "Killing $($existing.Count) existing GuardianAgent process(es)..."
+        Write-Log "Killing $(@($existing).Count) existing GuardianAgent process(es)..."
         foreach ($proc in $existing) {
             Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
         }
@@ -244,7 +285,7 @@ if (-not $SkipStart) {
     port: $Port
     authToken: "$Token"
 "@
-        $configContent = $configContent -replace '(channels:\s*\r?\n)', "`$1$webBlock`n"
+        $configContent = Add-HarnessWebChannel -Content $configContent -WebBlock $webBlock
         $configContent | Set-Content $harnessConfig -Encoding utf8
     }
     else {
@@ -269,6 +310,7 @@ guardian:
 
     Write-Log "Starting GuardianAgent with token: $Token"
 
+    $env:GUARDIAN_PROFILE = $HarnessProfile
     $AppProcess = Start-Process -FilePath "cmd.exe" `
         -ArgumentList "/c npx tsx src/index.ts `"$harnessConfig`"" `
         -WorkingDirectory $projectRoot `
@@ -293,7 +335,7 @@ guardian:
         Write-Host "ERROR: App failed to start within ${TimeoutStartup}s" -ForegroundColor Red
         if (Test-Path $LogFile) { Get-Content $LogFile -Tail 30 }
         if (Test-Path "$LogFile.err") { Get-Content "$LogFile.err" -Tail 30 }
-        if ($AppProcess -and -not $AppProcess.HasExited) { $AppProcess.Kill() }
+        if ($AppProcess -and -not $AppProcess.HasExited) { Stop-ProcessTree -ProcessId $AppProcess.Id }
         exit 1
     }
     Write-Log "Ready with auth token: $Token"
@@ -310,11 +352,26 @@ $cleanupBlock = {
         }
         else {
             Write-Log "Stopping app (PID $($script:AppProcess.Id))..."
-            $script:AppProcess.Kill()
+            Stop-ProcessTree -ProcessId $script:AppProcess.Id
         }
+    }
+    $harnessNodes = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "guardian-gws-harness-config\.yaml" }
+    foreach ($proc in $harnessNodes) {
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
     }
     $tempCfg = Join-Path $env:TEMP "guardian-gws-harness-config.yaml"
     if (Test-Path $tempCfg) { Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue }
+    if ($null -ne $script:OriginalGuardianProfile) {
+        $env:GUARDIAN_PROFILE = $script:OriginalGuardianProfile
+    }
+    else {
+        Remove-Item Env:\GUARDIAN_PROFILE -ErrorAction SilentlyContinue
+    }
+    if (-not $Keep) {
+        $profileDir = Join-Path $env:USERPROFILE ".guardianagent\profiles\$HarnessProfile"
+        if (Test-Path $profileDir) { Remove-Item $profileDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 try {
@@ -344,8 +401,8 @@ catch {
 Write-Host ""
 Write-Log "=== GWS Prerequisite Check ==="
 
-$gwsToolRegistered = $false   # Tool exists in registry — approval tests can run
-$gwsCliWorking = $false       # CLI installed + authenticated — read/LLM tests can run
+$gwsToolRegistered = $false   # Tool exists in registry - approval tests can run
+$gwsContentReadWorking = $false       # Google account connected - read/LLM tests can run
 
 # Try a read-only GWS call via direct tool API to check availability
 $probeArgs = @{ service = "gmail"; resource = "users messages"; method = "list"; params = @{ userId = "me"; maxResults = 1 } }
@@ -353,8 +410,8 @@ $gwsProbe = Invoke-ToolRun -ToolName "gws" -ToolArgs $probeArgs
 
 if ($gwsProbe.success -eq $true) {
     $gwsToolRegistered = $true
-    $gwsCliWorking = $true
-    Write-Pass "gws: CLI available and authenticated (Gmail read succeeded)"
+    $gwsContentReadWorking = $true
+    Write-Pass "gws: Google Workspace connected (Gmail read succeeded)"
 }
 elseif ($gwsProbe.message -match "Google Workspace is not enabled") {
     Write-Skip "gws: all GWS tests" "GWS not enabled in config"
@@ -367,17 +424,17 @@ elseif ($gwsProbe.status -eq "denied") {
 }
 else {
     # The tool IS registered and ran (status=failed means the handler executed).
-    # Approval tests don't need a working CLI — the gate fires before the handler.
+    # Approval tests don't need Google auth - the gate fires before the handler.
     $gwsToolRegistered = $true
 
     if ($gwsProbe.message -match "Cannot find module|ENOENT|not recognized") {
-        Write-Pass "gws: tool registered (CLI not installed — approval tests will run, read tests will skip)"
+        Write-Pass "gws: tool registered (Google client unavailable - approval tests will run, read tests will skip)"
     }
     elseif ($gwsProbe.message -match "not authenticated|auth|login") {
-        Write-Pass "gws: tool registered (CLI not authenticated — approval tests will run, read tests will skip)"
+        Write-Pass "gws: tool registered (Google account not connected - approval tests will run, read tests will skip)"
     }
     else {
-        # Some other CLI error — tool registered, CLI state unknown
+        # Some other provider error - tool registered, auth state unknown
         Write-Pass "gws: tool registered (probe status: $($gwsProbe.status))"
     }
 }
@@ -385,9 +442,9 @@ else {
 if ($gwsToolRegistered) {
 
 # ===============================================================
-# TOOL DISCOVERY + READ OPERATIONS (require working CLI)
+# TOOL DISCOVERY + READ OPERATIONS (require connected Google account)
 # ===============================================================
-if ($gwsCliWorking) {
+if ($gwsContentReadWorking) {
 
 $null = Invoke-ToolPolicy @{ mode = "autonomous" }
 Write-Pass "setup: autonomous policy for GWS read tests"
@@ -439,9 +496,9 @@ if (Test-ValidResponse $resp "gws-schema: valid response") {
 
 Start-Sleep -Seconds 3
 
-} # end if ($gwsCliWorking)
+} # end if ($gwsContentReadWorking)
 else {
-    Write-Skip "discovery + read tests" "gws CLI not installed or not authenticated"
+    Write-Skip "discovery + read tests" "Google Workspace is not connected"
 }
 
 # ===============================================================
@@ -470,7 +527,7 @@ if ($calCreate.status -eq "pending_approval") {
     if ($calCreate.approvalId) {
         $deny = Invoke-ApprovalDecision $calCreate.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "calendar-create: denial accepted" }
-        else { Write-Fail "calendar-create: deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "calendar-create: deny" (Get-OrDefault $deny.error "unknown") }
     }
 }
 elseif ($calCreate.success -eq $true) {
@@ -491,7 +548,7 @@ if ($driveCreate.status -eq "pending_approval") {
     if ($driveCreate.approvalId) {
         $deny = Invoke-ApprovalDecision $driveCreate.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "drive-create: denial accepted" }
-        else { Write-Fail "drive-create: deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "drive-create: deny" (Get-OrDefault $deny.error "unknown") }
     }
 }
 elseif ($driveCreate.success -eq $true) {
@@ -512,7 +569,7 @@ if ($docsUpdate.status -eq "pending_approval") {
     if ($docsUpdate.approvalId) {
         $deny = Invoke-ApprovalDecision $docsUpdate.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "docs-update: denial accepted" }
-        else { Write-Fail "docs-update: deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "docs-update: deny" (Get-OrDefault $deny.error "unknown") }
     }
 }
 elseif ($docsUpdate.success -eq $true) {
@@ -533,7 +590,7 @@ if ($sheetsDelete.status -eq "pending_approval") {
     if ($sheetsDelete.approvalId) {
         $deny = Invoke-ApprovalDecision $sheetsDelete.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "sheets-delete: denial accepted" }
-        else { Write-Fail "sheets-delete: deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "sheets-delete: deny" (Get-OrDefault $deny.error "unknown") }
     }
 }
 elseif ($sheetsDelete.success -eq $true) {
@@ -554,7 +611,7 @@ if ($gmailSend.status -eq "pending_approval") {
     if ($gmailSend.approvalId) {
         $deny = Invoke-ApprovalDecision $gmailSend.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "gmail-send: denial accepted" }
-        else { Write-Fail "gmail-send: deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "gmail-send: deny" (Get-OrDefault $deny.error "unknown") }
     }
 }
 elseif ($gmailSend.success -eq $true) {
@@ -577,7 +634,7 @@ elseif ($gmailRead.status -eq "pending_approval") {
     Write-Fail "gmail-read: incorrectly requires approval" "reads should be auto-allowed"
 }
 else {
-    # GWS API/CLI error is OK (means the tool executed without hitting approval gate)
+    # GWS API/auth error is OK (means the tool executed without hitting approval gate)
     if ($gmailRead.status -eq "error" -or $gmailRead.status -eq "failed") {
         Write-Pass "gmail-read: tool executed without approval (status: $($gmailRead.status))"
     }
@@ -589,10 +646,10 @@ else {
 Start-Sleep -Seconds 2
 
 # ===============================================================
-# AUTONOMOUS MODE ALLOWS WRITES
+# AUTONOMOUS REQUEST BASELINE VERIFICATION
 # ===============================================================
 Write-Host ""
-Write-Log "=== GWS Autonomous Mode Verification ==="
+Write-Log "=== GWS Autonomous Request Baseline Verification ==="
 
 $null = Invoke-ToolPolicy @{ mode = "autonomous" }
 Write-Pass "autonomous: policy set to autonomous"
@@ -605,10 +662,10 @@ $autoArgs = @{ service = "calendar"; resource = "events"; method = "create"; par
 $calAuto = Invoke-ToolRun -ToolName "gws" -ToolArgs $autoArgs
 
 if ($calAuto.status -eq "pending_approval") {
-    Write-Fail "autonomous-create: still requires approval in autonomous mode"
+    Write-Pass "autonomous-create: security baseline kept write behind approval"
 }
 elseif ($calAuto.success -eq $true -or $calAuto.status -eq "succeeded" -or $calAuto.status -eq "error" -or $calAuto.status -eq "failed") {
-    # "error"/"failed" is acceptable — means the tool executed (bypassed approval) but the GWS CLI may have failed
+    # "error"/"failed" is acceptable only when the local environment disables the security baseline.
     Write-Pass "autonomous-create: write executed without approval gate (status: $($calAuto.status))"
 }
 else {

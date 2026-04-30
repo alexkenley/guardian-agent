@@ -197,7 +197,7 @@ Core harness scripts include:
 | **`scripts/test-second-brain-smoke.mjs`** | Dist-backed Second Brain service smoke: tasks, notes, contacts, library links, events, and briefing behavior (Node.js) | focused Second Brain service assertions |
 | **`scripts/test-second-brain-routines.mjs`** | Dist-backed Second Brain routines smoke: seeded routines, horizon scanning, scheduled-task integration, and sync behavior (Node.js) | focused Second Brain routine assertions |
 | **`scripts/test-second-brain-budgeting.mjs`** | Dist-backed Second Brain budgeting smoke: usage accounting and local/external sync budgeting behavior (Node.js) | focused Second Brain budget assertions |
-| **`scripts/test-second-brain-chat-crud.mjs`** | Chat-driven Second Brain CRUD harness: assistant create/update/delete coverage for notes, tasks, local calendar, contacts, library items, briefs, and routines through `POST /api/message`, plus an optional real Ollama smoke lane (Node.js). Known gap: this lane is still WIP and currently exposes approval/continuation issues on mutating `second_brain_*` chat flows. | focused Second Brain assistant CRUD assertions |
+| **`scripts/test-second-brain-chat-crud.mjs`** | Chat-driven Second Brain CRUD harness: assistant create/update/delete coverage for notes, tasks, local calendar, contacts, library items, briefs, and routines through `POST /api/message`, plus approval-continuation checks and an optional real Ollama smoke lane (Node.js). | focused Second Brain assistant CRUD assertions |
 | **`scripts/test-second-brain-ui-smoke.mjs`** | Browser smoke for the `#/` Second Brain workspace: local calendar/tasks/notes/contacts/library/briefs/routines CRUD through the web UI, plus an optional real Ollama retrieval smoke lane (Node.js + Playwright) | focused Second Brain UI assertions |
 | **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
 | **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
@@ -352,9 +352,7 @@ HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-seco
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_BASE_URL=https://ollama.com/api HARNESS_OLLAMA_MODEL=qwen3-coder-next node scripts/test-second-brain-ui-smoke.mjs --use-ollama
 ```
 
-Known gap to fix later: `scripts/test-second-brain-chat-crud.mjs` is not part of the required green loop yet. In the current harness path, chat-driven Second Brain mutations can still land in approval-gated pending actions instead of completing end to end, so the approval/continuation or live policy behavior needs follow-up work before this becomes a required passing lane.
-
-Investigative/WIP Second Brain chat CRUD lane:
+Optional Second Brain chat CRUD lane. Run this when changing assistant-driven Second Brain mutation routing, approval continuation, or live policy behavior:
 
 ```bash
 node scripts/test-second-brain-chat-crud.mjs
@@ -769,9 +767,9 @@ Verifies that all tool executions from the test session are recorded in the job 
 
 ### Google Workspace Suite (`test-gws.ps1`, ~25+ assertions)
 
-Tests Google Workspace tool integration: discovery, read operations, write approval gating, and schema lookup. Requires the `gws` CLI to be installed and authenticated — all tests SKIP gracefully if unavailable.
+Tests Google Workspace tool integration: discovery, content-reading operations, write approval gating, and schema lookup through the native Google Workspace integration. Content-read tests require Google Workspace to be connected through the web UI and skip gracefully when the account is not authenticated. For Gmail, Google Calendar, or Google Workspace status-only requests, prefer `gws_status`; it reports connection, enabled-service state, configured scopes, and content-read prerequisites without reading mailbox, calendar, Drive, Docs, Sheets, or Contacts contents.
 
-**Prerequisite:** Probes GWS availability via a direct `POST /api/tools/run` call with a Gmail read. All tests skip if GWS is not enabled or not authenticated.
+**Prerequisite:** Probes GWS availability via a direct `POST /api/tools/run` call with a Gmail read. Content-read tests skip if GWS is not enabled or the Google account is not connected. Status-only `gws_status` coverage should not depend on a content-read probe.
 
 #### Tool Discovery
 | Prompt | Expected Tool | What It Validates |

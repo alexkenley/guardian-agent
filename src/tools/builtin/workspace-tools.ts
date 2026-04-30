@@ -1,5 +1,7 @@
 import type { GoogleService } from '../../google/google-service.js';
+import { GOOGLE_SERVICE_SCOPES } from '../../google/types.js';
 import type { MicrosoftService } from '../../microsoft/microsoft-service.js';
+import { MICROSOFT_SERVICE_SCOPES } from '../../microsoft/types.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
 
@@ -11,6 +13,55 @@ interface WorkspaceToolRegistrarContext {
   guardAction: (request: ToolExecutionRequest, action: string, details: Record<string, unknown>) => void;
   getGoogleService: () => GoogleService | undefined;
   getMicrosoftService: () => MicrosoftService | undefined;
+}
+
+function mapGoogleConfiguredScopes(services: string[]): Record<string, string> {
+  const scopes: Record<string, string> = {};
+  for (const service of services) {
+    const normalized = service.trim().toLowerCase();
+    const scope = GOOGLE_SERVICE_SCOPES[normalized];
+    if (scope) {
+      scopes[normalized] = scope;
+    }
+  }
+  return scopes;
+}
+
+function mapMicrosoftConfiguredScopes(services: string[]): Record<string, string[]> {
+  const scopes: Record<string, string[]> = {};
+  for (const service of services) {
+    const normalized = service.trim().toLowerCase();
+    const serviceScopes = MICROSOFT_SERVICE_SCOPES[normalized];
+    if (serviceScopes?.length) {
+      scopes[normalized] = [...serviceScopes];
+    }
+  }
+  return scopes;
+}
+
+function buildContentReadRequirements(input: {
+  authenticated: boolean;
+  services: string[];
+  scopesByService: Record<string, string | string[]>;
+}): Record<string, {
+  serviceEnabled: boolean;
+  authenticated: boolean;
+  requiredScopes: string[];
+}> {
+  const enabledServices = new Set(input.services.map((service) => service.trim().toLowerCase()).filter(Boolean));
+  const requirements: Record<string, {
+    serviceEnabled: boolean;
+    authenticated: boolean;
+    requiredScopes: string[];
+  }> = {};
+  for (const [service, scopeValue] of Object.entries(input.scopesByService)) {
+    requirements[service] = {
+      serviceEnabled: enabledServices.has(service),
+      authenticated: input.authenticated,
+      requiredScopes: Array.isArray(scopeValue) ? [...scopeValue] : [scopeValue],
+    };
+  }
+  return requirements;
 }
 
 export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarContext): void {
@@ -242,12 +293,21 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
       context.guardAction(request, 'read_docs', { provider: 'google-native', surface: 'gws_status' });
       const googleSvc = context.getGoogleService();
       const services = googleSvc?.getEnabledServices() ?? [];
+      const authenticated = googleSvc?.isAuthenticated() ?? false;
+      const configuredScopes = mapGoogleConfiguredScopes(services);
       return {
         success: true,
         output: {
           configured: !!googleSvc,
-          authenticated: googleSvc?.isAuthenticated() ?? false,
+          authenticated,
           services,
+          configuredScopes,
+          apiReachability: authenticated ? 'not_checked_status_only' : 'not_checked_auth_required',
+          contentReadRequirements: buildContentReadRequirements({
+            authenticated,
+            services,
+            scopesByService: configuredScopes,
+          }),
           gmailEnabled: googleSvc?.isServiceEnabled('gmail') ?? false,
           calendarEnabled: googleSvc?.isServiceEnabled('calendar') ?? false,
           driveEnabled: googleSvc?.isServiceEnabled('drive') ?? false,
@@ -279,12 +339,21 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
       context.guardAction(request, 'read_docs', { provider: 'microsoft-native', surface: 'm365_status' });
       const msService = context.getMicrosoftService();
       const services = msService?.getEnabledServices() ?? [];
+      const authenticated = msService?.isAuthenticated() ?? false;
+      const configuredScopes = mapMicrosoftConfiguredScopes(services);
       return {
         success: true,
         output: {
           configured: !!msService,
-          authenticated: msService?.isAuthenticated() ?? false,
+          authenticated,
           services,
+          configuredScopes,
+          apiReachability: authenticated ? 'not_checked_status_only' : 'not_checked_auth_required',
+          contentReadRequirements: buildContentReadRequirements({
+            authenticated,
+            services,
+            scopesByService: configuredScopes,
+          }),
           calendarEnabled: msService?.isServiceEnabled('calendar') ?? false,
           mailEnabled: msService?.isServiceEnabled('mail') ?? false,
           oneDriveEnabled: msService?.isServiceEnabled('onedrive') ?? false,

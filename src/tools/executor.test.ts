@@ -5906,6 +5906,23 @@ describe('ToolExecutor', () => {
       configured: true,
       authenticated: true,
       services: ['mail', 'calendar'],
+      configuredScopes: {
+        mail: ['Mail.ReadWrite', 'Mail.Send'],
+        calendar: ['Calendars.ReadWrite'],
+      },
+      apiReachability: 'not_checked_status_only',
+      contentReadRequirements: {
+        mail: {
+          serviceEnabled: true,
+          authenticated: true,
+          requiredScopes: ['Mail.ReadWrite', 'Mail.Send'],
+        },
+        calendar: {
+          serviceEnabled: true,
+          authenticated: true,
+          requiredScopes: ['Calendars.ReadWrite'],
+        },
+      },
       calendarEnabled: true,
       mailEnabled: true,
       oneDriveEnabled: false,
@@ -5959,6 +5976,23 @@ describe('ToolExecutor', () => {
       configured: true,
       authenticated: true,
       services: ['gmail', 'calendar'],
+      configuredScopes: {
+        gmail: 'https://www.googleapis.com/auth/gmail.modify',
+        calendar: 'https://www.googleapis.com/auth/calendar.events',
+      },
+      apiReachability: 'not_checked_status_only',
+      contentReadRequirements: {
+        gmail: {
+          serviceEnabled: true,
+          authenticated: true,
+          requiredScopes: ['https://www.googleapis.com/auth/gmail.modify'],
+        },
+        calendar: {
+          serviceEnabled: true,
+          authenticated: true,
+          requiredScopes: ['https://www.googleapis.com/auth/calendar.events'],
+        },
+      },
       gmailEnabled: true,
       calendarEnabled: true,
       driveEnabled: false,
