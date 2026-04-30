@@ -101,6 +101,7 @@ import {
 import {
   hasRequiredToolBackedAnswerPlan,
 } from './runtime/intent/planned-steps.js';
+import { looksLikeSelfContainedDirectAnswerTurn } from './runtime/intent/request-patterns.js';
 import {
   buildFrontierIntentPlanRepairProviderOrder,
   tryRepairGenericIntentGatewayPlan,
@@ -853,6 +854,18 @@ interface DegradedDirectIntentResponseInput {
     }
     return requestedProviderName === (input.currentProviderName?.trim() || '')
       || !!this.fallbackChain;
+  }
+
+  private shouldUseMinimalDirectAssistantContext(input: {
+    gateway: IntentGatewayRecord | null | undefined;
+    selectedExecutionProfile: SelectedExecutionProfile | null | undefined;
+    currentProviderName?: string;
+    messageContent: string;
+    activeSkillCount: number;
+  }): boolean {
+    if (input.activeSkillCount > 0) return false;
+    if (!looksLikeSelfContainedDirectAnswerTurn(input.messageContent)) return false;
+    return this.shouldHandleDirectAssistantInline(input);
   }
 
   /**
@@ -1727,7 +1740,20 @@ interface DegradedDirectIntentResponseInput {
     let skillPromptMaterial: SkillPromptMaterialResult | undefined;
 
     activeSkills = preResolvedSkills;
-    const promptKnowledge = this.loadPromptKnowledgeBases(scopedCodeSession, knowledgeBaseQuery);
+    const useMinimalDirectAssistantContext = this.shouldUseMinimalDirectAssistantContext({
+      gateway: earlyGateway,
+      selectedExecutionProfile,
+      currentProviderName: ctx.llm?.name,
+      messageContent: routedScopedMessage.content,
+      activeSkillCount: activeSkills.length,
+    });
+    const promptKnowledge = useMinimalDirectAssistantContext
+      ? {
+          knowledgeBases: [],
+          globalContent: '',
+          codingMemoryContent: '',
+        }
+      : this.loadPromptKnowledgeBases(scopedCodeSession, knowledgeBaseQuery);
     if (activeSkills.length > 0) {
       this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
       skillPromptMaterial = buildSkillPromptMaterial(
@@ -1742,22 +1768,28 @@ interface DegradedDirectIntentResponseInput {
       );
       this.trackSkillPromptMaterial(message, earlyGateway?.decision.route, skillPromptMaterial);
     }
-    const toolContext = this.tools?.getToolContext({
-      userId: conversationUserId,
-      principalId: message.principalId ?? conversationUserId,
-      channel: conversationChannel,
-      codeContext: effectiveCodeContext,
-      requestText: routedScopedMessage.content,
-      ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
-    }) ?? '';
-    const runtimeNotices = (this.tools?.getRuntimeNotices() ?? [])
-      .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
-    const promptAdditionalSections = this.buildPromptAdditionalSections(
-      skillPromptMaterial,
-      earlyGateway?.decision,
-      selectedExecutionProfile,
-      referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
-    );
+    const toolContext = useMinimalDirectAssistantContext
+      ? ''
+      : this.tools?.getToolContext({
+          userId: conversationUserId,
+          principalId: message.principalId ?? conversationUserId,
+          channel: conversationChannel,
+          codeContext: effectiveCodeContext,
+          requestText: routedScopedMessage.content,
+          ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
+        }) ?? '';
+    const runtimeNotices = useMinimalDirectAssistantContext
+      ? []
+      : (this.tools?.getRuntimeNotices() ?? [])
+          .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
+    const promptAdditionalSections = useMinimalDirectAssistantContext
+      ? []
+      : this.buildPromptAdditionalSections(
+          skillPromptMaterial,
+          earlyGateway?.decision,
+          selectedExecutionProfile,
+          referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
+        );
     const baseSystemPrompt = enrichedSystemPrompt;
     enrichedSystemPrompt = this.buildAssembledSystemPrompt({
       baseSystemPrompt,

@@ -9050,6 +9050,26 @@ describe('LLMChatAgent direct intent metadata', () => {
       model: 'test-model',
       finishReason: 'stop',
     }));
+    const memoryStore = {
+      getMaxContextChars: vi.fn(() => 20_000),
+      loadForContextWithSelection: vi.fn(() => ({
+        content: 'Stale memory entry: STALE-MEMORY-MARKER',
+        selectedEntries: [
+          {
+            category: 'General',
+            createdAt: '2026-04-30',
+            preview: 'Stale memory entry: STALE-MEMORY-MARKER',
+            renderMode: 'full',
+            queryScore: 100,
+            isContextFlush: false,
+            matchReasons: ['content terms 2'],
+          },
+        ],
+        candidateEntries: 1,
+        omittedEntries: 0,
+        queryPreview: 'reply with exactly prod no context ok',
+      })),
+    };
     const agent = new ChatAgent(
       'chat',
       'Chat',
@@ -9062,7 +9082,7 @@ describe('LLMChatAgent direct intent metadata', () => {
       undefined,
       undefined,
       undefined,
-      undefined,
+      memoryStore as never,
       undefined,
       codeSessionStore,
     );
@@ -9109,11 +9129,17 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
 
     expect(response.content).toBe('prod no context ok');
+    expect(memoryStore.loadForContextWithSelection).not.toHaveBeenCalled();
     expect(localChat).toHaveBeenCalledOnce();
     const messages = localChat.mock.calls[0][0] as Array<{ role: string; content: string }>;
     expect(messages.map((entry) => entry.content).join('\n')).not.toContain('marker-1234');
     expect(messages.map((entry) => entry.content).join('\n')).not.toContain('run-timeline-context.js');
+    expect(messages.map((entry) => entry.content).join('\n')).not.toContain('STALE-MEMORY-MARKER');
     expect(messages.at(-1)?.content).toBe('Reply with exactly: prod no context ok');
+    expect(response.metadata?.contextAssembly).toMatchObject({
+      knowledgeBaseLoaded: false,
+    });
+    expect((response.metadata?.contextAssembly as Record<string, unknown> | undefined)?.selectedMemoryEntryCount ?? 0).toBe(0);
   });
 
   it('delegates fresh repo-grounded shared code-session requests without stale code-session history', async () => {
