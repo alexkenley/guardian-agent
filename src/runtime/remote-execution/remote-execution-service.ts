@@ -207,6 +207,54 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
     return snapshot;
   }
 
+  async refreshTargetHealth(
+    targets: RemoteExecutionResolvedTarget[],
+  ): Promise<Record<string, RemoteExecutionTargetHealthSummary>> {
+    for (const target of targets) {
+      this.rememberTarget(target);
+      const activeLease = [...this.leasesByKey.values()].find((lease) => lease.targetId === target.id);
+      if (activeLease) {
+        this.targetHealth.set(target.id, toHealthSummary({
+          state: 'healthy',
+          reason: activeLease.codeSessionId
+            ? `Active leased sandbox is attached to code session '${activeLease.codeSessionId}'.`
+            : 'Active leased sandbox is available.',
+          checkedAt: activeLease.lastUsedAt,
+          leaseId: activeLease.id,
+          sandboxId: activeLease.sandboxId,
+        }));
+        continue;
+      }
+
+      const provider = this.providers.get(target.backendKind);
+      if (!provider) {
+        this.targetHealth.set(target.id, toHealthSummary({
+          state: 'unreachable',
+          reason: `No remote execution provider is registered for backend '${target.backendKind}'.`,
+          checkedAt: this.now(),
+          durationMs: 0,
+        }));
+        continue;
+      }
+
+      const now = this.now();
+      const cached = this.targetHealth.get(target.id);
+      if (cached && (now - cached.checkedAt) < this.probeTtlMs) {
+        continue;
+      }
+
+      const probe = await provider.probe(target);
+      this.targetHealth.set(target.id, toHealthSummary({
+        state: probe.healthState,
+        reason: probe.reason,
+        checkedAt: probe.checkedAt,
+        durationMs: probe.durationMs,
+        sandboxId: probe.sandboxId,
+      }));
+    }
+    return this.getKnownTargetHealth();
+  }
+
   listActiveLeases(): RemoteExecutionLease[] {
     return [...this.leasesByKey.values()].map((lease) => ({
       id: lease.id,

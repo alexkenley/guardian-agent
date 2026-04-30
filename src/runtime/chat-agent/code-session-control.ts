@@ -33,6 +33,7 @@ export type CodeSessionToolExecutor = (
 export type CodeSessionManagedSandboxGetter = (
   sessionId: string,
   ownerUserId?: string,
+  options?: { refreshTargetHealth?: 'daytona' | 'vercel' | 'all' },
 ) => Promise<{
   defaultTargetId?: string | null;
   targets?: RemoteExecutionTargetDescriptor[];
@@ -362,10 +363,18 @@ async function handleCodeSessionManagedSandboxes(input: {
   let targets: RemoteExecutionTargetDescriptor[] = [];
   let targetDiagnostics: RemoteExecutionTargetDiagnostic[] = [];
   let defaultTargetId = '';
+  const requestedProvider = input.decision?.entities.codeSessionSandboxProvider;
+  const providerFilter = requestedProvider && requestedProvider !== 'all' ? requestedProvider : undefined;
 
   if (sessionId && input.getCodeSessionManagedSandboxes) {
     try {
-      const refreshed = await input.getCodeSessionManagedSandboxes(sessionId, ownerUserId || undefined);
+      const refreshed = requestedProvider
+        ? await input.getCodeSessionManagedSandboxes(
+          sessionId,
+          ownerUserId || undefined,
+          { refreshTargetHealth: requestedProvider },
+        )
+        : await input.getCodeSessionManagedSandboxes(sessionId, ownerUserId || undefined);
       if (Array.isArray(refreshed.sandboxes)) {
         sandboxes = refreshed.sandboxes;
       }
@@ -381,8 +390,6 @@ async function handleCodeSessionManagedSandboxes(input: {
     }
   }
 
-  const requestedProvider = input.decision?.entities.codeSessionSandboxProvider;
-  const providerFilter = requestedProvider && requestedProvider !== 'all' ? requestedProvider : undefined;
   if (providerFilter) {
     const targetIdsBeforeFiltering = new Set(targets.map((target) => toString(target.id)).filter(Boolean));
     sandboxes = sandboxes.filter((sandbox) => managedSandboxMatchesProvider(sandbox, providerFilter));

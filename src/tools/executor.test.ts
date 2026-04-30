@@ -1473,6 +1473,108 @@ describe('ToolExecutor', () => {
     ]);
   });
 
+  it('refreshes requested remote sandbox target health before returning managed sandbox status', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Remote Health Refresh Session',
+      workspaceRoot: root,
+    });
+    const healthByTargetId: Record<string, {
+      state: 'unknown' | 'healthy' | 'unreachable';
+      reason: string;
+      checkedAt: number;
+      durationMs?: number;
+      sandboxId?: string;
+      cause?: 'external_service_unreachable';
+    }> = {};
+    const refreshTargetHealth = vi.fn(async (targets) => {
+      for (const target of targets) {
+        healthByTargetId[target.id] = {
+          state: 'unreachable',
+          reason: `${target.profileName} returned HTTP 502.`,
+          checkedAt: 50_000,
+          durationMs: 25,
+          sandboxId: 'sandbox_probe',
+          cause: 'external_service_unreachable',
+        };
+      }
+      return healthByTargetId;
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'daytona.io', 'vercel.com'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'daytona:daytona-main',
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+        }],
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService: {
+        inspectLease: vi.fn(),
+        listActiveLeases: vi.fn(() => []),
+        getKnownTargetHealth: vi.fn(() => healthByTargetId),
+        refreshTargetHealth,
+        runBoundedJob: vi.fn(),
+      },
+    });
+
+    const result = await executor.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      refreshTargetHealth: 'daytona',
+    });
+
+    expect(refreshTargetHealth).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 'daytona:daytona-main',
+        backendKind: 'daytona_sandbox',
+      }),
+    ]);
+    expect(refreshTargetHealth).not.toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 'vercel:vercel-main',
+      }),
+    ]);
+    expect(result.targets.find((target) => target.id === 'daytona:daytona-main')).toMatchObject({
+      healthState: 'unreachable',
+      healthReason: 'Daytona Main returned HTTP 502.',
+      healthCause: 'external_service_unreachable',
+    });
+    expect(result.targetDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'target_unreachable',
+        targetId: 'daytona:daytona-main',
+        likelyCause: 'external_service_unreachable',
+      }),
+    ]));
+  });
+
   it('releases all managed sandboxes before a code session is deleted', async () => {
     const root = createExecutorRoot();
     writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');

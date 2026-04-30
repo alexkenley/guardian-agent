@@ -1409,6 +1409,7 @@ export class ToolExecutor {
   async getCodeSessionManagedSandboxStatus(input: {
     sessionId: string;
     ownerUserId?: string;
+    refreshTargetHealth?: 'daytona' | 'vercel' | 'all';
   }): Promise<{
     codeSessionId: string;
     defaultTargetId: string | null;
@@ -1420,7 +1421,23 @@ export class ToolExecutor {
     if (!session) {
       throw new Error(`Code session '${input.sessionId}' was not found.`);
     }
-    const targets = this.getRemoteExecutionTargets();
+    let targets = this.getRemoteExecutionTargets();
+    const refreshTargetHealth = input.refreshTargetHealth;
+    if (refreshTargetHealth && refreshTargetHealth !== undefined) {
+      const descriptorsToRefresh = targets.filter((target) => {
+        if (target.capabilityState !== 'ready') return false;
+        return refreshTargetHealth === 'all'
+          || target.providerFamily === refreshTargetHealth
+          || target.backendKind === `${refreshTargetHealth}_sandbox`;
+      });
+      const resolvedTargets = descriptorsToRefresh
+        .map((descriptor) => this.getResolvedRemoteExecutionTargetFromDescriptor(descriptor))
+        .filter((target): target is RemoteExecutionResolvedTarget => Boolean(target));
+      if (resolvedTargets.length > 0) {
+        await this.getOrCreateRemoteExecutionService().refreshTargetHealth?.(resolvedTargets);
+        targets = this.getRemoteExecutionTargets();
+      }
+    }
     const defaultTargetId = this.cloudConfig.defaultRemoteExecutionTargetId?.trim() || null;
     const sandboxes = (await this.reconcileCodeSessionManagedSandboxRecords({
       session,

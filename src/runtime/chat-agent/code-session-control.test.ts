@@ -250,7 +250,9 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
       }),
     });
 
-    expect(getCodeSessionManagedSandboxes).toHaveBeenCalledWith('session-1', 'owner');
+    expect(getCodeSessionManagedSandboxes).toHaveBeenCalledWith('session-1', 'owner', {
+      refreshTargetHealth: 'daytona',
+    });
     expect(result?.content).toContain('Managed sandboxes (daytona) attached to this coding session:');
     expect(result?.content).toContain('status=unreachable');
     expect(result?.content).toContain('note=HTTP 502 from Daytona control plane.');
@@ -314,7 +316,7 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
       resumeCodingTask: vi.fn(async () => null),
       onMessage: vi.fn(async () => ({ content: 'unexpected' })),
       message: createMessage({
-        content: 'Check Vercel status.',
+        content: 'What managed sandboxes are attached to this coding session?',
       }),
       ctx: createCtx(),
       decision: createDecision({

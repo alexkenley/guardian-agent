@@ -61,6 +61,54 @@ afterEach(() => {
 });
 
 describe('RemoteExecutionService', () => {
+  it('refreshes cached target health with provider probe results', async () => {
+    let now = 1_000;
+    const probe = vi.fn(async () => ({
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      healthState: 'unreachable' as const,
+      reason: 'Vercel sandbox returned HTTP 502.',
+      checkedAt: now,
+      durationMs: 25,
+      sandboxId: 'sandbox_probe',
+    }));
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe,
+        inspectLease: vi.fn(),
+        createLease: vi.fn(),
+        resumeLease: vi.fn(),
+        runWithLease: vi.fn(),
+        releaseLease: vi.fn(),
+        run: vi.fn(),
+      }],
+      probeTtlMs: 10_000,
+      now: () => now,
+    });
+
+    const first = await service.refreshTargetHealth([TARGET]);
+
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(first[TARGET.id]).toMatchObject({
+      state: 'unreachable',
+      reason: 'Vercel sandbox returned HTTP 502.',
+      cause: 'external_service_unreachable',
+      sandboxId: 'sandbox_probe',
+    });
+
+    now += 5_000;
+    await service.refreshTargetHealth([TARGET]);
+
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
   it('stages the workspace snapshot and excludes heavy default directories', async () => {
     const root = createRoot();
     mkdirSync(join(root, 'src'), { recursive: true });

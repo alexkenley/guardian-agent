@@ -214,7 +214,11 @@ export function buildChatDirectCodingRouteDeps(
     sessionControlDeps: {
       executeDirectCodeSessionTool,
       getCodeSessionManagedSandboxes: input.tools?.getCodeSessionManagedSandboxStatus
-        ? (sessionId, ownerUserId) => input.tools!.getCodeSessionManagedSandboxStatus!({ sessionId, ownerUserId })
+        ? (sessionId, ownerUserId, options) => input.tools!.getCodeSessionManagedSandboxStatus!({
+          sessionId,
+          ownerUserId,
+          ...(options?.refreshTargetHealth ? { refreshTargetHealth: options.refreshTargetHealth } : {}),
+        })
         : undefined,
       getActivePendingAction: input.getActivePendingAction,
       completePendingAction: input.completePendingAction,

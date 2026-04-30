@@ -239,6 +239,7 @@ export interface RemoteExecutionServiceLike {
     target: RemoteExecutionResolvedTarget;
     lease: RemoteExecutionLease;
   }): Promise<RemoteExecutionLeaseInspectionResult>;
+  refreshTargetHealth?(targets: RemoteExecutionResolvedTarget[]): Promise<Record<string, RemoteExecutionTargetHealthSummary>>;
   getKnownTargetHealth?(): Record<string, RemoteExecutionTargetHealthSummary>;
   listActiveLeases?(): RemoteExecutionLease[];
 }
