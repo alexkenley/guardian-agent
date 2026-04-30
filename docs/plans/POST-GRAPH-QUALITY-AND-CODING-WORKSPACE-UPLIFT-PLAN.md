@@ -51,13 +51,35 @@ Completed and proven in this follow-on wave:
 - Unreachable remote sandbox targets fail graph/job state cleanly. Daytona Main live verification returned HTTP 502 and produced graph `failed`, worker lifecycle `failed`, and run status `failed`.
 - Full source verification after the remote-exec slice passed with `npm run check`, `npm run build`, and `npm test -- --reporter=dot` across 316 test files and 3482 tests.
 
+## Progress Update - 2026-04-30
+
+Completed and proven in this follow-on wave:
+
+- Daytona remote-execution diagnostics now include bounded HTTP/status/profile/reachability context and keep the configured Daytona API key redacted.
+- Code UI sandbox panels now surface remote sandbox likely-cause and next-action diagnostics from the existing sandbox/status model.
+- Google Workspace now has a dedicated `gws_status` read-only tool for Gmail, Google Calendar, and Workspace auth/status checks. Live connector stress proved `gws_status`, `m365_status`, Vercel, WHM, automations, and repo search can run in one mixed request without reading Gmail content or exposing credential values.
+- Final-answer verification now accepts plain zero-match repo symbol searches inside mixed connector/status answers while preserving stricter implementation-location verification for prompts that ask where code is implemented, emitted, defined, called, or otherwise located.
+- The cloud config harness now uses a deterministic local fake Ollama profile so cloud/profile planner assertions do not drift onto ambient live providers.
+- Live remote sandbox status currently reports Vercel Production and Daytona Main as `capability=ready`, `health=healthy`, and `reachable=yes`; the earlier Daytona HTTP 502 did not reproduce in this pass.
+
+Verification passed for the latest slices:
+
+- `npx vitest run src/runtime/remote-execution/providers/daytona-remote-execution.test.ts`
+- `npx vitest run src/tools/executor.test.ts --testNamePattern "Google Workspace status|Microsoft 365 status|Gmail reads via gws|registered"`
+- `npx vitest run src/runtime/execution/verifier.test.ts`
+- `npm run check`
+- `npm run build`
+- `node scripts/test-cloud-config.mjs`
+- `node scripts/test-cross-domain-orchestration-stress.mjs`
+- `node scripts/test-code-ui-smoke.mjs`
+
 Remaining work:
 
 - Continue live connector stress for Gmail/Google Workspace, Microsoft 365/Outlook/calendar, WHM/cPanel, memory, automations, browser reads, and repo search/write.
 - Continue complex multi-domain synthesis/search sweeps and tighten final-answer verification if live traces show evidence coverage gaps.
 - Inspect the Coding Run Card in live UI for stage/status clarity and polish.
-- Complete the end-phase Daytona/Vercel sandbox capability quality pass: improve status/error diagnostics, profile drift handling, and sandbox reachability reporting.
-- Diagnose whether Daytona Main HTTP 502 is external service drift, local profile/config drift, or a Guardian diagnostics gap.
+- Continue the end-phase Daytona/Vercel sandbox capability quality pass only if new traces show status/error diagnostics, profile drift handling, or sandbox reachability reporting gaps.
+- Keep watching Daytona Main for recurrence of HTTP 502; current live status points to transient external/service drift rather than a confirmed Guardian diagnostics gap.
 
 ## Priority 1: Long-Running Run And Job UX
 
