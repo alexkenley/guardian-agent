@@ -1607,10 +1607,45 @@ function shortDescriptionFromAudit(event) {
 
 function safeJson(value) {
   try {
-    return JSON.stringify(value ?? {}, null, 2);
+    return JSON.stringify(redactSecurityJsonForDisplay(value ?? {}), null, 2);
   } catch {
-    return String(value ?? '');
+    return redactSecurityTextForDisplay(String(value ?? ''));
   }
+}
+
+export function redactSecurityJsonForDisplay(value, seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    return redactSecurityTextForDisplay(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecurityJsonForDisplay(item, seen));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  if (seen.has(value)) {
+    return '[Circular]';
+  }
+  seen.add(value);
+  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+    key,
+    isSensitiveDisplayKey(key) ? '[REDACTED]' : redactSecurityJsonForDisplay(nested, seen),
+  ]));
+}
+
+function isSensitiveDisplayKey(key) {
+  return /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|bearer|authorization|client[_-]?secret|credential|cookie|password|passwd|secret|token)/i.test(String(key || ''));
+}
+
+function redactSecurityTextForDisplay(value) {
+  return String(value || '')
+    .replace(/\b(authorization)\s*[:=]\s*(?:Bearer\s+)?["']?[^"',;\s)}\]]{4,}/gi, '$1: [REDACTED]')
+    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|credential|password|passwd|secret|token)\s*[:=]\s*["']?[^"',;\s)}\]]{4,}/gi, '$1=[REDACTED]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{12,}/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, 'sk-[REDACTED]')
+    .replace(/\bghp_[A-Za-z0-9_]{12,}/g, 'ghp_[REDACTED]')
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{12,}/gi, 'xox[REDACTED]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, 'AIza[REDACTED]');
 }
 
 function resolveInvestigationSubject(value, fallback) {
@@ -1650,7 +1685,7 @@ function isDisplayScalar(value) {
 }
 
 function formatScalarForDisplay(value) {
-  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'string') return redactSecurityTextForDisplay(value).trim();
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   return '';
