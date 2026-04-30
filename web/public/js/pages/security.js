@@ -280,7 +280,7 @@ async function renderSecurityLogTab(panel, state = {}) {
         <label class="checkbox-inline"><input id="security-log-inactive" type="checkbox"${includeInactive ? ' checked' : ''}> Include inactive</label>
         <button class="btn btn-secondary" id="security-log-refresh">Refresh</button>
       </div>
-      ${renderAlertQueue(alerts.alerts || [])}
+      ${renderAlertQueue(alerts.alerts || [], auditEvents)}
     </section>
     ${renderCollapsibleSection('Audit History', `
       ${renderAuditChainStatus(auditVerify)}
@@ -785,7 +785,7 @@ function renderCollapsibleSection(title, content, options = {}) {
   `;
 }
 
-function renderAlertQueue(alerts) {
+function renderAlertQueue(alerts, auditEvents = []) {
   if (!Array.isArray(alerts) || alerts.length === 0) {
     return '<div class="empty-state">No security alerts match the current filters.</div>';
   }
@@ -804,7 +804,7 @@ function renderAlertQueue(alerts) {
               <td>
                 <div>${esc(alert.description)}</div>
                 <div class="table-muted">${esc(alert.subject || '')}</div>
-                ${renderAlertInvestigationDetails(alert)}
+                ${renderAlertInvestigationDetails(alert, auditEvents)}
               </td>
               <td>
                 <div>${esc(formatRelativeTime(alert.lastSeenAt))}</div>
@@ -875,7 +875,7 @@ export function formatAuditChainStatusForDisplay(result) {
   return 'Audit chain verification unavailable';
 }
 
-function renderAlertInvestigationDetails(alert) {
+function renderAlertInvestigationDetails(alert, auditEvents = []) {
   const sightings = Number.isFinite(Number(alert.occurrenceCount)) ? Number(alert.occurrenceCount) : 1;
   return renderInvestigationDetailsPanel({
     summary: `${sightings} ${pluralize(sightings, 'sighting')} · last seen ${formatRelativeTime(alert.lastSeenAt)}`,
@@ -883,6 +883,7 @@ function renderAlertInvestigationDetails(alert) {
     nextSteps: buildAlertInvestigationSteps(alert),
     contextFacts: buildAlertContextFacts(alert),
     evidenceFacts: collectEvidenceFacts(alert.evidence),
+    relatedEvents: selectRelatedAuditEventsForAlert(alert, auditEvents),
     rawLabel: 'Raw alert JSON',
     rawValue: alert,
   });
@@ -912,12 +913,26 @@ function renderInvestigationDetailsPanel(input) {
         ${renderInvestigationTextSection('Investigate next', input.nextSteps)}
         ${renderInvestigationFactSection('Observed context', input.contextFacts)}
         ${renderInvestigationFactSection('Evidence snapshot', input.evidenceFacts)}
+        ${renderRelatedAuditEventsSection(input.relatedEvents)}
         <details class="security-entry-details__raw">
           <summary>${esc(input.rawLabel || 'Raw JSON')}</summary>
           <pre class="json-preview">${esc(safeJson(input.rawValue))}</pre>
         </details>
       </div>
     </details>
+  `;
+}
+
+function renderRelatedAuditEventsSection(events) {
+  const values = Array.isArray(events) ? events : [];
+  if (values.length === 0) return '';
+  return `
+    <section class="security-entry-details__section">
+      <h4>Related audit events</h4>
+      <ul class="security-entry-details__list">
+        ${values.map((event) => `<li>${esc(formatRelatedAuditEventForDisplay(event))}</li>`).join('')}
+      </ul>
+    </section>
   `;
 }
 
@@ -1158,6 +1173,82 @@ function buildAlertContextFacts(alert) {
     { label: 'Resolution Reason', value: typeof alert.resolutionReason === 'string' ? alert.resolutionReason : '' },
     { label: 'Dedupe Key', value: String(alert.dedupeKey || '') },
   ]);
+}
+
+export function selectRelatedAuditEventsForAlert(alert, events, limit = 4) {
+  if (!alert || !Array.isArray(events)) return [];
+  const scored = events
+    .map((event) => ({
+      event,
+      score: scoreRelatedAuditEvent(alert, event),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return Number(right.event?.timestamp || 0) - Number(left.event?.timestamp || 0);
+    });
+  const max = Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 4;
+  return scored.slice(0, max).map((item) => item.event);
+}
+
+function scoreRelatedAuditEvent(alert, event) {
+  if (!event || typeof event !== 'object') return 0;
+  const details = isPlainObject(event.details) ? event.details : {};
+  const alertType = String(alert.type || '').trim();
+  const alertSource = String(alert.source || '').trim();
+  const alertSubject = String(alert.subject || '').trim();
+  const alertDedupeKey = String(alert.dedupeKey || '').trim();
+  const eventTimestamp = Number(event.timestamp);
+  if (!isAuditEventNearAlertWindow(alert, eventTimestamp)) return 0;
+  let score = 1;
+
+  if (alertDedupeKey && alertDedupeKey === readDetailString(details, ['dedupeKey'])) score += 8;
+  if (alertType && alertType === readDetailString(details, ['triggerDetailType', 'anomalyType', 'alertType', 'type', 'reason', 'matchedAction'])) score += 5;
+  if (alertSource && alertSource === readDetailString(details, ['source'])) score += 3;
+  if (alertSubject && alertSubject !== '-' && alertSubject === readDetailString(details, ['subject', 'target', 'host', 'device', 'resource'])) score += 3;
+  if (isSecurityCorrelationAuditType(event.type)) score += 1;
+
+  return score >= 3 ? score : 0;
+}
+
+function isAuditEventNearAlertWindow(alert, timestamp) {
+  if (!Number.isFinite(timestamp)) return false;
+  const firstSeen = Number(alert.firstSeenAt || alert.timestamp || alert.lastSeenAt);
+  const lastSeen = Number(alert.lastSeenAt || alert.timestamp || alert.firstSeenAt);
+  if (!Number.isFinite(firstSeen) && !Number.isFinite(lastSeen)) return true;
+  const start = Number.isFinite(firstSeen) ? firstSeen : lastSeen;
+  const end = Number.isFinite(lastSeen) ? lastSeen : firstSeen;
+  const windowMs = 10 * 60 * 1000;
+  return timestamp >= (start - windowMs) && timestamp <= (end + windowMs);
+}
+
+function isSecurityCorrelationAuditType(type) {
+  return [
+    'action_allowed',
+    'action_denied',
+    'anomaly_detected',
+    'automation_finding',
+    'auth_failure',
+    'config_changed',
+    'gateway_alert',
+    'host_alert',
+    'policy_changed',
+    'policy_mode_changed',
+    'secret_detected',
+    'tool_completed',
+    'tool_failed',
+    'tool_started',
+  ].includes(String(type || ''));
+}
+
+function formatRelatedAuditEventForDisplay(event) {
+  const parts = [
+    formatTimestamp(event?.timestamp),
+    formatAuditEventType(event?.type),
+    event?.agentId || event?.controller || 'system',
+    shortDescriptionFromAudit(event),
+  ].filter((part) => typeof part === 'string' && part.trim());
+  return redactSecurityTextForDisplay(parts.join(' · '));
 }
 
 function buildAuditNarrative(event) {

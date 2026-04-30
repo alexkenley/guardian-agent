@@ -64,4 +64,54 @@ describe('Security page redaction helpers', () => {
     expect(formatAuditChainStatusForDisplay({ valid: false, brokenAt: 7 })).toBe('Audit chain verification failed at entry 7');
     expect(formatAuditChainStatusForDisplay({ available: false })).toBe('Audit chain verification unavailable');
   });
+
+  it('selects structured related audit events for alert detail panes', async () => {
+    installSecurityPageDomStubs();
+
+    const { selectRelatedAuditEventsForAlert } = await import('../web/public/js/pages/security.js');
+    const alert = {
+      type: 'new_external_destination',
+      source: 'host',
+      subject: 'workstation-1',
+      dedupeKey: 'host:new_external_destination:203.0.113.10',
+      firstSeenAt: 10_000,
+      lastSeenAt: 12_000,
+    };
+    const relatedByDedupe = {
+      id: 'audit-1',
+      timestamp: 11_000,
+      type: 'host_alert',
+      agentId: 'host-monitor',
+      details: {
+        dedupeKey: 'host:new_external_destination:203.0.113.10',
+        triggerDetailType: 'new_external_destination',
+        source: 'host',
+      },
+    };
+    const relatedBySubject = {
+      id: 'audit-2',
+      timestamp: 11_500,
+      type: 'action_denied',
+      agentId: 'guardian',
+      details: {
+        source: 'host',
+        subject: 'workstation-1',
+      },
+    };
+    const unrelated = {
+      id: 'audit-3',
+      timestamp: 3_600_000,
+      type: 'host_alert',
+      agentId: 'host-monitor',
+      details: {
+        dedupeKey: 'host:new_external_destination:198.51.100.4',
+        triggerDetailType: 'new_external_destination',
+      },
+    };
+
+    expect(selectRelatedAuditEventsForAlert(alert, [unrelated, relatedBySubject, relatedByDedupe])).toEqual([
+      relatedByDedupe,
+      relatedBySubject,
+    ]);
+  });
 });

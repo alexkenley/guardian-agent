@@ -1285,6 +1285,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use Security > Security Log or CLI `/audit`, `/audit summary`, and `/security` to inspect recent events.',
                   'Use the audit views when you need to confirm what happened, what was approved, or why an action was blocked.',
                   'Security Log entries can be expanded when you need more detail than the short preview.',
+                  'Expanded Security Log alerts can include related audit events when Guardian can correlate nearby structured evidence.',
                   'Policy changes, auth changes, and tool decisions are reflected in the audit history.',
                 ],
               },
