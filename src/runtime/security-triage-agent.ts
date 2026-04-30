@@ -396,12 +396,15 @@ function classifySecurityEvent(event: AgentEvent): SecurityEventTriageDecision |
     if (!RELEVANT_SECURITY_ALERT_EVENT_TYPES.has(sourceEventType)) {
       return null;
     }
+    const details = asRecord(payload.details);
+    if (isSecurityTriageSelfNotification(sourceEventType, payload, details)) {
+      return null;
+    }
     if (sourceEventType === 'host_alert' || sourceEventType === 'gateway_alert') {
       return null;
     }
     const detailType = extractDetailType(payload) || sourceEventType;
     const severity = toAuditSeverity(payload.severity);
-    const details = asRecord(payload.details);
     if (severity === 'info') return null;
     if (isLowConfidenceSecurityDetailType(detailType) || isExpectedGuardrailDenial(sourceEventType, detailType, details)) {
       return {
@@ -568,6 +571,26 @@ function isExpectedGuardrailDenial(
     return true;
   }
   return isExpectedGuardrailSecurityDetailType(detailType) || isExpectedGuardrailSecurityDetailType(matchedAction);
+}
+
+function isSecurityTriageSelfNotification(
+  sourceEventType: string,
+  payload: Record<string, unknown>,
+  details: Record<string, unknown>,
+): boolean {
+  if (sourceEventType !== 'agent_error' && sourceEventType !== 'agent_stalled') {
+    return false;
+  }
+  const agentId = asString(payload.agentId);
+  if (isSecurityTriageAgentId(agentId)) {
+    return true;
+  }
+  const triageAgentId = asString(details.triageAgentId);
+  return isSecurityTriageAgentId(triageAgentId);
+}
+
+function isSecurityTriageAgentId(agentId: string): boolean {
+  return agentId === SECURITY_TRIAGE_AGENT_ID || agentId === SECURITY_TRIAGE_DISPATCHER_AGENT_ID;
 }
 
 function toAuditSeverity(value: unknown): AuditSeverity {

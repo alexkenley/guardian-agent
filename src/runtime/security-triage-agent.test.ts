@@ -224,6 +224,76 @@ describe('SecurityEventTriageAgent', () => {
     expect(message.content).toContain('assistant_security_findings');
   });
 
+  it('does not recursively triage its own failure notifications', async () => {
+    const auditLog = new AuditLog();
+    const activityLog = new SecurityActivityLogService({ persistPath: '/tmp/security-triage-agent-self-error-test-activity.json' });
+    const agent = new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: 'owner',
+      auditLog,
+      activityLog,
+      now: () => 3_500,
+    });
+    const ctx = makeContext();
+
+    await agent.onEvent({
+      type: 'security:alert',
+      sourceAgentId: 'notification-service',
+      targetAgentId: '*',
+      payload: {
+        severity: 'warn',
+        sourceEventType: 'agent_error',
+        agentId: SECURITY_TRIAGE_DISPATCHER_AGENT_ID,
+        description: "Agent 'security-triage' exceeded budget timeout (120000ms)",
+        details: {
+          reason: "Agent 'security-triage' exceeded budget timeout (120000ms)",
+          sourceEventType: 'security:native:provider',
+          triggerDetailType: 'defender_threat_detected',
+          dedupeKey: 'security:native:provider:defender_threat_detected',
+        },
+      },
+      timestamp: 3_499,
+    }, ctx);
+
+    expect(vi.mocked(ctx.dispatch)).not.toHaveBeenCalled();
+    expect(auditLog.query({ type: 'automation_finding' })).toHaveLength(0);
+    expect(activityLog.list().totalMatches).toBe(0);
+  });
+
+  it('still triages external agent error notifications', async () => {
+    const auditLog = new AuditLog();
+    const activityLog = new SecurityActivityLogService({ persistPath: '/tmp/security-triage-agent-external-error-test-activity.json' });
+    const agent = new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: 'owner',
+      auditLog,
+      activityLog,
+      now: () => 3_600,
+    });
+    const ctx = makeContext();
+
+    await agent.onEvent({
+      type: 'security:alert',
+      sourceAgentId: 'notification-service',
+      targetAgentId: '*',
+      payload: {
+        severity: 'warn',
+        sourceEventType: 'agent_error',
+        agentId: 'gmail-assistant',
+        description: 'Token refresh failed during delegated mailbox scan.',
+        details: {
+          reason: 'Token refresh failed during delegated mailbox scan.',
+        },
+      },
+      timestamp: 3_599,
+    }, ctx);
+
+    expect(vi.mocked(ctx.dispatch)).toHaveBeenCalledTimes(1);
+    const [, message] = vi.mocked(ctx.dispatch).mock.calls[0]!;
+    expect(message.content).toContain('agent_error');
+    expect(message.content).toContain('Token refresh failed');
+  });
+
   it('skips expected guardrail action-denied notifications', async () => {
     const auditLog = new AuditLog();
     const activityLog = new SecurityActivityLogService({ persistPath: '/tmp/security-triage-agent-guardrail-test-activity.json' });
