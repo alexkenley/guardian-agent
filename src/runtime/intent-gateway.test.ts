@@ -1962,6 +1962,8 @@ describe('IntentGateway', () => {
     expect(inspectedSystemPrompt).toContain('Prompt profile: full');
     expect(inspectedSystemPrompt).toContain('Requests to inspect, explain, review, or plan changes against specific repo files');
     expect(inspectedSystemPrompt).toContain('Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests.');
+    expect(inspectedSystemPrompt).toContain('A request to check Daytona status, Daytona health, Daytona reachability, or remote/managed sandbox status is a coding_session_control inspect request');
+    expect(inspectedSystemPrompt).toContain('"Check Daytona status." -> route=coding_session_control, operation=inspect, codeSessionResource=managed_sandboxes');
   });
 
   it('keeps raw credential disclosure guidance in the gateway system prompt', async () => {
@@ -3091,6 +3093,53 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('coding_session_control');
     expect(result.decision.operation).toBe('inspect');
     expect(result.decision.entities.sessionTarget).toBeUndefined();
+  });
+
+  it('repairs Daytona status classifier drift into managed sandbox session control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check Daytona status. Keep it short and include the likely cause and next action if the target is not reachable.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'medium',
+            operation: 'read',
+            summary: 'Reads Daytona status information.',
+            executionClass: 'tool_orchestration',
+            preferredAnswerPath: 'tool_loop',
+            planned_steps: [
+              {
+                id: 'step_1',
+                kind: 'read',
+                summary: 'Check Daytona status.',
+                required: true,
+              },
+              {
+                id: 'step_2',
+                kind: 'answer',
+                summary: 'Answer with status, likely cause, and next action.',
+                required: true,
+              },
+            ],
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.codeSessionResource).toBe('managed_sandboxes');
+    expect(result.decision.provenance.route).toBe('repair.structured');
+    expect(result.decision.provenance.operation).toBe('repair.structured');
   });
 
   it('normalizes natural route and operation variants from local-model JSON fallbacks', async () => {

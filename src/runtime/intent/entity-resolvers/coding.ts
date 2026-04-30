@@ -6,6 +6,8 @@ const NAMED_REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?
 const EXPLICIT_REMOTE_PROFILE_PATTERN = /\bprofileid\s+([a-z0-9._:-]+)/i;
 const NAMED_REMOTE_PROFILE_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?([a-z0-9][a-z0-9._ -]*?)\s+profile\b/i;
 const REMOTE_SANDBOX_ACTION_PATTERN = /\b(?:run|execute|create|write|read|open|install|test|build|lint|check|restart|resume|reuse|continue|report|verify|cat|show)\b/i;
+const MANAGED_SANDBOX_STATUS_PATTERN = /\bdaytona\b[^.!?\n]{0,80}\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b|\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b[^.!?\n]{0,80}\bdaytona\b/i;
+const REMOTE_SANDBOX_STATUS_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+sandboxes?\b[^.!?\n]{0,80}\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b|\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b[^.!?\n]{0,80}\b(?:remote|cloud|isolated|managed)\s+sandboxes?\b/i;
 const FILESYSTEM_SCOPE_PATTERN = /\b(?:workspace|directory|folder|path|paths|file|files|repo\s+root|project\s+root|current\s+directory)\b/i;
 
 const GENERIC_SESSION_TARGET_TOKENS = new Set([
@@ -159,6 +161,9 @@ export function inferCodeSessionControlOperation(
   normalized: string,
 ): IntentGatewayOperation | null {
   if (!normalized) return null;
+  if (isManagedSandboxStatusInspectionRequest(normalized, normalized)) {
+    return 'inspect';
+  }
   if (/\b(?:switch|attach|use|change\s+to|connect)\b/.test(normalized)) {
     return 'update';
   }
@@ -232,6 +237,16 @@ export function isExplicitRemoteSandboxTaskRequest(
     || hasExplicitRepoPathReference(normalized);
 }
 
+export function isManagedSandboxStatusInspectionRequest(
+  rawContent: string,
+  normalized: string,
+): boolean {
+  const source = normalized || rawContent.toLowerCase();
+  if (!rawContent || !source) return false;
+  return MANAGED_SANDBOX_STATUS_PATTERN.test(source)
+    || REMOTE_SANDBOX_STATUS_PATTERN.test(source);
+}
+
 export function extractExplicitRemoteExecCommand(
   rawContent: string,
   normalized: string,
@@ -254,7 +269,10 @@ export function inferCodeSessionResource(
   normalized: string,
 ): IntentGatewayEntities['codeSessionResource'] | undefined {
   if (!normalized) return undefined;
-  if (/\bsandboxes?\b/.test(normalized)) {
+  if (
+    /\bsandboxes?\b/.test(normalized)
+    || isManagedSandboxStatusInspectionRequest(normalized, normalized)
+  ) {
     return 'managed_sandboxes';
   }
   if (

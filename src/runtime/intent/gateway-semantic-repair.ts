@@ -3,6 +3,7 @@ import {
   extractExplicitRemoteExecCommand,
   inferExplicitFilesystemTaskOperation,
   isExplicitRemoteSandboxTaskRequest,
+  isManagedSandboxStatusInspectionRequest,
 } from './entity-resolvers/coding.js';
 import {
   inferAutomationControlOperation,
@@ -59,6 +60,7 @@ export function repairStructuredIntentGatewayRoute(
   const explicitRepoInspection = isExplicitRepoInspectionRequest(rawSourceContent);
   const explicitRepoPlanning = isExplicitRepoPlanningRequest(rawSourceContent);
   const explicitRemoteSandbox = isExplicitRemoteSandboxTaskRequest(rawSourceContent, normalizedSourceContent);
+  const managedSandboxStatusInspection = isManagedSandboxStatusInspectionRequest(rawSourceContent, normalizedSourceContent);
   const explicitCodingTaskRequest = explicitCodingExecution
     || explicitWorkspaceScopedRepoWork
     || explicitRepoInspection
@@ -111,6 +113,9 @@ export function repairStructuredIntentGatewayRoute(
   }
   if (route === 'unknown' && explicitCodingTaskRequest) {
     return 'coding_task';
+  }
+  if ((route === 'unknown' || route === 'general_assistant') && managedSandboxStatusInspection) {
+    return 'coding_session_control';
   }
   if (route === 'unknown' && explicitAutomationOutput) {
     return 'automation_output_task';
@@ -183,6 +188,9 @@ export function repairStructuredIntentGatewayOperation(
   }
   if (route === 'security_task' && isRawCredentialDisclosureRequest(rawSourceContent)) {
     return 'read';
+  }
+  if (route === 'coding_session_control' && isManagedSandboxStatusInspectionRequest(rawSourceContent, normalizedSourceContent)) {
+    return 'inspect';
   }
   if (route === 'automation_control' && operation === 'navigate') {
     return 'read';

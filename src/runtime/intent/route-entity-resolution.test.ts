@@ -182,6 +182,21 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('infers managed sandbox resources from Daytona status checks', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'Check Daytona status.' },
+      'coding_session_control',
+      'inspect',
+      'classifier.primary',
+    );
+
+    expect(result.entities.codeSessionResource).toBe('managed_sandboxes');
+    expect(result.provenance).toMatchObject({
+      codeSessionResource: 'resolver.coding',
+    });
+  });
+
   it('preserves remote sandbox commands as coding-task entities', () => {
     expect(resolveIntentGatewayEntities(
       {},
