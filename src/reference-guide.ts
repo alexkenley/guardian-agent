@@ -803,6 +803,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Google Workspace is supported directly inside Guardian for Gmail, Calendar, Drive, Docs, Sheets, and Contacts.',
                   'You do not need a separate Google CLI tool to use the built-in Google Workspace features.',
+                  'Status-only requests for Gmail, Google Calendar, or Google Workspace report connection and enabled-service state without reading mailbox, calendar, Drive, Docs, Sheets, or Contacts contents.',
                 ],
               },
               {

@@ -224,6 +224,43 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
 
   context.registry.register(
     {
+      name: 'gws_status',
+      description:
+        'Report Google Workspace / Gmail / Google Calendar connection status without reading mailbox, calendar, Drive, Docs, Sheets, or Contacts contents. ' +
+        'Use this for Gmail auth/status, Google Workspace status, and Google Calendar status checks. ' +
+        'Do not use the general gws API when the user only asks for status.',
+      shortDescription: 'Report Google Workspace auth and enabled-service status without reading content.',
+      risk: 'read_only',
+      category: 'workspace',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    async (_args, request) => {
+      context.guardAction(request, 'read_docs', { provider: 'google-native', surface: 'gws_status' });
+      const googleSvc = context.getGoogleService();
+      const services = googleSvc?.getEnabledServices() ?? [];
+      return {
+        success: true,
+        output: {
+          configured: !!googleSvc,
+          authenticated: googleSvc?.isAuthenticated() ?? false,
+          services,
+          gmailEnabled: googleSvc?.isServiceEnabled('gmail') ?? false,
+          calendarEnabled: googleSvc?.isServiceEnabled('calendar') ?? false,
+          driveEnabled: googleSvc?.isServiceEnabled('drive') ?? false,
+          docsEnabled: googleSvc?.isServiceEnabled('docs') ?? false,
+          sheetsEnabled: googleSvc?.isServiceEnabled('sheets') ?? false,
+          contactsEnabled: googleSvc?.isServiceEnabled('contacts') ?? false,
+        },
+      };
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'm365_status',
       description:
         'Report Microsoft 365 / Outlook / calendar connection status without reading mailbox, calendar, OneDrive, or contact contents. ' +

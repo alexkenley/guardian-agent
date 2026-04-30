@@ -229,15 +229,22 @@ async function createMockLlmServer(state) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${llmPort}`);
 
+    if (req.method === 'GET' && url.pathname === '/api/tags') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'mock-tools-model', size: 1 }] }));
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: [{ id: 'mock-tools-model', object: 'model' }] }));
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    if (req.method === 'POST' && (url.pathname === '/api/chat' || url.pathname === '/v1/chat/completions')) {
       const raw = await readRequestBody(req);
       const parsed = raw ? JSON.parse(raw) : {};
+      const useOllamaPayload = url.pathname === '/api/chat';
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const systemPrompt = messages.find((message) => message.role === 'system')?.content;
       if (typeof systemPrompt === 'string') {
@@ -256,53 +263,61 @@ async function createMockLlmServer(state) {
         .join('\n');
       const toolMessages = messages.filter((message) => message.role === 'tool');
 
-      let choice;
+      let message;
+      let finishReason = 'stop';
       if (String(originalUser).includes('social WHM')) {
         if (toolMessages.length === 0) {
-          choice = {
-            index: 0,
-            message: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [{
-                id: 'tc-whm-status',
-                type: 'function',
-                function: {
-                  name: 'whm_status',
-                  arguments: JSON.stringify({ profile: 'social', includeServices: true }),
-                },
-              }],
-            },
-            finish_reason: 'tool_calls',
+          finishReason = 'tool_calls';
+          message = {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              ...(useOllamaPayload ? {} : { id: 'tc-whm-status', type: 'function' }),
+              function: {
+                name: 'whm_status',
+                arguments: useOllamaPayload
+                  ? { profile: 'social', includeServices: true }
+                  : JSON.stringify({ profile: 'social', includeServices: true }),
+              },
+            }],
           };
         } else {
-          choice = {
-            index: 0,
-            message: {
-              role: 'assistant',
-              content: 'Tested the social WHM profile with whm_status. In this simulated harness, the profile is configured, the endpoint is reachable, and core WHM services are reported healthy.',
-            },
-            finish_reason: 'stop',
+          message = {
+            role: 'assistant',
+            content: 'Tested the social WHM profile with whm_status. In this simulated harness, the profile is configured, the endpoint is reachable, and core WHM services are reported healthy.',
           };
         }
       } else {
-        choice = {
-          index: 0,
-          message: {
-            role: 'assistant',
-            content: 'Harness response.',
-          },
-          finish_reason: 'stop',
+        message = {
+          role: 'assistant',
+          content: 'Harness response.',
         };
       }
 
       res.writeHead(200, { 'content-type': 'application/json' });
+      if (useOllamaPayload) {
+        res.end(JSON.stringify({
+          model: 'mock-tools-model',
+          created_at: new Date().toISOString(),
+          message,
+          done: true,
+          done_reason: finishReason,
+          prompt_eval_count: 32,
+          eval_count: 16,
+        }));
+        return;
+      }
+
       res.end(JSON.stringify({
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: 'mock-tools-model',
-        choices: [choice],
+        choices: [{
+          index: 0,
+          message,
+          finish_reason: finishReason,
+        }],
         usage: { prompt_tokens: 32, completion_tokens: 16, total_tokens: 48 },
       }));
       return;
@@ -325,13 +340,12 @@ function buildHarnessConfig(configPath) {
     configPath,
     [
       'llm:',
-      '  mock_openai:',
-      '    provider: openai',
-      `    baseUrl: "http://127.0.0.1:${llmPort}/v1"`,
+      '  local:',
+      '    provider: ollama',
+      `    baseUrl: "http://127.0.0.1:${llmPort}"`,
       '    model: mock-tools-model',
-      '    credentialRef: llm.mock_openai',
       '    maxTokens: 1024',
-      'defaultProvider: mock_openai',
+      'defaultProvider: local',
       'channels:',
       '  cli:',
       '    enabled: false',
@@ -345,10 +359,7 @@ function buildHarnessConfig(configPath) {
       '    mode: single_user',
       '    primaryUserId: cloud-harness',
       '  credentials:',
-      '    refs:',
-      '      llm.mock_openai:',
-      '        source: env',
-      `        env: ${dummyApiKeyEnv}`,
+      '    refs: {}',
       '  memory:',
       '    enabled: false',
       '    maxTurns: 4',

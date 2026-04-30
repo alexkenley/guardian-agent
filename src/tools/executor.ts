@@ -1864,7 +1864,7 @@ export class ToolExecutor {
   listAlwaysLoadedDefinitions(): ToolDefinition[] {
     const definitions = [...this.registry.listAlwaysLoaded()];
     if (this.options.googleService) {
-      for (const toolName of ['gws', 'gws_schema', 'gmail_draft']) {
+      for (const toolName of ['gws_status', 'gws', 'gws_schema', 'gmail_draft']) {
         const def = this.registry.get(toolName)?.definition;
         if (def) definitions.push(def);
       }

@@ -5819,6 +5819,61 @@ describe('ToolExecutor', () => {
     expect(names).toContain('m365_status');
   });
 
+  it('exposes Google Workspace status without reading provider contents', async () => {
+    const root = createExecutorRoot();
+    const execute = vi.fn(async () => ({ success: true, data: { messages: [{ id: 'private-message' }] } }));
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      googleService: mockGoogleService({
+        execute,
+        getEnabledServices: () => ['gmail', 'calendar'],
+        isServiceEnabled: (svc: string) => ['gmail', 'calendar'].includes(svc),
+      }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws_status',
+      args: {},
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+    expect(run.output).toMatchObject({
+      configured: true,
+      authenticated: true,
+      services: ['gmail', 'calendar'],
+      gmailEnabled: true,
+      calendarEnabled: true,
+      driveEnabled: false,
+      docsEnabled: false,
+      sheetsEnabled: false,
+      contactsEnabled: false,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('includes Google Workspace status in the always-loaded workspace tools when connected', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      googleService: mockGoogleService(),
+    });
+
+    const names = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
+    expect(names).toContain('gws_status');
+  });
+
   it('hot-applies Google Workspace service availability without rebuilding the executor', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

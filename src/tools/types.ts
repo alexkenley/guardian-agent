@@ -103,7 +103,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   ],
   contacts: ['contacts_discover_browser', 'contacts_import_csv', 'contacts_list', 'campaign_create', 'campaign_list', 'campaign_add_contacts', 'campaign_dry_run'],
   email: ['gmail_draft', 'gmail_send', 'campaign_run'],
-  workspace: ['gws', 'gws_schema', 'm365_status'],
+  workspace: ['gws', 'gws_schema', 'gws_status', 'm365_status'],
   security: ['assistant_security_summary', 'assistant_security_scan', 'assistant_security_findings'],
   intel: ['intel_summary', 'intel_watch_add', 'intel_watch_remove', 'intel_scan', 'intel_findings', 'intel_draft_action'],
   forum: ['forum_post'],
