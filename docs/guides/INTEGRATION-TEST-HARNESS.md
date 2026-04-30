@@ -189,6 +189,7 @@ Core harness scripts include:
 | **`scripts/test-brokered-isolation.mjs`** | Brokered worker smoke harness: isolated worker startup, broker-mediated chat path, and health under agent isolation (Node.js) | focused brokered-worker assertions |
 | **`scripts/test-brokered-approvals.mjs`** | Brokered approval harness: multi-step approvals, broker-mediated continuation, memory-save suppression, and tool-reporting (Node.js) | focused brokered approval assertions |
 | **`scripts/test-cross-domain-orchestration-stress.mjs`** | Cross-domain orchestration stress harness: graph/tool-loop coordination across Second Brain, automations, repo inspection, browser/network, Google Workspace, WHM/cloud, and security tools (Node.js) | focused multi-domain graph assertions |
+| **`scripts/test-cloud-config.mjs`** | Cloud profile/config harness: config redaction, cloud tool discovery, planner profile selection, and simulated WHM/cloud execution (Node.js) | focused cloud config assertions |
 | **`scripts/test-skills-routing-harness.mjs`** | Skills routing harness: resolver selection, active-skill context, and skill-backed tool routing through the web channel (Node.js with `tsx`) | focused skills-routing assertions |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
@@ -320,6 +321,14 @@ For graph-owned orchestration, delegated verification/retry, multi-domain tool s
 node scripts/test-cross-domain-orchestration-stress.mjs
 ```
 
+For remote sandbox diagnostics, managed target selection, lease health, or Code workflow stage/run-timeline rendering, pair focused unit coverage with the Code harnesses:
+
+```bash
+npx vitest run src/runtime/chat-agent/code-session-control.test.ts src/runtime/remote-execution/policy.test.ts src/runtime/remote-execution/providers/daytona-remote-execution.test.ts src/runtime/remote-execution/providers/vercel-remote-execution.test.ts src/tools/cloud/daytona-sandbox-client.test.ts src/tools/cloud/vercel-sandbox-client.test.ts src/runtime/run-timeline.test.ts src/runtime/execution-graph/timeline-adapter.test.ts
+node scripts/test-coding-assistant.mjs
+node scripts/test-code-ui-smoke.mjs
+```
+
 For local debugging, add `--keep-tmp` or set `HARNESS_KEEP_TMP=1` to preserve the harness temp directory.
 
 Recommended Coding Assistant regression loop:
@@ -449,6 +458,12 @@ When new configuration inputs are added, especially host fields, base URLs, endp
 - normalization of acceptable input variants into the canonical runtime form
 
 Do not rely on UI placeholders alone for this. Add regression coverage so values like root URLs, trailing slashes, `host:port`, or provider-specific base paths are either normalized deliberately or rejected with a clear error.
+
+For cloud profile/provider config, WHM/cloud tool discovery, config redaction, or managed profile planner-path changes, run:
+
+```bash
+node scripts/test-cloud-config.mjs
+```
 
 Example script generated during debugging (see `scripts/test-web-approvals.mjs`):
 ```bash
