@@ -1771,7 +1771,6 @@ function bindCodeSessionListeners() {
       const session = getActiveSession();
       if (session) {
         await refreshSessionData(session).catch(() => {});
-        scheduleTimelineDrivenSessionRefresh(session.id);
       } else {
         rerenderFromState();
       }
@@ -1817,20 +1816,46 @@ function ensureSessionSelectedFilePath(session) {
   return preferred;
 }
 
-function syncSelectedEditorTabFromFileView(session, fileView) {
+function syncSelectedEditorTabFromFileView(session, fileView, previousFileView = null) {
   const selectedFilePath = ensureSessionSelectedFilePath(session);
   if (!selectedFilePath) return;
   const tab = getActiveTab(session);
-  if (!tab || tab.filePath !== selectedFilePath || tab.dirty) return;
+  if (!tab || tab.filePath !== selectedFilePath) return;
   const nextSource = typeof fileView?.source === 'string' ? fileView.source : '';
-  tab.content = null;
   const modelEntry = monacoModels.get(tab.filePath);
   const model = modelEntry?.model;
+  const currentModelValue = model && !model.isDisposed() ? model.getValue() : null;
+  if (tab.dirty) {
+    const previousSource = typeof previousFileView?.source === 'string' ? previousFileView.source : '';
+    const hasUnsavedModelChanges = currentModelValue === null || currentModelValue !== previousSource;
+    if (hasUnsavedModelChanges) return;
+  }
+  tab.content = null;
   if (model && !model.isDisposed() && model.getValue() !== nextSource) {
     setModelValueFromDisk(tab.filePath, model, nextSource);
-    tab.dirty = false;
-    removeDirtyEditorIndicator();
   }
+  tab.dirty = false;
+  removeDirtyEditorIndicator();
+}
+
+async function refreshSelectedFileViewModel(session) {
+  const selectedFilePath = ensureSessionSelectedFilePath(session);
+  if (!selectedFilePath) return false;
+  const previousFileView = cachedFileView;
+  const previousSignature = JSON.stringify({
+    source: previousFileView?.source || '',
+    diff: previousFileView?.diff || '',
+    error: previousFileView?.error || null,
+  });
+  const fileView = await loadFileView(session);
+  cachedFileView = fileView;
+  syncSelectedEditorTabFromFileView(session, fileView, previousFileView);
+  const nextSignature = JSON.stringify({
+    source: cachedFileView?.source || '',
+    diff: cachedFileView?.diff || '',
+    error: cachedFileView?.error || null,
+  });
+  return nextSignature !== previousSignature;
 }
 
 function isTimelineRunTerminal(run) {
@@ -3534,7 +3559,7 @@ async function switchCodeSession(sessionId, { rerender = true } = {}) {
       }
       const activeSession = getActiveSession();
       if (activeSession?.id === confirmedSessionId) {
-        await refreshSessionData(activeSession);
+        await refreshSessionData(activeSession, { forceRerender: true });
       } else {
         rerenderFromState();
       }
@@ -3632,6 +3657,7 @@ function ensureSessionRefreshLoop() {
       if (codeState.activePanel === 'explorer') {
         await refreshVisibleTreeDirs(session);
       }
+      await refreshSelectedFileViewModel(session).catch(() => false);
       await refreshAssistantState(session, { rerender: false });
       if (codeState.activePanel === 'sandboxes') {
         await refreshSessionSandboxes(session, { rerender: false });
@@ -3780,6 +3806,8 @@ export function updateCode() {
   const previousActiveSessionId = normalizeCodeSessionId(codeState.activeSessionId);
   const previousAttachedSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
   const previousSessionSignature = (codeState.sessions || []).map((session) => session.id).join('|');
+  const previousActiveSession = getActiveSession();
+  const previousIndexRailSignature = getSessionRailRenderSignature(previousActiveSession);
   void (async () => {
     await refreshSessionsIndex().catch(() => null);
     if (currentContainer !== container) return;
@@ -3793,9 +3821,40 @@ export function updateCode() {
       return;
     }
     const activeSession = getActiveSession();
-    if (activeSession) {
-      await refreshSessionData(activeSession);
-    } else {
+    if (!activeSession) {
+      rerenderFromState();
+      return;
+    }
+    const indexRailChanged = getSessionRailRenderSignature(activeSession) !== previousIndexRailSignature;
+    if (indexRailChanged && codeState.activePanel === 'sessions' && !refreshVisibleSessionRail()) {
+      rerenderFromState();
+      return;
+    }
+    const previousSignature = getSessionRenderSignature(activeSession);
+    const previousActivitySignature = getSessionActivityRenderSignature(activeSession);
+    const previousRailSignature = getSessionRailRenderSignature(activeSession);
+    const previousTreeSignature = getVisibleTreeSignature(activeSession);
+    const session = await refreshSessionSnapshot(activeSession.id);
+    if (!session || currentContainer !== container) return;
+    if (codeState.activePanel === 'explorer') {
+      await refreshVisibleTreeDirs(session);
+    }
+    await refreshSelectedFileViewModel(session).catch(() => false);
+    await refreshAssistantState(session, { rerender: false });
+    if (codeState.activePanel === 'sandboxes') {
+      await refreshSessionSandboxes(session, { rerender: false });
+    }
+    const activityChanged = getSessionActivityRenderSignature(session) !== previousActivitySignature;
+    const railChanged = getSessionRailRenderSignature(session) !== previousRailSignature;
+    const requiresFullRerender = (
+      getSessionRenderSignature(session) !== previousSignature
+      || getVisibleTreeSignature(session) !== previousTreeSignature
+    );
+    if (requiresFullRerender) {
+      rerenderFromState();
+    } else if (railChanged && codeState.activePanel === 'sessions' && !refreshVisibleSessionRail()) {
+      rerenderFromState();
+    } else if (activityChanged && codeState.activePanel === 'activity' && !refreshVisibleAssistantPanel(session)) {
       rerenderFromState();
     }
   })().catch(() => {});
@@ -6699,14 +6758,26 @@ async function refreshFileView(session) {
     loadFileView(session),
     loadStructureView(session),
   ]);
+  const previousFileView = cachedFileView;
   cachedFileView = fileView;
-  syncSelectedEditorTabFromFileView(session, fileView);
+  syncSelectedEditorTabFromFileView(session, fileView, previousFileView);
   session.structureView = structureView;
   saveState(codeState);
   rerenderFromState();
 }
 
-async function refreshSessionData(session) {
+async function refreshSessionData(session, { forceRerender = false } = {}) {
+  const previousSession = getSessionById(session?.id) || session;
+  const previousFileView = cachedFileView;
+  const previousSignature = getSessionRenderSignature(previousSession);
+  const previousActivitySignature = getSessionActivityRenderSignature(previousSession);
+  const previousRailSignature = getSessionRailRenderSignature(previousSession);
+  const previousTreeSignature = getVisibleTreeSignature(previousSession);
+  const previousFileViewSignature = JSON.stringify({
+    source: cachedFileView?.source || '',
+    diff: cachedFileView?.diff || '',
+    error: cachedFileView?.error || null,
+  });
   const latestSession = await refreshSessionSnapshot(session.id).catch(() => session);
   const currentSession = latestSession || session;
   const selectedFilePath = ensureSessionSelectedFilePath(currentSession) || '';
@@ -6722,14 +6793,31 @@ async function refreshSessionData(session) {
     currentSession.resolvedRoot = rootData.resolvedPath;
   }
   cachedFileView = fileView;
-  syncSelectedEditorTabFromFileView(currentSession, fileView);
+  syncSelectedEditorTabFromFileView(currentSession, fileView, previousFileView);
   currentSession.structureView = structureView;
   await refreshAssistantState(currentSession, { rerender: false });
   if (codeState.activePanel === 'sandboxes' || sandboxStateBySessionId.has(currentSession.id)) {
     await refreshSessionSandboxes(currentSession, { rerender: false });
   }
   saveState(codeState);
-  rerenderFromState();
+  const nextFileViewSignature = JSON.stringify({
+    source: cachedFileView?.source || '',
+    diff: cachedFileView?.diff || '',
+    error: cachedFileView?.error || null,
+  });
+  const activityChanged = getSessionActivityRenderSignature(currentSession) !== previousActivitySignature;
+  const railChanged = getSessionRailRenderSignature(currentSession) !== previousRailSignature;
+  const requiresFullRerender = forceRerender
+    || getSessionRenderSignature(currentSession) !== previousSignature
+    || getVisibleTreeSignature(currentSession) !== previousTreeSignature
+    || nextFileViewSignature !== previousFileViewSignature;
+  if (requiresFullRerender) {
+    rerenderFromState();
+  } else if (railChanged && codeState.activePanel === 'sessions' && !refreshVisibleSessionRail()) {
+    rerenderFromState();
+  } else if (activityChanged && codeState.activePanel === 'activity' && !refreshVisibleAssistantPanel(currentSession)) {
+    rerenderFromState();
+  }
 }
 
 // ─── API data loaders ──────────────────────────────────────

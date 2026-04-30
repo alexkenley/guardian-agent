@@ -36,6 +36,7 @@ let appStarted = false;
 let authRecoveryInProgress = false;
 let navigationInFlight = false;
 let navigationQueued = false;
+let sseDisconnectTimer = null;
 const DENSE_CHAT_PANEL_ROUTES = new Set(['automations', 'config']);
 
 // ─── Auth ────────────────────────────────────────────────
@@ -188,18 +189,31 @@ function connectSSE() {
   if (eventSource) {
     eventSource.close();
   }
+  if (sseDisconnectTimer) {
+    clearTimeout(sseDisconnectTimer);
+    sseDisconnectTimer = null;
+  }
 
   // SSE always uses cookie auth. Bearer tokens are exchanged for secure sessions at login.
   eventSource = new EventSource('/sse', { withCredentials: true });
 
   eventSource.onopen = () => {
+    if (sseDisconnectTimer) {
+      clearTimeout(sseDisconnectTimer);
+      sseDisconnectTimer = null;
+    }
     indicator.className = 'indicator connected';
     indicator.textContent = 'Connected';
   };
 
   eventSource.onerror = () => {
-    indicator.className = 'indicator disconnected';
-    indicator.textContent = 'Disconnected';
+    if (sseDisconnectTimer) return;
+    sseDisconnectTimer = setTimeout(() => {
+      sseDisconnectTimer = null;
+      if (eventSource?.readyState === EventSource.OPEN) return;
+      indicator.className = 'indicator disconnected';
+      indicator.textContent = 'Disconnected';
+    }, 1500);
   };
 
   // Register listeners for all known SSE event types
