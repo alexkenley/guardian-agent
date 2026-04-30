@@ -208,6 +208,53 @@ describe('AgentMemoryStore', () => {
     expect(forContext).toContain('[... knowledge base truncated');
   });
 
+  it('keeps context-flush summaries out of fresh prompt-time memory selection', () => {
+    const store = makeStore({ maxContextChars: 2000 });
+    store.append('agent1', {
+      content: 'Durable preference: answer compactly.',
+      createdAt: '2026-04-30',
+      category: 'Preferences',
+    });
+    store.append('agent1', {
+      content: 'Prior transcript summary: user mentioned TEMP-MARKER-123 in a previous chat.',
+      createdAt: '2026-04-30',
+      category: 'General',
+      sourceType: 'system',
+      tags: ['context_flush'],
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: {
+        text: 'What was the temporary marker in my immediately previous message?',
+      },
+    });
+
+    expect(result.content).toContain('Durable preference');
+    expect(result.content).not.toContain('TEMP-MARKER-123');
+    expect(result.selectedEntries.some((entry) => entry.isContextFlush)).toBe(false);
+  });
+
+  it('allows context-flush summaries when continuity explicitly requests them', () => {
+    const store = makeStore({ maxContextChars: 2000 });
+    store.append('agent1', {
+      content: 'Prior transcript summary: user mentioned TEMP-MARKER-456 in this continuity thread.',
+      createdAt: '2026-04-30',
+      category: 'General',
+      sourceType: 'system',
+      tags: ['context_flush'],
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: {
+        text: 'What was the temporary marker?',
+        tags: ['continuity'],
+      },
+    });
+
+    expect(result.content).toContain('TEMP-MARKER-456');
+    expect(result.selectedEntries.some((entry) => entry.isContextFlush)).toBe(true);
+  });
+
   it('blocks suspicious active memory from prompt context', () => {
     const events: Array<{ code: string }> = [];
     const store = makeStore({

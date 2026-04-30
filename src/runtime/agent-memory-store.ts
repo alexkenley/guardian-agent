@@ -1237,7 +1237,7 @@ export class AgentMemoryStore {
     }>;
     candidateEntries: number;
   } {
-    const ranked = index.entries
+    const rankedCandidates = index.entries
       .filter((entry) => entry.status === 'active')
       .map((entry) => {
         const match = this.scoreContextEntry(entry, query);
@@ -1247,7 +1247,10 @@ export class AgentMemoryStore {
           matchReasons: match.reasons,
           isContextFlush: entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false,
         };
-      })
+      });
+    const candidateEntries = rankedCandidates.length;
+    const ranked = rankedCandidates
+      .filter((ranked) => !ranked.isContextFlush || this.shouldIncludeContextFlushEntryForQuery(query))
       .sort((left, right) => {
         if (left.queryScore !== right.queryScore) {
           return right.queryScore - left.queryScore;
@@ -1264,12 +1267,24 @@ export class AgentMemoryStore {
         if (createdAtDelta !== 0) return createdAtDelta;
         return right.entry.id.localeCompare(left.entry.id);
       });
-    const candidateEntries = ranked.length;
     const limit = query ? MAX_QUERY_CONTEXT_CANDIDATES : MAX_CONTEXT_CANDIDATES;
     return {
       entries: ranked.slice(0, limit),
       candidateEntries,
     };
+  }
+
+  private shouldIncludeContextFlushEntryForQuery(query: NormalizedMemoryContextQuery | null): boolean {
+    if (!query) return true;
+    if (query.tags.includes('continuity')) return true;
+    if (query.categoryHints.includes('context flushes')) return true;
+    return query.identifiers.some((identifier) => (
+      identifier.startsWith('code_session:')
+      || identifier.startsWith('pending_action:')
+      || identifier.startsWith('automation:')
+      || identifier.startsWith('auth_flow:')
+      || identifier.startsWith('execution:')
+    ));
   }
 
   private scoreContextEntry(

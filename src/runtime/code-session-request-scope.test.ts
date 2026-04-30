@@ -44,6 +44,22 @@ describe('shouldAttachCodeSessionForRequest', () => {
     })).toBe(true);
   });
 
+  it('does not treat workspace-root-only metadata as an explicit shared-session attachment for non-code turns', () => {
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'What was the temporary marker in my immediately previous message? Reply with only the marker.',
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      requestedCodeContext: {
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+      },
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'memory_task',
+        requiresRepoGrounding: false,
+      },
+    })).toBe(false);
+  });
+
   it('does not scope coding-session control into the current workspace attachment', () => {
     expect(shouldAttachCodeSessionForRequest({
       content: 'Detach this chat from the current coding workspace.',
@@ -139,5 +155,21 @@ describe('shouldAttachCodeSessionForRequest', () => {
         },
       },
     })).toBe(true);
+  });
+
+  it('does not use workspace-root-only metadata as the coding conversation scope', () => {
+    expect(shouldUseCodeSessionConversationForRequest({
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      requestedCodeContext: {
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+      },
+      resolvedCodeSession: sharedSession,
+      metadata: {
+        codeContext: {
+          workspaceRoot: 'S:\\Development\\GuardianAgent',
+        },
+      },
+    })).toBe(false);
   });
 });

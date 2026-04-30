@@ -89,7 +89,7 @@ export function shouldUseCodeSessionConversationForRequest(
   if (isImplicitSharedCodeContextMetadata(input.metadata)) {
     return false;
   }
-  if (input.requestedCodeContext?.sessionId || input.requestedCodeContext?.workspaceRoot) {
+  if (input.requestedCodeContext?.sessionId) {
     return true;
   }
   return !isResolvedCodeSessionSharedAttachment(input.resolvedCodeSession, input.channel, input.surfaceId);
@@ -118,7 +118,7 @@ export function shouldAttachCodeSessionForRequest(
   if (gatewayDecision?.route === 'coding_session_control') {
     return false;
   }
-  if (input.requestedCodeContext?.sessionId || input.requestedCodeContext?.workspaceRoot) {
+  if (input.requestedCodeContext?.sessionId) {
     return true;
   }
   if (isSelfContainedNonWorkspaceRequest(input.content)) {
