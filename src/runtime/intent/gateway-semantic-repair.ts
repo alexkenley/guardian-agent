@@ -61,6 +61,15 @@ export function repairStructuredIntentGatewayRoute(
   const explicitRepoPlanning = isExplicitRepoPlanningRequest(rawSourceContent);
   const explicitRemoteSandbox = isExplicitRemoteSandboxTaskRequest(rawSourceContent, normalizedSourceContent);
   const managedSandboxStatusInspection = isManagedSandboxStatusInspectionRequest(rawSourceContent, normalizedSourceContent);
+  const explicitFilesystemOperation = inferExplicitFilesystemTaskOperation(normalizedSourceContent, operation);
+  const classifierFilesystemMutation = operation === 'create'
+    || operation === 'update'
+    || operation === 'delete'
+    || operation === 'save';
+  const explicitFilesystemMutation = explicitFilesystemOperation === 'create'
+    || explicitFilesystemOperation === 'update'
+    || explicitFilesystemOperation === 'delete'
+    || explicitFilesystemOperation === 'save';
   const explicitCodingTaskRequest = explicitCodingExecution
     || explicitWorkspaceScopedRepoWork
     || explicitRepoInspection
@@ -122,6 +131,13 @@ export function repairStructuredIntentGatewayRoute(
   }
   if (route === 'unknown' && explicitCodingTaskRequest) {
     return 'coding_task';
+  }
+  if (
+    (route === 'general_assistant' || route === 'unknown')
+    && classifierFilesystemMutation
+    && explicitFilesystemMutation
+  ) {
+    return 'filesystem_task';
   }
   if (route === 'unknown' && explicitAutomationOutput) {
     return 'automation_output_task';
@@ -233,7 +249,7 @@ export function repairStructuredIntentGatewayOperation(
     return inferAutomationOutputOperation(rawSourceContent, operation);
   }
   if (route === 'filesystem_task') {
-    const inferredFilesystemOperation = inferExplicitFilesystemTaskOperation(rawSourceContent, operation);
+    const inferredFilesystemOperation = inferExplicitFilesystemTaskOperation(normalizedSourceContent, operation);
     if (inferredFilesystemOperation) {
       return inferredFilesystemOperation;
     }

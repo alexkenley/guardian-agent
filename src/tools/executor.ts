@@ -322,16 +322,10 @@ const CODE_SESSION_SAFE_AUTO_APPROVED_TOOLS = new Set([
   'code_git_diff',
   'code_symbol_search',
   'fs_read',
-  'fs_write',
   'fs_search',
   'fs_list',
-  'fs_mkdir',
-  'fs_move',
-  'fs_copy',
-  'fs_delete',
   'memory_search',
   'memory_recall',
-  'doc_create',
 ]);
 const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
   'shell_safe',
@@ -347,6 +341,14 @@ const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
 const CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS = new Set([
   'shell_safe',
   ...CODE_SESSION_TRUSTED_EXECUTION_TOOLS,
+]);
+const CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS = new Set([
+  'fs_write',
+  'fs_mkdir',
+  'fs_move',
+  'fs_copy',
+  'fs_delete',
+  'doc_create',
 ]);
 
 type ShellExecMode = 'direct_exec' | 'shell_fallback';
@@ -2474,6 +2476,15 @@ export class ToolExecutor {
       );
   }
 
+  private isAssistantCodeSessionRawFilesystemMutation(
+    definition: ToolDefinition,
+    request?: Partial<ToolExecutionRequest>,
+  ): boolean {
+    return request?.origin === 'assistant'
+      && !!this.getCodeWorkspaceRoot(request)
+      && CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS.has(definition.name);
+  }
+
   private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
     return resolveConversationSurfaceId({
       channel: request?.channel,
@@ -4240,6 +4251,10 @@ export class ToolExecutor {
 
     if (memoryMutationDecision) {
       return memoryMutationDecision;
+    }
+
+    if (this.isAssistantCodeSessionRawFilesystemMutation(definition, request)) {
+      return 'require_approval';
     }
 
     if (contentTrustLevel === 'quarantined' && definition.risk !== 'read_only') {

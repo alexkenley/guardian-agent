@@ -91,6 +91,80 @@ describe('normalizeIntentGatewayDecision', () => {
     });
   });
 
+  it('repairs route-only fallback filesystem mutations from explicit path requests', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'filesystem_task',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Create a harmless file in the workspace.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Inspect relevant workspace context.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the result.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Create a harmless file at tmp/manual-web/post-graph-approval.txt containing exactly: post graph approval smoke',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('filesystem_task');
+    expect(decision.operation).toBe('create');
+    expect(decision.provenance?.operation).toBe('repair.structured');
+  });
+
+  it('repairs general-assistant filesystem writes with explicit paths into filesystem tasks', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'create',
+      summary: 'Create a harmless smoke-test file.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      planned_steps: [
+        {
+          kind: 'write',
+          summary: 'Create tmp/manual-web/post-graph-approval.txt with exact content.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Create a harmless file at tmp/manual-web/post-graph-approval.txt containing exactly: post graph approval smoke',
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.route).toBe('filesystem_task');
+    expect(decision.operation).toBe('create');
+    expect(decision.executionClass).toBe('repo_grounded');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+    expect(decision.provenance?.route).toBe('repair.structured');
+  });
+
   it('keeps direct assistant exact-answer turns off the tool-loop path when history bleeds into classifier metadata', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -4634,6 +4634,38 @@ describe('ToolExecutor', () => {
       path: scopedFile,
       content: 'scoped hello\n',
     });
+  });
+
+  it('requires approval for assistant raw filesystem writes in code session workspaces', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'autonomous',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      toolPolicies: { fs_write: 'auto' },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: join(codeRoot, 'approval-smoke.txt'),
+        content: 'approval required',
+      },
+      origin: 'assistant',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-approval' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('pending_approval');
+    expect(result.approvalId).toBeTruthy();
+    await expect(access(join(codeRoot, 'approval-smoke.txt'))).rejects.toThrow();
   });
 
   it('surfaces code-session workspace roots in tool context', () => {

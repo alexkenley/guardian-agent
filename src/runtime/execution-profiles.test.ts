@@ -785,6 +785,52 @@ describe('execution profiles', () => {
     expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['search', 'search']);
   });
 
+  it('preserves explicit filesystem mutations even when gateway planned steps are stale read-only evidence', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'filesystem_task',
+        operation: 'create',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        summary: 'Create tmp/manual-web/post-graph-approval.txt containing a smoke marker.',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Inspect repo context from fallback routing.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Confirm the file was created.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'filesystem_task',
+      operation: 'create',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
   it('keeps delegated remote sandbox execution as run even with read-only fallback planned steps', () => {
     const delegatedDecision = resolveDelegatedExecutionDecision({
       gatewayDecision: createGatewayDecision({

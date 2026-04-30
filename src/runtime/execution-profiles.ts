@@ -79,6 +79,12 @@ const READ_LIKE_OPERATIONS = new Set<IntentGatewayOperation>([
   'read',
   'search',
 ]);
+const WORKSPACE_MUTATION_OPERATIONS = new Set<IntentGatewayOperation>([
+  'create',
+  'update',
+  'delete',
+  'save',
+]);
 const READ_ONLY_EVIDENCE_STEP_CATEGORIES = new Set([
   'read',
   'search',
@@ -147,6 +153,10 @@ function isExecutionProfileSelectionSource(value: unknown): value is ExecutionPr
 
 function isReadLikeOperation(value: IntentGatewayOperation | undefined): boolean {
   return value ? READ_LIKE_OPERATIONS.has(value) : false;
+}
+
+function isExplicitWorkspaceMutationOperation(value: IntentGatewayOperation | undefined): boolean {
+  return value ? WORKSPACE_MUTATION_OPERATIONS.has(value) : false;
 }
 
 function hasStructuredReadOnlyEvidencePlan(decision: IntentGatewayDecision): boolean {
@@ -776,6 +786,8 @@ function deriveDelegatedExecutionDecision(input: {
   const mutateOperation = lenses.has('provider-admin') ? 'update' : 'run';
   const codingWorkspaceOperation = base.entities?.codingRemoteExecRequested === true
     ? 'run'
+    : isExplicitWorkspaceMutationOperation(base.operation)
+      ? base.operation
     : descriptor.role === 'implementer'
       && !hasStructuredReadOnlyEvidencePlan(base)
     ? mutateOperation
