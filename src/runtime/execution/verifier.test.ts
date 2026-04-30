@@ -1144,6 +1144,85 @@ describe('verifyDelegatedResult', () => {
     expect(decision.requiredNextAction).toContain('targeted repo inspection');
   });
 
+  it('accepts mixed-domain status answers with a plain zero-match repo symbol search', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Multi-provider status check plus repo search for controller function, delivered as six redacted bullets.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'read', summary: 'Check connector status and list automations.', expectedToolCategories: ['cloud_tool_status', 'automation_list'], required: true },
+        { kind: 'search', summary: 'Search this workspace for runLiveToolLoopController.', expectedToolCategories: ['fs_search'], required: true },
+        { kind: 'answer', summary: 'Return six short bullets with one result per requested source.', required: true, dependsOn: ['step_1', 'step_2'] },
+      ],
+      entities: {},
+    });
+    const finalAnswer = [
+      '- Vercel: connected and healthy.',
+      '- WHM: connected and healthy.',
+      '- Gmail: configured and authenticated.',
+      '- Microsoft 365: configured and authenticated.',
+      '- Saved automations: 38 found.',
+      '- runLiveToolLoopController: no matches found in this workspace.',
+    ].join('\n');
+    const decision = verifyDelegatedResult({
+      envelope: buildEnvelope({
+        taskContract,
+        runStatus: 'completed',
+        finalUserAnswer: finalAnswer,
+        operatorSummary: finalAnswer,
+        stepReceipts: [
+          { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-status'], summary: 'Status tools completed.', startedAt: 1, endedAt: 2 },
+          { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-repo'], summary: 'No matches found.', startedAt: 3, endedAt: 4 },
+          { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['answer:1'], summary: finalAnswer, startedAt: 5, endedAt: 6 },
+        ],
+        evidenceReceipts: [
+          {
+            receiptId: 'receipt-status',
+            sourceType: 'tool_call',
+            toolName: 'gws_status',
+            status: 'succeeded',
+            summary: 'Google Workspace configured and authenticated.',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          {
+            receiptId: 'receipt-repo',
+            sourceType: 'tool_call',
+            toolName: 'fs_search',
+            status: 'succeeded',
+            refs: [],
+            summary: 'No matches found for runLiveToolLoopController.',
+            startedAt: 3,
+            endedAt: 4,
+          },
+        ],
+        claims: [{
+          claimId: 'answer:1:answer',
+          kind: 'answer',
+          subject: 'final_answer',
+          value: finalAnswer,
+          evidenceReceiptIds: ['answer:1'],
+          confidence: 1,
+        }],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      decision: 'satisfied',
+      retryable: false,
+    });
+  });
+
   it('rejects mixed-domain implementation-location answers that cite only repo job-snapshot refs', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',

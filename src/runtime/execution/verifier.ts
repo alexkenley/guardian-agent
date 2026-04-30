@@ -664,7 +664,7 @@ const REPO_EVIDENCE_CATEGORY_NAMES = new Set([
   'code_symbol_search',
 ]);
 const REPO_NO_MATCH_ANSWER_PATTERN = /\b(?:no\s+(?:content\s+)?matches?\s+(?:were\s+)?found|no\s+results?\s+(?:were\s+)?found|could(?:\s+not|n't)\s+find|did(?:\s+not|n't)\s+find|not\s+found)\b/i;
-const IMPLEMENTATION_LOCATION_REQUEST_PATTERN = /\b(?:where|which|what|exact|identify|locate|show|list|find|search)\b[\s\S]{0,180}\b(?:implement|implements|implemented|define|defines|defined|called|calls|callers?|emitted|emits?|triggered|fires?|published|registered|wired|handled|handles|render|renders|rendered|own|owns|responsible|file|files|function|functions|symbol|symbols|path|paths)\b/i;
+const IMPLEMENTATION_LOCATION_REQUEST_PATTERN = /\b(?:where|which|what|exact|identify|locate|show|list|find)\b[\s\S]{0,180}\b(?:implement|implements|implemented|define|defines|defined|called|calls|callers?|emitted|emits?|triggered|fires?|published|registered|wired|handled|handles|render|renders|rendered|own|owns|responsible|file|files|function|functions|symbol|symbols|path|paths)\b/i;
 const FINAL_ANSWER_FILE_REFERENCE_PATTERN = /\b(?:src|docs|web|scripts|config|policies|skills|native|test|tests|lib|public|tmp)(?:[\\/][^\s`'",)\]}]+)+/gi;
 
 function verifyRepoEvidenceQuality(
