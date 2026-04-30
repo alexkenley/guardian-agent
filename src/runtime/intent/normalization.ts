@@ -255,6 +255,30 @@ export function normalizeCodeSessionResource(
   }
 }
 
+export function normalizeCodeSessionSandboxProvider(
+  value: unknown,
+): IntentGatewayEntities['codeSessionSandboxProvider'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'daytona':
+    case 'daytona_sandbox':
+      return 'daytona';
+    case 'vercel':
+    case 'vercel_sandbox':
+      return 'vercel';
+    case 'all':
+    case 'any':
+    case 'remote':
+    case 'managed':
+    case 'managed_sandboxes':
+    case 'remote_sandboxes':
+      return 'all';
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeEmailProvider(
   value: unknown,
 ): IntentGatewayEntities['emailProvider'] | undefined {

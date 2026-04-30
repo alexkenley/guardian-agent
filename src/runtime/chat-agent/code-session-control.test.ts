@@ -143,6 +143,18 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
       defaultTargetId: 'daytona:daytona-main',
       targets: [
         {
+          id: 'vercel:vercel-prod',
+          profileId: 'vercel-prod',
+          profileName: 'Vercel Production',
+          providerFamily: 'vercel',
+          backendKind: 'vercel_sandbox',
+          capabilityState: 'ready',
+          reason: 'Ready for bounded remote sandbox execution.',
+          networkMode: 'allow_all',
+          allowedDomains: [],
+          allowedCidrs: [],
+        },
+        {
           id: 'daytona:daytona-main',
           profileId: 'daytona-main',
           profileName: 'Daytona Main',
@@ -168,6 +180,20 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
         message: 'Remote sandbox target \'Daytona Main\' is currently unreachable: HTTP 502 from Daytona control plane.',
       }],
       sandboxes: [
+        {
+          leaseId: 'lease-vercel',
+          targetId: 'vercel:vercel-prod',
+          profileName: 'Vercel Production',
+          backendKind: 'vercel_sandbox',
+          sandboxId: 'sandbox-vercel',
+          localWorkspaceRoot: 'S:\\Development\\GuardianAgent',
+          remoteWorkspaceRoot: '/vercel/sandbox',
+          status: 'active',
+          state: 'running',
+          acquiredAt: 1,
+          lastUsedAt: 2,
+          trackedRemotePaths: [],
+        },
         {
           leaseId: 'lease-1',
           targetId: 'daytona-main',
@@ -205,7 +231,9 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
         preferredTier: 'external',
         requiresToolSynthesis: true,
         preferredAnswerPath: 'tool_loop',
-        entities: {},
+        entities: {
+          codeSessionSandboxProvider: 'daytona',
+        },
         plannedSteps: [
           {
             kind: 'read',
@@ -223,14 +251,16 @@ describe('tryDirectCodeSessionControlFromGateway', () => {
     });
 
     expect(getCodeSessionManagedSandboxes).toHaveBeenCalledWith('session-1', 'owner');
-    expect(result?.content).toContain('Managed sandboxes attached to this coding session:');
+    expect(result?.content).toContain('Managed sandboxes (daytona) attached to this coding session:');
     expect(result?.content).toContain('status=unreachable');
     expect(result?.content).toContain('note=HTTP 502 from Daytona control plane.');
-    expect(result?.content).toContain('Remote sandbox targets:');
+    expect(result?.content).toContain('Remote sandbox targets (daytona):');
     expect(result?.content).toContain('provider=daytona');
+    expect(result?.content).not.toContain('provider=vercel');
+    expect(result?.content).not.toContain('/vercel/sandbox');
     expect(result?.content).toContain('reachable=no');
     expect(result?.content).toContain('likelyCause=external_service_unreachable');
-    expect(result?.content).toContain('Remote sandbox diagnostics:');
+    expect(result?.content).toContain('Remote sandbox diagnostics (daytona):');
     expect(result?.content).toContain('code=target_unreachable');
     expect(result?.content).toContain('nextAction=Retry later or verify the provider control plane/status page before changing local config.');
   });

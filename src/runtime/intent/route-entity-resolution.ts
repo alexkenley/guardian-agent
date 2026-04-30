@@ -7,6 +7,7 @@ import {
   cleanInferredSessionTarget,
   extractCodingWorkspaceTarget,
   extractExplicitRemoteExecCommand,
+  inferCodeSessionSandboxProvider,
   inferCodeSessionResource,
   inferExplicitCodingBackendRequest,
   hasExplicitRemoteSandboxReference,
@@ -29,6 +30,7 @@ import {
   normalizeAutomationReadView,
   normalizeCalendarWindowDays,
   normalizeCodingBackend,
+  normalizeCodeSessionSandboxProvider,
   normalizeCodeSessionResource,
   normalizeEmailProvider,
   normalizeMailboxReadMode,
@@ -185,6 +187,18 @@ export function resolveIntentGatewayEntities(
       ? classifierSource
       : 'resolver.coding';
   }
+  const parsedCodeSessionSandboxProvider = route === 'coding_session_control'
+    ? normalizeCodeSessionSandboxProvider(parsed.codeSessionSandboxProvider)
+    : undefined;
+  const codeSessionSandboxProvider = parsedCodeSessionSandboxProvider
+    ?? (route === 'coding_session_control' && codeSessionResource === 'managed_sandboxes'
+      ? inferCodeSessionSandboxProvider(normalizedSourceContent)
+      : undefined);
+  if (codeSessionSandboxProvider) {
+    provenance.codeSessionSandboxProvider = parsedCodeSessionSandboxProvider
+      ? classifierSource
+      : 'resolver.coding';
+  }
   const emailProvider = normalizeEmailProvider(parsed.emailProvider)
     ?? inferEmailProviderFromSource(rawSourceContent, route, personalItemType);
   if (emailProvider) {
@@ -298,6 +312,7 @@ export function resolveIntentGatewayEntities(
     ...(path ? { path } : {}),
     ...(sessionTarget ? { sessionTarget } : {}),
     ...(codeSessionResource ? { codeSessionResource } : {}),
+    ...(codeSessionSandboxProvider ? { codeSessionSandboxProvider } : {}),
     ...(emailProvider ? { emailProvider } : {}),
     ...(mailboxReadMode ? { mailboxReadMode } : {}),
     ...(calendarTarget ? { calendarTarget } : {}),

@@ -192,8 +192,28 @@ describe('resolveIntentGatewayEntities', () => {
     );
 
     expect(result.entities.codeSessionResource).toBe('managed_sandboxes');
+    expect(result.entities.codeSessionSandboxProvider).toBe('daytona');
     expect(result.provenance).toMatchObject({
       codeSessionResource: 'resolver.coding',
+      codeSessionSandboxProvider: 'resolver.coding',
+    });
+  });
+
+  it('preserves classifier-provided sandbox provider filters for managed sandbox status', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        codeSessionResource: 'managed_sandboxes',
+        codeSessionSandboxProvider: 'vercel_sandbox',
+      },
+      { sourceContent: 'Check Vercel sandbox status.' },
+      'coding_session_control',
+      'inspect',
+      'classifier.primary',
+    );
+
+    expect(result.entities.codeSessionSandboxProvider).toBe('vercel');
+    expect(result.provenance).toMatchObject({
+      codeSessionSandboxProvider: 'classifier.primary',
     });
   });
 

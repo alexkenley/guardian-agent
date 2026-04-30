@@ -119,6 +119,7 @@ export interface IntentGatewayEntities {
   path?: string;
   sessionTarget?: string;
   codeSessionResource?: 'session' | 'session_list' | 'managed_sandboxes';
+  codeSessionSandboxProvider?: 'daytona' | 'vercel' | 'all';
   emailProvider?: 'gws' | 'm365';
   mailboxReadMode?: 'unread' | 'latest';
   calendarTarget?: 'local' | 'gws' | 'm365';

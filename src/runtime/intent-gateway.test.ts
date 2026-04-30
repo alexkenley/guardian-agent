@@ -1963,7 +1963,7 @@ describe('IntentGateway', () => {
     expect(inspectedSystemPrompt).toContain('Requests to inspect, explain, review, or plan changes against specific repo files');
     expect(inspectedSystemPrompt).toContain('Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests.');
     expect(inspectedSystemPrompt).toContain('A request to check Daytona status, Daytona health, Daytona reachability, or remote/managed sandbox status is a coding_session_control inspect request');
-    expect(inspectedSystemPrompt).toContain('"Check Daytona status." -> route=coding_session_control, operation=inspect, codeSessionResource=managed_sandboxes');
+    expect(inspectedSystemPrompt).toContain('"Check Daytona status." -> route=coding_session_control, operation=inspect, codeSessionResource=managed_sandboxes, codeSessionSandboxProvider=daytona');
   });
 
   it('keeps raw credential disclosure guidance in the gateway system prompt', async () => {
@@ -3138,8 +3138,103 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('coding_session_control');
     expect(result.decision.operation).toBe('inspect');
     expect(result.decision.entities.codeSessionResource).toBe('managed_sandboxes');
+    expect(result.decision.entities.codeSessionSandboxProvider).toBe('daytona');
     expect(result.decision.provenance.route).toBe('repair.structured');
     expect(result.decision.provenance.operation).toBe('repair.structured');
+  });
+
+  it('repairs stale automation-continuation drift for Daytona status checks', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check Daytona status. Keep it short and include the likely cause and next action if the target is not reachable.',
+        channel: 'web',
+        continuity: {
+          continuationStateKind: 'automation_catalog_list',
+        },
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'automation_control',
+            confidence: 'low',
+            operation: 'read',
+            summary: 'Check Daytona status.',
+            executionClass: 'tool_orchestration',
+            preferredAnswerPath: 'tool_loop',
+            planned_steps: [
+              {
+                id: 'step_1',
+                kind: 'read',
+                summary: 'Read automation list context.',
+                expectedToolCategories: ['automation_list'],
+                required: true,
+              },
+            ],
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.codeSessionResource).toBe('managed_sandboxes');
+    expect(result.decision.entities.codeSessionSandboxProvider).toBe('daytona');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('preserves Daytona status session-control classifications over stale automation continuations', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check Daytona status. Keep it short and include the likely cause and next action if the target is not reachable.',
+        channel: 'web',
+        continuity: {
+          continuationStateKind: 'automation_catalog_list',
+        },
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspect Daytona managed sandbox status.',
+            executionClass: 'tool_orchestration',
+            preferredAnswerPath: 'direct',
+            codeSessionResource: 'managed_sandboxes',
+            codeSessionSandboxProvider: 'daytona',
+            planned_steps: [
+              {
+                id: 'step_1',
+                kind: 'read',
+                summary: 'Read stale automation list context.',
+                expectedToolCategories: ['automation_list'],
+                required: true,
+              },
+            ],
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.codeSessionResource).toBe('managed_sandboxes');
+    expect(result.decision.entities.codeSessionSandboxProvider).toBe('daytona');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
   });
 
   it('normalizes natural route and operation variants from local-model JSON fallbacks', async () => {

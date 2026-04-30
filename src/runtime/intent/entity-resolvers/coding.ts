@@ -285,6 +285,21 @@ export function inferCodeSessionResource(
   return undefined;
 }
 
+export function inferCodeSessionSandboxProvider(
+  normalized: string,
+): IntentGatewayEntities['codeSessionSandboxProvider'] | undefined {
+  if (!normalized || !isManagedSandboxStatusInspectionRequest(normalized, normalized)) {
+    return undefined;
+  }
+  if (/\bdaytona\b/.test(normalized)) {
+    return 'daytona';
+  }
+  if (/\bvercel\b/.test(normalized)) {
+    return 'vercel';
+  }
+  return 'all';
+}
+
 export function cleanInferredSessionTarget(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const cleaned = collapseIntentGatewayWhitespace(value)

@@ -343,6 +343,7 @@ async function handleCodeSessionCurrent(input: {
 async function handleCodeSessionManagedSandboxes(input: {
   executeDirectCodeSessionTool: CodeSessionToolExecutor;
   getCodeSessionManagedSandboxes?: CodeSessionManagedSandboxGetter;
+  decision?: IntentGatewayDecision;
   message: UserMessage;
   ctx: AgentContext;
 }): Promise<CodeSessionResponse> {
@@ -380,28 +381,44 @@ async function handleCodeSessionManagedSandboxes(input: {
     }
   }
 
+  const requestedProvider = input.decision?.entities.codeSessionSandboxProvider;
+  const providerFilter = requestedProvider && requestedProvider !== 'all' ? requestedProvider : undefined;
+  if (providerFilter) {
+    const targetIdsBeforeFiltering = new Set(targets.map((target) => toString(target.id)).filter(Boolean));
+    sandboxes = sandboxes.filter((sandbox) => managedSandboxMatchesProvider(sandbox, providerFilter));
+    targets = targets.filter((target) => remoteSandboxTargetMatchesProvider(target, providerFilter));
+    const filteredTargetIds = new Set(targets.map((target) => toString(target.id)).filter(Boolean));
+    targetDiagnostics = targetDiagnostics.filter((diagnostic) => remoteSandboxDiagnosticMatchesProvider({
+      diagnostic,
+      provider: providerFilter,
+      targetIdsBeforeFiltering,
+      filteredTargetIds,
+    }));
+  }
+
+  const providerLabel = providerFilter ? ` (${providerFilter})` : '';
   const lines = [
     'This chat is currently attached to:',
     formatDirectCodeSessionLine(session, true),
   ];
   if (sandboxes.length === 0) {
-    lines.push('No managed sandboxes are currently attached to this coding session.');
+    lines.push(`No managed sandboxes${providerLabel} are currently attached to this coding session.`);
   } else {
-    lines.push('Managed sandboxes attached to this coding session:');
+    lines.push(`Managed sandboxes${providerLabel} attached to this coding session:`);
     for (const sandbox of sandboxes) {
       lines.push(formatManagedSandboxLine(sandbox));
     }
   }
   if (targets.length === 0) {
-    lines.push('Remote sandbox targets: none configured for this session.');
+    lines.push(`Remote sandbox targets${providerLabel}: none configured for this session.`);
   } else {
-    lines.push('Remote sandbox targets:');
+    lines.push(`Remote sandbox targets${providerLabel}:`);
     for (const target of targets) {
       lines.push(formatRemoteSandboxTargetLine(target, defaultTargetId));
     }
   }
   if (targetDiagnostics.length > 0) {
-    lines.push('Remote sandbox diagnostics:');
+    lines.push(`Remote sandbox diagnostics${providerLabel}:`);
     for (const diagnostic of targetDiagnostics) {
       lines.push(formatRemoteSandboxDiagnosticLine(diagnostic));
     }
@@ -415,6 +432,35 @@ async function handleCodeSessionManagedSandboxes(input: {
         }
       : undefined,
   };
+}
+
+function managedSandboxMatchesProvider(
+  sandbox: CodeSessionManagedSandbox,
+  provider: NonNullable<IntentGatewayDecision['entities']['codeSessionSandboxProvider']>,
+): boolean {
+  return sandbox.backendKind === `${provider}_sandbox`;
+}
+
+function remoteSandboxTargetMatchesProvider(
+  target: RemoteExecutionTargetDescriptor,
+  provider: NonNullable<IntentGatewayDecision['entities']['codeSessionSandboxProvider']>,
+): boolean {
+  return target.providerFamily === provider || target.backendKind === `${provider}_sandbox`;
+}
+
+function remoteSandboxDiagnosticMatchesProvider(input: {
+  diagnostic: RemoteExecutionTargetDiagnostic;
+  provider: NonNullable<IntentGatewayDecision['entities']['codeSessionSandboxProvider']>;
+  targetIdsBeforeFiltering: Set<string>;
+  filteredTargetIds: Set<string>;
+}): boolean {
+  const targetId = toString(input.diagnostic.targetId);
+  if (targetId) {
+    if (input.filteredTargetIds.has(targetId)) return true;
+    if (input.targetIdsBeforeFiltering.has(targetId)) return false;
+    return targetId.toLowerCase().includes(input.provider);
+  }
+  return toString(input.diagnostic.profileName).toLowerCase().includes(input.provider);
 }
 
 async function handleCodeSessionList(input: {

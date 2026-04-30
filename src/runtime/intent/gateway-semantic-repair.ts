@@ -72,6 +72,15 @@ export function repairStructuredIntentGatewayRoute(
     turnRelation,
   });
 
+  if (
+    (route === 'unknown'
+      || route === 'general_assistant'
+      || route === 'automation_control'
+      || route === 'coding_session_control')
+    && managedSandboxStatusInspection
+  ) {
+    return 'coding_session_control';
+  }
   if (pagedListContinuationRoute) {
     return pagedListContinuationRoute;
   }
@@ -113,9 +122,6 @@ export function repairStructuredIntentGatewayRoute(
   }
   if (route === 'unknown' && explicitCodingTaskRequest) {
     return 'coding_task';
-  }
-  if ((route === 'unknown' || route === 'general_assistant') && managedSandboxStatusInspection) {
-    return 'coding_session_control';
   }
   if (route === 'unknown' && explicitAutomationOutput) {
     return 'automation_output_task';
