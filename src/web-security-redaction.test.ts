@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 describe('Security page redaction helpers', () => {
-  it('redacts secret-like keys and token-shaped strings before raw security JSON rendering', async () => {
+  function installSecurityPageDomStubs(): void {
     globalThis.HTMLButtonElement = class HTMLButtonElement {} as never;
     globalThis.document = {
       querySelectorAll: () => [],
@@ -9,6 +9,10 @@ describe('Security page redaction helpers', () => {
       body: { appendChild: () => undefined },
       querySelector: () => null,
     } as never;
+  }
+
+  it('redacts secret-like keys and token-shaped strings before raw security JSON rendering', async () => {
+    installSecurityPageDomStubs();
 
     const { redactSecurityJsonForDisplay } = await import('../web/public/js/pages/security.js');
 
@@ -33,5 +37,21 @@ describe('Security page redaction helpers', () => {
     expect(redacted.evidence.resources[1]).toBe('ghp_[REDACTED]');
     expect(JSON.stringify(redacted)).not.toContain('sk-live-secret-value');
     expect(JSON.stringify(redacted)).not.toContain('abcdefghijklmnopqrstuvwxyz');
+  });
+
+  it('explains whether Security activity entries ran AI triage', async () => {
+    installSecurityPageDomStubs();
+
+    const { formatSecurityActivityStatusForDisplay } = await import('../web/public/js/pages/security.js');
+
+    expect(formatSecurityActivityStatusForDisplay({ status: 'completed' })).toBe('AI triage completed');
+    expect(formatSecurityActivityStatusForDisplay({
+      status: 'skipped',
+      details: { reason: 'low_confidence' },
+    })).toBe('No AI triage (low-confidence signal)');
+    expect(formatSecurityActivityStatusForDisplay({
+      status: 'skipped',
+      details: { reason: 'cooldown' },
+    })).toBe('No AI triage (cooldown window)');
   });
 });

@@ -1412,7 +1412,7 @@ function renderSecurityActivity(entries) {
           ${entries.map((entry) => `
             <tr>
               <td>${esc(formatTimestamp(entry.timestamp))}</td>
-              <td>${esc(entry.status)}</td>
+              <td>${esc(formatSecurityActivityStatusForDisplay(entry))}</td>
               <td>${esc(entry.severity)}</td>
               <td>${esc(entry.title)}</td>
               <td>${esc(entry.summary)}</td>
@@ -1422,6 +1422,41 @@ function renderSecurityActivity(entries) {
       </table>
     </div>
   `;
+}
+
+export function formatSecurityActivityStatusForDisplay(entry) {
+  const status = entry?.status;
+  switch (status) {
+    case 'started':
+      return 'AI triage running';
+    case 'completed':
+      return 'AI triage completed';
+    case 'failed':
+      return 'AI triage failed';
+    case 'skipped': {
+      const reason = typeof entry?.details?.reason === 'string' ? entry.details.reason : '';
+      return reason
+        ? `No AI triage (${formatSecurityActivitySkipReason(reason)})`
+        : 'No AI triage';
+    }
+    default:
+      return formatIdentifierLabel(status || 'unknown');
+  }
+}
+
+function formatSecurityActivitySkipReason(reason) {
+  switch (reason) {
+    case 'informational':
+      return 'informational event';
+    case 'low_confidence':
+      return 'low-confidence signal';
+    case 'low_severity':
+      return 'low-severity signal';
+    case 'cooldown':
+      return 'cooldown window';
+    default:
+      return formatIdentifierLabel(reason);
+  }
 }
 
 function renderWatchlist(items) {
