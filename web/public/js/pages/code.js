@@ -2008,6 +2008,7 @@ function normalizeSandboxPanelState(sessionId, value = {}, existing = {}) {
         reason: typeof entry.reason === 'string' ? entry.reason : '',
         healthState: typeof entry.healthState === 'string' ? entry.healthState : '',
         healthReason: typeof entry.healthReason === 'string' ? entry.healthReason : '',
+        healthCause: typeof entry.healthCause === 'string' ? entry.healthCause : '',
       }))
     : (Array.isArray(existing.targets) ? existing.targets : []);
   const sandboxes = Array.isArray(value.sandboxes)
@@ -2042,6 +2043,8 @@ function normalizeSandboxPanelState(sessionId, value = {}, existing = {}) {
         code: typeof entry.code === 'string' ? entry.code : '',
         targetId: typeof entry.targetId === 'string' ? entry.targetId : '',
         profileName: typeof entry.profileName === 'string' ? entry.profileName : '',
+        likelyCause: typeof entry.likelyCause === 'string' ? entry.likelyCause : '',
+        nextAction: typeof entry.nextAction === 'string' ? entry.nextAction : '',
         message: typeof entry.message === 'string' ? entry.message : '',
       }))
       .filter((entry) => entry.message)
@@ -6338,6 +6341,9 @@ function renderSandboxTargetOption(target, sandboxState) {
   const snapshotSummary = target.snapshotConfigured
     ? ` • snapshot ${target.snapshotLabel || 'configured'}`
     : '';
+  const causeSummary = target.healthCause
+    ? ` • likely cause: ${target.healthCause.replace(/_/g, ' ')}`
+    : '';
   return `
     <label class="code-session" style="gap:0.45rem;cursor:default">
       <div class="code-session__top">
@@ -6352,7 +6358,7 @@ function renderSandboxTargetOption(target, sandboxState) {
         </span>
       </div>
       <div class="code-session__meta">${esc(backend)}${target.projectId ? ` • ${esc(target.projectId)}` : target.target ? ` • ${esc(target.target)}` : ''}</div>
-      <div class="code-session__hint">${esc(`${networkSummary}${snapshotSummary}`)}${target.reason ? ` • ${esc(target.reason)}` : ''}${target.healthReason ? ` • ${esc(target.healthReason)}` : ''}</div>
+      <div class="code-session__hint">${esc(`${networkSummary}${snapshotSummary}${causeSummary}`)}${target.reason ? ` • ${esc(target.reason)}` : ''}${target.healthReason ? ` • ${esc(target.healthReason)}` : ''}</div>
     </label>
   `;
 }
@@ -6485,7 +6491,12 @@ function renderSandboxesPanel(activeSession) {
       ${sandboxState.targetDiagnostics?.length > 0 ? `
         <div class="empty-inline">
           ${sandboxState.targetDiagnostics.map((entry) => `
-            <div><span class="badge ${entry.severity === 'error' ? 'badge-critical' : entry.severity === 'warning' ? 'badge-warn' : 'badge-info'}">${esc(String(entry.severity || 'info').toUpperCase())}</span> ${esc(entry.message)}</div>
+            <div>
+              <span class="badge ${entry.severity === 'error' ? 'badge-critical' : entry.severity === 'warning' ? 'badge-warn' : 'badge-info'}">${esc(String(entry.severity || 'info').toUpperCase())}</span>
+              ${esc(entry.message)}
+              ${entry.likelyCause ? `<div class="code-session__meta">Likely cause: ${esc(entry.likelyCause.replace(/_/g, ' '))}</div>` : ''}
+              ${entry.nextAction ? `<div class="code-session__hint">${esc(entry.nextAction)}</div>` : ''}
+            </div>
           `).join('')}
         </div>
       ` : ''}
