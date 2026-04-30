@@ -3270,6 +3270,54 @@ describe('ToolExecutor', () => {
     expect(requests.some((url) => url.includes('/json-api/restartservice'))).toBe(true);
   });
 
+  it('returns structured WHM status diagnostics without leaking credentials', async () => {
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.statusCode = 403;
+      res.end(JSON.stringify({ metadata: { result: 0, reason: 'permission denied token=whm-secret' } }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'whm',
+          name: 'WHM',
+          type: 'whm',
+          host: '127.0.0.1',
+          port: address.port,
+          username: 'root',
+          apiToken: 'whm-secret',
+          ssl: false,
+        }],
+      },
+    });
+
+    const status = await executor.runTool({
+      toolName: 'whm_status',
+      args: { profile: 'whm' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(false);
+    expect(status.error).not.toContain('whm-secret');
+    expect(status.output).toMatchObject({
+      provider: 'whm',
+      profile: 'whm',
+      status: 'unavailable',
+      reachable: true,
+      authorized: false,
+      likelyCause: 'permission_denied',
+      unsupportedEndpoint: false,
+    });
+  });
+
   it('executes Vercel read-only tools and redacts env values', async () => {
     const server = createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
@@ -3358,6 +3406,53 @@ describe('ToolExecutor', () => {
       project: 'prj_1',
       deploymentId: 'dpl_1',
       data: { entries: [{ message: 'hello', level: 'info' }] },
+    });
+  });
+
+  it('returns structured Vercel status diagnostics without leaking credentials', async () => {
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: { message: 'invalid token=vercel-secret' } }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+        }],
+      },
+    });
+
+    const status = await executor.runTool({
+      toolName: 'vercel_status',
+      args: { profile: 'vercel-main' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(false);
+    expect(status.error).not.toContain('vercel-secret');
+    expect(status.output).toMatchObject({
+      provider: 'vercel',
+      profile: 'vercel-main',
+      status: 'unavailable',
+      reachable: true,
+      authenticated: false,
+      authorized: false,
+      likelyCause: 'authentication_failed',
+      unsupportedEndpoint: false,
+      scope: { teamId: 'team_123', slug: null },
     });
   });
 

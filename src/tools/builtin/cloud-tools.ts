@@ -1,4 +1,4 @@
-import { normalizeSensitiveKeyName } from '../../util/crypto-guardrails.js';
+import { normalizeSensitiveKeyName, redactSensitiveText } from '../../util/crypto-guardrails.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
 import type { AwsClient, AwsInstanceConfig } from '../cloud/aws-client.js';
@@ -54,6 +54,86 @@ interface CloudToolRegistrarContext {
 }
 
 type CloudToolValueHelpers = Pick<CloudToolRegistrarContext, 'requireString' | 'asString' | 'asStringArray'>;
+
+type CloudStatusFailureCause =
+  | 'authentication_failed'
+  | 'permission_denied'
+  | 'endpoint_unreachable'
+  | 'unsupported_endpoint'
+  | 'unexpected_response'
+  | 'provider_error';
+
+interface CloudStatusFailureInput {
+  provider: 'vercel' | 'whm';
+  profile: string;
+  profileName: string;
+  endpoint: string;
+  err: unknown;
+  extra?: Record<string, unknown>;
+}
+
+function buildCloudStatusFailure(input: CloudStatusFailureInput): Record<string, unknown> {
+  const errorSummary = summarizeCloudProviderError(input.err);
+  const likelyCause = classifyCloudStatusFailure(errorSummary);
+  return {
+    provider: input.provider,
+    profile: input.profile,
+    profileName: input.profileName,
+    endpoint: input.endpoint,
+    status: 'unavailable',
+    reachable: likelyCause === 'endpoint_unreachable' ? false : likelyCause === 'provider_error' ? null : true,
+    authenticated: likelyCause === 'authentication_failed' ? false : null,
+    authorized: likelyCause === 'permission_denied' ? false : likelyCause === 'authentication_failed' ? false : null,
+    unsupportedEndpoint: likelyCause === 'unsupported_endpoint',
+    likelyCause,
+    nextAction: nextActionForCloudStatusFailure(likelyCause),
+    errorSummary,
+    ...(input.extra ?? {}),
+  };
+}
+
+function summarizeCloudProviderError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const redacted = redactSensitiveText(raw).replace(/\s+/g, ' ').trim();
+  return redacted.length > 240 ? `${redacted.slice(0, 237)}...` : redacted;
+}
+
+function classifyCloudStatusFailure(message: string): CloudStatusFailureCause {
+  const normalized = message.toLowerCase();
+  if (/\b401\b|unauthori[sz]ed|invalid (?:api )?token|authentication|not authenticated/.test(normalized)) {
+    return 'authentication_failed';
+  }
+  if (/\b403\b|forbidden|permission|insufficient scope|access denied/.test(normalized)) {
+    return 'permission_denied';
+  }
+  if (/\b404\b|not found|unsupported endpoint|unknown endpoint|invalid route/.test(normalized)) {
+    return 'unsupported_endpoint';
+  }
+  if (/enotfound|eai_again|econnrefused|econnreset|etimedout|timed out|socket hang up|network unreachable/.test(normalized)) {
+    return 'endpoint_unreachable';
+  }
+  if (/invalid json|unexpected token|malformed response/.test(normalized)) {
+    return 'unexpected_response';
+  }
+  return 'provider_error';
+}
+
+function nextActionForCloudStatusFailure(cause: CloudStatusFailureCause): string {
+  switch (cause) {
+    case 'authentication_failed':
+      return 'Reconnect or rotate the configured provider credential, then rerun the read-only status check.';
+    case 'permission_denied':
+      return 'Verify the configured credential has the required provider permissions for this read-only status check.';
+    case 'endpoint_unreachable':
+      return 'Verify the configured endpoint, host allowlist, network path, and provider status before changing app logic.';
+    case 'unsupported_endpoint':
+      return 'Verify the configured provider endpoint/API version and profile type for this status tool.';
+    case 'unexpected_response':
+      return 'Inspect the provider response shape or API version; the endpoint was reachable but did not return expected JSON.';
+    case 'provider_error':
+      return 'Retry later or inspect the provider control plane/status page before changing local configuration.';
+  }
+}
 
 export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): void {
   const { requireString, asString, asNumber, asStringArray } = context;
@@ -772,7 +852,19 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
           },
         };
       } catch (err) {
-        return { success: false, error: `Vercel status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        const diagnostic = buildCloudStatusFailure({
+          provider: 'vercel',
+          profile: client.config.id,
+          profileName: client.config.name,
+          endpoint: context.describeVercelEndpoint(client.config),
+          err,
+          extra: { scope: describeVercelScope(client.config) },
+        });
+        return {
+          success: false,
+          error: `Vercel status request failed: ${diagnostic.errorSummary}`,
+          output: diagnostic,
+        };
       }
     },
   );
@@ -3453,7 +3545,19 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
           },
         };
       } catch (err) {
-        return { success: false, error: `WHM status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        const diagnostic = buildCloudStatusFailure({
+          provider: 'whm',
+          profile: client.config.id,
+          profileName: client.config.name,
+          endpoint: context.describeCloudEndpoint(client.config),
+          err,
+          extra: { host: client.config.host },
+        });
+        return {
+          success: false,
+          error: `WHM status request failed: ${diagnostic.errorSummary}`,
+          output: diagnostic,
+        };
       }
     },
   );
