@@ -1331,6 +1331,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Guardian includes a conservative automated triage path for selected security events.',
                   'That triage path gathers evidence first, avoids noisy repeats, and records completed investigations in activity history.',
+                  'Low-confidence triage skips are grouped in Assistant Security activity so routine monitor-only signals do not crowd out completed investigations.',
                   'It does not automatically acknowledge alerts or launch mutating host actions just because an alert fired.',
                 ],
               },

@@ -1113,6 +1113,7 @@ export interface DashboardSecurityActivityLogArgs {
   limit?: number;
   status?: SecurityActivityStatus;
   agentId?: string;
+  groupLowConfidence?: boolean;
 }
 
 export interface DashboardWindowsDefenderStatusResult {

@@ -243,6 +243,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 200;
     const rawStatus = trimOptionalString(url.searchParams.get('status'))?.toLowerCase();
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
+    const groupLowConfidence = url.searchParams.get('groupLowConfidence') === '1' || url.searchParams.get('groupLowConfidence') === 'true';
     if (rawStatus && !isSecurityActivityStatus(rawStatus)) {
       sendJSON(res, 400, { error: "status must be one of 'started', 'skipped', 'completed', or 'failed'" });
       return true;
@@ -251,6 +252,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       limit,
       status: rawStatus && isSecurityActivityStatus(rawStatus) ? rawStatus : undefined,
       agentId,
+      groupLowConfidence,
     }));
     return true;
   }

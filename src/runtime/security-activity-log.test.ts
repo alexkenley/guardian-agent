@@ -66,4 +66,71 @@ describe('SecurityActivityLogService', () => {
     expect(isSecurityActivityStatus('completed')).toBe(true);
     expect(isSecurityActivityStatus('bogus')).toBe(false);
   });
+
+  it('groups low-confidence skipped signals for operator-facing activity lists', () => {
+    let now = 1_000;
+    const log = new SecurityActivityLogService({
+      persistPath: makePersistPath(),
+      now: () => now,
+    });
+
+    log.record({
+      agentId: 'security-triage-dispatcher',
+      targetAgentId: 'assistant-security',
+      status: 'skipped',
+      severity: 'info',
+      title: 'Received expected guardrail denial without triage',
+      summary: 'Observed notification event and left it in monitor-only review.',
+      triggerEventType: 'security:alert',
+      triggerDetailType: 'expected_guardrail_denial',
+      triggerSourceAgentId: 'notification-service',
+      dedupeKey: 'security:alert:expected_guardrail_denial',
+      details: {
+        reason: 'low_confidence',
+        sourceLabel: 'notification',
+      },
+    });
+    now += 1_000;
+    log.record({
+      agentId: 'security-triage-dispatcher',
+      targetAgentId: 'assistant-security',
+      status: 'skipped',
+      severity: 'info',
+      title: 'Received expected guardrail denial without triage',
+      summary: 'Observed notification event and left it in monitor-only review again.',
+      triggerEventType: 'security:alert',
+      triggerDetailType: 'expected_guardrail_denial',
+      triggerSourceAgentId: 'notification-service',
+      dedupeKey: 'security:alert:expected_guardrail_denial',
+      details: {
+        reason: 'low_confidence',
+        sourceLabel: 'notification',
+      },
+    });
+    now += 1_000;
+    log.record({
+      agentId: 'security-triage-dispatcher',
+      targetAgentId: 'assistant-security',
+      status: 'completed',
+      severity: 'warn',
+      title: 'Completed triage for beaconing',
+      summary: 'Likely benign telemetry sync. Stay in monitor.',
+      triggerEventType: 'security:network:threat',
+      triggerDetailType: 'beaconing',
+      dedupeKey: 'security:network:threat:beaconing',
+    });
+
+    const grouped = log.list({ groupLowConfidence: true });
+
+    expect(grouped.totalMatches).toBe(3);
+    expect(grouped.entries).toHaveLength(1);
+    expect(grouped.entries[0]?.status).toBe('completed');
+    expect(grouped.groups).toHaveLength(1);
+    expect(grouped.groups[0]).toEqual(expect.objectContaining({
+      count: 2,
+      reason: 'low_confidence',
+      triggerDetailType: 'expected_guardrail_denial',
+      latestSummary: 'Observed notification event and left it in monitor-only review again.',
+    }));
+  });
 });

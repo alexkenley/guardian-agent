@@ -345,7 +345,7 @@ async function renderAssistantSecurityTab(panel, state = {}) {
     api.aiSecurityTargets().catch(() => []),
     api.aiSecurityRuns(20).catch(() => []),
     api.aiSecurityFindings({ limit: 100, status: findingStatus || undefined }).catch(() => []),
-    api.securityActivity({ agentId: 'assistant-security', limit: 30 }).catch(() => ({ entries: [] })),
+    api.securityActivity({ agentId: 'assistant-security', limit: 30, groupLowConfidence: true }).catch(() => ({ entries: [], groups: [] })),
     api.config().catch(() => null),
     api.scheduledTasks().catch(() => []),
   ]);
@@ -420,8 +420,8 @@ async function renderAssistantSecurityTab(panel, state = {}) {
     ${renderCollapsibleSection('Recent Assistant Security Runs', renderRunsTable(runs), {
       summary: `${runs.length || 0} recent ${pluralize(runs.length || 0, 'run')}`,
     })}
-    ${renderCollapsibleSection('Assistant Security Activity', renderSecurityActivity(activity.entries || []), {
-      summary: `${(activity.entries || []).length || 0} recent ${pluralize((activity.entries || []).length || 0, 'entry')}`,
+    ${renderCollapsibleSection('Assistant Security Activity', renderSecurityActivity(activity.entries || [], activity.groups || []), {
+      summary: formatSecurityActivitySummary(activity),
     })}
   `;
 
@@ -1427,11 +1427,13 @@ function renderRunsTable(runs) {
   `;
 }
 
-function renderSecurityActivity(entries) {
-  if (!Array.isArray(entries) || entries.length === 0) {
+function renderSecurityActivity(entries, groups = []) {
+  const hasGroups = Array.isArray(groups) && groups.length > 0;
+  if ((!Array.isArray(entries) || entries.length === 0) && !hasGroups) {
     return '<div class="empty-state">No Assistant Security activity has been recorded yet.</div>';
   }
   return `
+    ${hasGroups ? renderSecurityActivityGroups(groups) : ''}
     <div class="table-wrap">
       <table class="data-table">
         <thead>
@@ -1451,6 +1453,45 @@ function renderSecurityActivity(entries) {
       </table>
     </div>
   `;
+}
+
+function renderSecurityActivityGroups(groups) {
+  return `
+    <div class="security-inline-summary">
+      ${groups.map((group) => `
+        <div>
+          <strong>${esc(formatSecurityActivityGroupTitle(group))}</strong>
+          <span>${esc(formatSecurityActivityGroupSummary(group))}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function formatSecurityActivitySummary(activity) {
+  const entries = Array.isArray(activity?.entries) ? activity.entries : [];
+  const groups = Array.isArray(activity?.groups) ? activity.groups : [];
+  const groupedCount = groups.reduce((total, group) => total + (Number.isFinite(Number(group.count)) ? Number(group.count) : 0), 0);
+  const parts = [
+    `${entries.length} recent ${pluralize(entries.length, 'entry')}`,
+  ];
+  if (groupedCount > 0) {
+    parts.push(`${groupedCount} low-confidence ${pluralize(groupedCount, 'signal')} grouped`);
+  }
+  return parts.join(' · ');
+}
+
+function formatSecurityActivityGroupTitle(group) {
+  const count = Number.isFinite(Number(group?.count)) ? Number(group.count) : 0;
+  const label = formatIdentifierLabel(group?.triggerDetailType || group?.sourceLabel || 'low_confidence_signal');
+  return `${count} ${label} ${pluralize(count, 'signal')} grouped`;
+}
+
+function formatSecurityActivityGroupSummary(group) {
+  const source = group?.sourceLabel ? `${formatIdentifierLabel(group.sourceLabel)} source` : 'security source';
+  const lastSeen = group?.lastSeen ? `Last seen ${formatTimestamp(group.lastSeen)}.` : '';
+  const latest = group?.latestSummary ? `Latest summary: ${group.latestSummary}` : '';
+  return [`Low-confidence ${source}.`, lastSeen, latest].filter(Boolean).join(' ');
 }
 
 export function formatSecurityActivityStatusForDisplay(entry) {

@@ -484,6 +484,7 @@ export function createOperationsDashboardCallbacks(
           limit: args?.limit,
           status,
           agentId: args?.agentId,
+          groupLowConfidence: args?.groupLowConfidence,
         });
       },
 

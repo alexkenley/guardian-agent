@@ -28,10 +28,28 @@ export interface SecurityActivityListOptions {
   limit?: number;
   status?: SecurityActivityStatus;
   agentId?: string;
+  groupLowConfidence?: boolean;
+}
+
+export interface SecurityActivitySignalGroup {
+  key: string;
+  reason: string;
+  count: number;
+  firstSeen: number;
+  lastSeen: number;
+  latestEntryId: string;
+  latestTitle: string;
+  latestSummary: string;
+  triggerEventType?: string;
+  triggerDetailType?: string;
+  triggerSourceAgentId?: string;
+  dedupeKey?: string;
+  sourceLabel?: string;
 }
 
 export interface SecurityActivityListResult {
   entries: SecurityActivityEntry[];
+  groups: SecurityActivitySignalGroup[];
   totalMatches: number;
   returned: number;
   byStatus: Record<SecurityActivityStatus, number>;
@@ -156,10 +174,15 @@ export class SecurityActivityLogService {
     for (const entry of matches) {
       byStatus[entry.status] += 1;
     }
+    const groups = options?.groupLowConfidence ? groupLowConfidenceSkippedEntries(matches) : [];
+    const returnedEntries = options?.groupLowConfidence
+      ? matches.filter((entry) => !isGroupableLowConfidenceSkippedEntry(entry)).slice(0, limit)
+      : matches.slice(0, limit);
     return {
-      entries: matches.slice(0, limit),
+      entries: returnedEntries,
+      groups,
       totalMatches: matches.length,
-      returned: Math.min(matches.length, limit),
+      returned: returnedEntries.length,
       byStatus,
     };
   }
@@ -201,4 +224,63 @@ function normalizeSecurityActivityEntry(value: unknown): SecurityActivityEntry |
 
 function isAuditSeverity(value: string): value is AuditSeverity {
   return value === 'info' || value === 'warn' || value === 'critical';
+}
+
+function groupLowConfidenceSkippedEntries(entries: SecurityActivityEntry[]): SecurityActivitySignalGroup[] {
+  const groups = new Map<string, SecurityActivitySignalGroup>();
+  for (const entry of entries) {
+    if (!isGroupableLowConfidenceSkippedEntry(entry)) {
+      continue;
+    }
+    const key = buildLowConfidenceGroupKey(entry);
+    const existing = groups.get(key);
+    const sourceLabel = typeof entry.details?.sourceLabel === 'string' && entry.details.sourceLabel.trim()
+      ? entry.details.sourceLabel.trim()
+      : undefined;
+    if (!existing) {
+      groups.set(key, {
+        key,
+        reason: 'low_confidence',
+        count: 1,
+        firstSeen: entry.timestamp,
+        lastSeen: entry.timestamp,
+        latestEntryId: entry.id,
+        latestTitle: entry.title,
+        latestSummary: entry.summary,
+        triggerEventType: entry.triggerEventType,
+        triggerDetailType: entry.triggerDetailType,
+        triggerSourceAgentId: entry.triggerSourceAgentId,
+        dedupeKey: entry.dedupeKey,
+        sourceLabel,
+      });
+      continue;
+    }
+    existing.count += 1;
+    existing.firstSeen = Math.min(existing.firstSeen, entry.timestamp);
+    if (entry.timestamp >= existing.lastSeen) {
+      existing.lastSeen = entry.timestamp;
+      existing.latestEntryId = entry.id;
+      existing.latestTitle = entry.title;
+      existing.latestSummary = entry.summary;
+      existing.triggerEventType = entry.triggerEventType;
+      existing.triggerDetailType = entry.triggerDetailType;
+      existing.triggerSourceAgentId = entry.triggerSourceAgentId;
+      existing.dedupeKey = entry.dedupeKey;
+      existing.sourceLabel = sourceLabel;
+    }
+  }
+  return [...groups.values()].sort((left, right) => right.lastSeen - left.lastSeen);
+}
+
+function isGroupableLowConfidenceSkippedEntry(entry: SecurityActivityEntry): boolean {
+  return entry.status === 'skipped' && entry.details?.reason === 'low_confidence';
+}
+
+function buildLowConfidenceGroupKey(entry: SecurityActivityEntry): string {
+  return [
+    entry.triggerEventType || 'unknown_event',
+    entry.triggerDetailType || 'unknown_detail',
+    entry.triggerSourceAgentId || 'unknown_source',
+    entry.dedupeKey || 'no_dedupe_key',
+  ].join(':');
 }
