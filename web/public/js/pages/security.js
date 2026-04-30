@@ -805,7 +805,7 @@ function renderAlertQueue(alerts) {
               </td>
               <td>${esc(alert.status || 'active')}</td>
               <td>
-                ${alert.status === 'active' ? `<button class="btn btn-secondary btn-sm" data-security-alert-action="ack" data-alert-id="${escAttr(alert.id)}" data-alert-source="${escAttr(alert.source)}">Ack</button>` : ''}
+                ${alert.status === 'active' ? `<button class="btn btn-secondary btn-sm" data-security-alert-action="ack" data-alert-id="${escAttr(alert.id)}" data-alert-source="${escAttr(alert.source)}">Acknowledge</button>` : ''}
                 ${alert.status !== 'resolved' ? `<button class="btn btn-secondary btn-sm" data-security-alert-action="resolve" data-alert-id="${escAttr(alert.id)}" data-alert-source="${escAttr(alert.source)}">Resolve</button>` : ''}
                 ${alert.status !== 'suppressed' ? `<button class="btn btn-secondary btn-sm" data-security-alert-action="suppress" data-alert-id="${escAttr(alert.id)}" data-alert-source="${escAttr(alert.source)}">Suppress</button>` : ''}
               </td>
