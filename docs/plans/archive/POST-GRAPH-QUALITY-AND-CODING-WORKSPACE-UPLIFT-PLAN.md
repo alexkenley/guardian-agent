@@ -1,7 +1,10 @@
 # Post-Graph Quality And Coding Workspace Uplift Plan
 
+**Archived:** 2026-04-30
+**Archive reason:** Superseded by `docs/plans/GUARDIANAGENT-COMPREHENSIVE-STRESS-QUALITY-AND-SECURITY-UPLIFT-PLAN.md` for active follow-on quality, stress, security guardrail, security-monitoring, and UX refinement work.
+
 **Date:** 2026-04-29
-**Status:** Active bounded plan
+**Status:** Archived historical context
 **Supersedes for active follow-on work:** `docs/plans/archive/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`
 **Related plans:** `docs/plans/CODING-WORKFLOW-UPLIFTS-IMPLEMENTATION-PLAN.md`, `docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md`, `docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md`
 
