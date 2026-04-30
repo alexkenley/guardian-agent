@@ -66,6 +66,9 @@ describe('ContainmentService Assistant Security auto-containment', () => {
     expect(state.autoElevated).toBe(true);
     expect(state.effectiveMode).toBe('guarded');
     expect(state.activeActions.some((action) => action.type === 'restrict_mcp_tooling')).toBe(true);
+    const mcpRestriction = state.activeActions.find((action) => action.type === 'restrict_mcp_tooling');
+    expect(mcpRestriction?.restrictedActions).toContain('Third-party MCP tool calls.');
+    expect(mcpRestriction?.recovery).toMatch(/Review the MCP server trust/);
 
     const decision = service.shouldAllowAction({
       profile: 'personal',
@@ -142,5 +145,8 @@ describe('ContainmentService Assistant Security auto-containment', () => {
     expect(decision.state.autoElevated).toBe(true);
     expect(decision.allowed).toBe(false);
     expect(decision.matchedAction).toBe('restrict_command_execution');
+    const commandRestriction = decision.state.activeActions.find((action) => action.type === 'restrict_command_execution');
+    expect(commandRestriction?.restrictedActions).toContain('Shell and direct command execution.');
+    expect(commandRestriction?.recovery).toMatch(/stronger sandbox/);
   });
 });

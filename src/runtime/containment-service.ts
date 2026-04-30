@@ -21,6 +21,8 @@ export interface ContainmentAction {
   type: ContainmentActionType;
   title: string;
   reason: string;
+  restrictedActions: string[];
+  recovery: string;
 }
 
 export interface SecurityContainmentState {
@@ -134,86 +136,110 @@ export class ContainmentService {
     const matchedCategories = new Set(assistantMatches.map((match) => match.category));
 
     if (input.posture.shouldEscalate) {
-      actions.push({
-        type: 'advise_mode_change',
-        title: 'Escalation advised',
-        reason: `Posture recommends moving from '${input.currentMode}' to '${input.posture.recommendedMode}'.`,
-      });
+      actions.push(containmentAction(
+        'advise_mode_change',
+        'Escalation advised',
+        `Posture recommends moving from '${input.currentMode}' to '${input.posture.recommendedMode}'.`,
+        ['No direct tool restriction; this is operator guidance.'],
+        'Review the active alerts and either raise the configured security mode or resolve/suppress alerts that no longer apply.',
+      ));
     }
     if (autoElevated) {
-      actions.push({
-        type: 'auto_escalated_guarded',
-        title: 'Temporary guarded controls active',
-        reason: assistantMatches.length > 0
+      actions.push(containmentAction(
+        'auto_escalated_guarded',
+        'Temporary guarded controls active',
+        assistantMatches.length > 0
           ? 'High-confidence Assistant Security findings matched the configured containment thresholds, so Guardian temporarily elevated to guarded controls.'
           : 'Multiple elevated alerts triggered a conservative temporary guarded posture while monitor mode is still configured.',
-      });
+        ['Guarded-mode browser, scheduled mutation, and high-risk outbound actions.'],
+        'Acknowledge, resolve, or suppress the matching elevated alerts after review, or deliberately raise the configured mode to guarded.',
+      ));
     }
 
     if (effectiveMode === 'guarded') {
-      actions.push({
-        type: 'restrict_browser_mutation',
-        title: 'Browser session mutation restricted',
-        reason: 'High-risk browser actions are blocked in guarded mode to reduce session theft and prompt-injection fallout.',
-      });
-      actions.push({
-        type: 'pause_scheduled_mutations',
-        title: 'Scheduled risky mutations paused',
-        reason: 'Scheduled mutating browser, shell, and outbound actions are blocked in guarded mode.',
-      });
+      actions.push(containmentAction(
+        'restrict_browser_mutation',
+        'Browser session mutation restricted',
+        'High-risk browser actions are blocked in guarded mode to reduce session theft and prompt-injection fallout.',
+        ['Browser actions that mutate authenticated session state or execute page code.'],
+        'Use read-only browser inspection, clear the triggering alerts, or lower the effective mode only after the session risk is understood.',
+      ));
+      actions.push(containmentAction(
+        'pause_scheduled_mutations',
+        'Scheduled risky mutations paused',
+        'Scheduled mutating browser, shell, and outbound actions are blocked in guarded mode.',
+        ['Scheduled browser mutations, shell commands, outbound sends, and arbitrary HTTP mutations.'],
+        'Run a reviewed manual action instead, or clear the alert pressure that caused guarded controls before re-enabling scheduled mutation.',
+      ));
       if (matchedCategories.has('mcp')) {
-        actions.push({
-          type: 'restrict_mcp_tooling',
-          title: 'MCP tooling temporarily restricted',
-          reason: 'High-confidence Assistant Security MCP findings matched the configured containment thresholds, so MCP tool calls are temporarily blocked.',
-        });
+        actions.push(containmentAction(
+          'restrict_mcp_tooling',
+          'MCP tooling temporarily restricted',
+          'High-confidence Assistant Security MCP findings matched the configured containment thresholds, so MCP tool calls are temporarily blocked.',
+          ['Third-party MCP tool calls.'],
+          'Review the MCP server trust, environment, and network exposure, then resolve or suppress the Assistant Security findings if the setup is intentional.',
+        ));
       }
       if (matchedCategories.has('sandbox') || matchedCategories.has('trust_boundary')) {
-        actions.push({
-          type: 'restrict_command_execution',
-          title: 'Command execution temporarily restricted',
-          reason: 'High-confidence Assistant Security boundary findings matched the configured containment thresholds, so direct command execution is temporarily blocked.',
-        });
+        actions.push(containmentAction(
+          'restrict_command_execution',
+          'Command execution temporarily restricted',
+          'High-confidence Assistant Security boundary findings matched the configured containment thresholds, so direct command execution is temporarily blocked.',
+          ['Shell and direct command execution.'],
+          'Move work to a stronger sandbox or resolve the boundary finding before allowing command execution again.',
+        ));
       }
     }
 
     if (effectiveMode === 'lockdown') {
       actions.push(
-        {
-          type: 'freeze_mutating_tools',
-          title: 'Mutating tools frozen',
-          reason: 'Lockdown mode blocks non-essential mutation paths until the operator lowers the control level.',
-        },
-        {
-          type: 'restrict_network_egress',
-          title: 'Network egress restricted',
-          reason: 'Lockdown mode blocks outbound HTTP, network probes, and browser automation except for approved local security checks.',
-        },
-        {
-          type: 'restrict_command_execution',
-          title: 'Command execution restricted',
-          reason: 'Shell and similar command execution paths are disabled in lockdown mode.',
-        },
+        containmentAction(
+          'freeze_mutating_tools',
+          'Mutating tools frozen',
+          'Lockdown mode blocks non-essential mutation paths until the operator lowers the control level.',
+          ['Filesystem writes, external sends, cloud writes, policy changes, and other non-essential mutations.'],
+          'Complete incident review, preserve evidence, and lower the configured mode only when mutation is safe again.',
+        ),
+        containmentAction(
+          'restrict_network_egress',
+          'Network egress restricted',
+          'Lockdown mode blocks outbound HTTP, network probes, and browser automation except for approved local security checks.',
+          ['Outbound HTTP, browser automation, network probes, and external connector sends.'],
+          'Use local security checks first, then lower the configured mode after confirming egress is safe.',
+        ),
+        containmentAction(
+          'restrict_command_execution',
+          'Command execution restricted',
+          'Shell and similar command execution paths are disabled in lockdown mode.',
+          ['Shell commands and subprocess-backed tools.'],
+          'Use built-in read-only security tools or a separate incident-response shell outside Guardian until lockdown is cleared.',
+        ),
       );
     }
 
     if (effectiveMode === 'ir_assist') {
       actions.push(
-        {
-          type: 'ir_assist_read_only',
-          title: 'Investigation mode active',
-          reason: 'IR Assist favors read-heavy investigation and denies non-essential mutation and outbound send actions.',
-        },
-        {
-          type: 'restrict_browser_mutation',
-          title: 'Browser session mutation restricted',
-          reason: 'Browser session mutation and persistence tools stay disabled during investigation mode.',
-        },
-        {
-          type: 'restrict_outbound_mutation',
-          title: 'Outbound mutation restricted',
-          reason: 'Email, cloud writes, and arbitrary HTTP mutation stay blocked in IR Assist mode.',
-        },
+        containmentAction(
+          'ir_assist_read_only',
+          'Investigation mode active',
+          'IR Assist favors read-heavy investigation and denies non-essential mutation and outbound send actions.',
+          ['Non-essential mutation, outbound sends, and broad automation changes.'],
+          'Gather evidence with approved investigation tools, then resolve the active incident signals before returning to normal operation.',
+        ),
+        containmentAction(
+          'restrict_browser_mutation',
+          'Browser session mutation restricted',
+          'Browser session mutation and persistence tools stay disabled during investigation mode.',
+          ['Browser session mutation, persistence, and script execution tools.'],
+          'Use read-only browser inspection or collect evidence outside authenticated browser sessions until investigation mode ends.',
+        ),
+        containmentAction(
+          'restrict_outbound_mutation',
+          'Outbound mutation restricted',
+          'Email, cloud writes, and arbitrary HTTP mutation stay blocked in IR Assist mode.',
+          ['Email sends, cloud writes, connector mutations, and arbitrary HTTP mutation.'],
+          'Keep outbound changes manual and reviewed until the investigation mode recommendation clears.',
+        ),
       );
     }
 
@@ -335,6 +361,16 @@ function isAlwaysAllowedSecurityControlTool(toolName: string): boolean {
   return toolName === 'security_alert_ack'
     || toolName === 'security_alert_resolve'
     || toolName === 'security_alert_suppress';
+}
+
+function containmentAction(
+  type: ContainmentActionType,
+  title: string,
+  reason: string,
+  restrictedActions: string[],
+  recovery: string,
+): ContainmentAction {
+  return { type, title, reason, restrictedActions, recovery };
 }
 
 function shouldAutoElevateGuarded(

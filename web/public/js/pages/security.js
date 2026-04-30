@@ -1516,7 +1516,12 @@ function renderThreatIntelPlan(plan) {
 function renderReasonList(postureReasons, containmentActions) {
   const items = [
     ...(Array.isArray(postureReasons) ? postureReasons.map((reason) => ({ title: 'Reason', detail: reason })) : []),
-    ...(Array.isArray(containmentActions) ? containmentActions.map((action) => ({ title: action.title, detail: action.reason })) : []),
+    ...(Array.isArray(containmentActions) ? containmentActions.map((action) => ({
+      title: action.title,
+      detail: action.reason,
+      restrictedActions: action.restrictedActions,
+      recovery: action.recovery,
+    })) : []),
   ];
   if (items.length === 0) {
     return '<div class="empty-state">No posture or containment reasons are active right now.</div>';
@@ -1527,6 +1532,10 @@ function renderReasonList(postureReasons, containmentActions) {
         <div class="stack-card">
           <div><strong>${esc(item.title)}</strong></div>
           <div>${esc(item.detail)}</div>
+          ${Array.isArray(item.restrictedActions) && item.restrictedActions.length > 0 ? `
+            <div class="table-muted"><strong>Restricted:</strong> ${esc(item.restrictedActions.join('; '))}</div>
+          ` : ''}
+          ${item.recovery ? `<div class="table-muted"><strong>Recovery:</strong> ${esc(item.recovery)}</div>` : ''}
         </div>
       `).join('')}
     </div>
