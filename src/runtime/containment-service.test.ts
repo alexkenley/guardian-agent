@@ -35,6 +35,8 @@ function createAssistantAlert(overrides: Partial<UnifiedSecurityAlert> = {}): Un
       confidence: 0.97,
     },
     subject: 'Runtime',
+    confidence: 0.97,
+    recommendedAction: 'Review the Assistant Security finding target, evidence, confidence, and containment state before triage.',
     acknowledged: false,
     status: 'active',
     lastStateChangedAt: 1_000,

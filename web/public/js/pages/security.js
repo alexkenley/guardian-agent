@@ -1116,6 +1116,8 @@ function buildAlertContextFacts(alert) {
     { label: 'Signal Type', value: formatIdentifierLabel(alert.type) },
     { label: 'Subject', value: subject },
     { label: 'Severity', value: formatIdentifierLabel(alert.severity) },
+    { label: 'Confidence', value: formatSecurityConfidence(alert.confidence) },
+    { label: 'Recommended Action', value: typeof alert.recommendedAction === 'string' ? alert.recommendedAction : '' },
     { label: 'State', value: formatIdentifierLabel(alert.status || 'active') },
     { label: 'Occurrences', value: String(alert.occurrenceCount ?? 1) },
     { label: 'First Seen', value: formatTimestamp(alert.firstSeenAt) },
@@ -1565,6 +1567,12 @@ function formatSecuritySource(source) {
   if (!source) return 'Unknown';
   if (source === 'assistant') return 'Assistant';
   return String(source).replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function formatSecurityConfidence(confidence) {
+  const numeric = Number(confidence);
+  if (!Number.isFinite(numeric)) return '';
+  return `${Math.round(Math.max(0, Math.min(1, numeric)) * 100)}%`;
 }
 
 function formatAuditEventType(type) {

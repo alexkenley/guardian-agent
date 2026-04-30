@@ -30,6 +30,8 @@ export interface UnifiedSecurityAlert extends SecurityAlertLifecycle {
   dedupeKey: string;
   evidence: Record<string, unknown>;
   subject: string;
+  confidence: number;
+  recommendedAction: string;
 }
 
 export interface UnifiedSecurityAlertAcknowledgeResult {
@@ -310,6 +312,12 @@ function toUnifiedHostAlert(alert: HostMonitorAlert): UnifiedSecurityAlert {
     dedupeKey: alert.dedupeKey,
     evidence: alert.evidence,
     subject: inferSubjectFromEvidence(alert.evidence),
+    confidence: inferSecurityAlertConfidence(alert.severity, alert.evidence),
+    recommendedAction: recommendSecurityAlertAction({
+      source: 'host',
+      type: alert.type,
+      severity: alert.severity,
+    }),
     acknowledged: alert.acknowledged,
     status: alert.status,
     lastStateChangedAt: alert.lastStateChangedAt,
@@ -334,6 +342,12 @@ function toUnifiedNetworkAlert(alert: NetworkAlert): UnifiedSecurityAlert {
     dedupeKey: alert.dedupeKey,
     evidence: alert.evidence,
     subject: alert.ip || alert.mac || inferSubjectFromEvidence(alert.evidence),
+    confidence: inferSecurityAlertConfidence(alert.severity, alert.evidence),
+    recommendedAction: recommendSecurityAlertAction({
+      source: 'network',
+      type: alert.type,
+      severity: alert.severity,
+    }),
     acknowledged: alert.acknowledged,
     status: alert.status,
     lastStateChangedAt: alert.lastStateChangedAt,
@@ -358,6 +372,12 @@ function toUnifiedGatewayAlert(alert: GatewayMonitorAlert): UnifiedSecurityAlert
     dedupeKey: alert.dedupeKey,
     evidence: alert.evidence,
     subject: alert.targetName || alert.targetId || inferSubjectFromEvidence(alert.evidence),
+    confidence: inferSecurityAlertConfidence(alert.severity, alert.evidence),
+    recommendedAction: recommendSecurityAlertAction({
+      source: 'gateway',
+      type: alert.type,
+      severity: alert.severity,
+    }),
     acknowledged: alert.acknowledged,
     status: alert.status,
     lastStateChangedAt: alert.lastStateChangedAt,
@@ -382,6 +402,12 @@ function toUnifiedNativeAlert(alert: WindowsDefenderAlert): UnifiedSecurityAlert
     dedupeKey: alert.dedupeKey,
     evidence: alert.evidence,
     subject: inferNativeSubject(alert),
+    confidence: inferSecurityAlertConfidence(alert.severity, alert.evidence),
+    recommendedAction: recommendSecurityAlertAction({
+      source: 'native',
+      type: alert.type,
+      severity: alert.severity,
+    }),
     acknowledged: alert.acknowledged,
     status: alert.status,
     lastStateChangedAt: alert.lastStateChangedAt,
@@ -415,6 +441,12 @@ function toUnifiedAssistantAlert(finding: AiSecurityFinding): UnifiedSecurityAle
       evidence: finding.evidence,
     },
     subject: finding.targetLabel,
+    confidence: normalizeSecurityAlertConfidence(finding.confidence, finding.severity),
+    recommendedAction: recommendSecurityAlertAction({
+      source: 'assistant',
+      type: `assistant_security_${finding.category}`,
+      severity: finding.severity,
+    }),
     acknowledged: lifecycle.acknowledged,
     status: lifecycle.status,
     lastStateChangedAt: finding.lastSeenAt,
@@ -439,6 +471,12 @@ function toUnifiedInstallAlert(alert: PackageInstallTrustAlert): UnifiedSecurity
     dedupeKey: alert.dedupeKey,
     evidence: alert.evidence,
     subject: alert.subject,
+    confidence: inferSecurityAlertConfidence(alert.severity, alert.evidence),
+    recommendedAction: recommendSecurityAlertAction({
+      source: 'install',
+      type: alert.type,
+      severity: alert.severity,
+    }),
     acknowledged: alert.acknowledged,
     status: alert.status,
     lastStateChangedAt: alert.lastStateChangedAt,
@@ -499,6 +537,84 @@ function inferNativeSubject(alert: WindowsDefenderAlert): string {
   const firstResource = resources.find((item) => typeof item === 'string' && item.trim());
   if (typeof firstResource === 'string') return firstResource.trim();
   return 'Windows Defender';
+}
+
+function inferSecurityAlertConfidence(severity: SecurityAlertSeverity, evidence: Record<string, unknown>): number {
+  const explicitConfidence = evidence['confidence'];
+  return normalizeSecurityAlertConfidence(
+    typeof explicitConfidence === 'number' ? explicitConfidence : undefined,
+    severity,
+  );
+}
+
+function normalizeSecurityAlertConfidence(confidence: number | undefined, severity: SecurityAlertSeverity): number {
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    return Math.max(0, Math.min(1, Number(confidence.toFixed(2))));
+  }
+  switch (severity) {
+    case 'critical': return 0.95;
+    case 'high': return 0.85;
+    case 'medium': return 0.65;
+    default: return 0.45;
+  }
+}
+
+function recommendSecurityAlertAction(alert: {
+  source: SecurityAlertSource;
+  type: string;
+  severity: SecurityAlertSeverity;
+}): string {
+  switch (alert.type) {
+    case 'defender_threat_detected':
+      return 'Confirm Defender remediation status, inspect affected resources, and keep the alert active until containment or cleanup is verified.';
+    case 'defender_realtime_protection_disabled':
+    case 'defender_antivirus_disabled':
+    case 'defender_firewall_profile_disabled':
+    case 'firewall_disabled':
+    case 'gateway_firewall_disabled':
+      return 'Restore the disabled protection boundary or document the approved maintenance reason before resolving the alert.';
+    case 'defender_signatures_stale':
+    case 'defender_status_unavailable':
+      return 'Refresh native security-provider status and restore detection visibility before lowering attention.';
+    case 'suspicious_process':
+    case 'persistence_change':
+      return 'Inspect process, signer, path, parent activity, and related persistence evidence before acknowledging.';
+    case 'sensitive_path_change':
+      return 'Confirm the changed path is expected and correlate nearby audit or policy events before resolving.';
+    case 'new_external_destination':
+    case 'beaconing':
+    case 'data_exfiltration':
+      return 'Identify the source process and destination reputation, then correlate with host or gateway evidence.';
+    case 'new_listening_port':
+    case 'port_change':
+    case 'mass_port_open':
+    case 'unusual_service':
+      return 'Identify the owner of the exposed service and verify the exposure matches an approved workflow.';
+    case 'firewall_change':
+    case 'gateway_firewall_change':
+    case 'gateway_port_forward_change':
+    case 'gateway_admin_change':
+      return 'Review the exact policy or admin delta and confirm who authorized the perimeter change.';
+    case 'arp_conflict':
+      return 'Corroborate the address conflict with gateway, DHCP, and host evidence before escalating incident mode.';
+    case 'new_device':
+    case 'device_gone':
+      return 'Validate the asset identity and expected presence before acknowledging the inventory change.';
+    default:
+      if (alert.source === 'assistant' || alert.type.startsWith('assistant_security_')) {
+        return 'Review the Assistant Security finding target, evidence, confidence, and containment state before triage.';
+      }
+      if (alert.source === 'install' || alert.type.startsWith('package_install_')) {
+        return 'Review package trust evidence and approve or resolve only after the install risk is explained.';
+      }
+      if (alert.severity === 'critical' || alert.severity === 'high') {
+        return 'Review evidence, correlate related alerts, and resolve only after the condition is explained or remediated.';
+      }
+      if (alert.severity === 'medium') {
+        return 'Confirm whether the condition persists and acknowledge or resolve after review.';
+      }
+      return 'Monitor for repeats and acknowledge if the signal is expected.';
+  }
 }
 
 function inferSubjectFromEvidence(evidence: Record<string, unknown>): string {

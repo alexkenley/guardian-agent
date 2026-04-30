@@ -112,6 +112,8 @@ describe('security alert integration', () => {
     expect(alerts.every((alert) => alert.source === 'assistant')).toBe(true);
     expect(alerts.some((alert) => alert.type.startsWith('assistant_security_'))).toBe(true);
     expect(alerts.some((alert) => alert.evidence?.category === 'mcp')).toBe(true);
+    expect(alerts.every((alert) => typeof alert.confidence === 'number')).toBe(true);
+    expect(alerts.every((alert) => alert.recommendedAction.includes('Assistant Security'))).toBe(true);
   });
 
   it('maps triaged Assistant Security findings into acknowledged alert state', async () => {
@@ -247,6 +249,8 @@ describe('security alert integration', () => {
     expect(availableSecurityAlertSources({ packageInstallTrust: installService as any })).toEqual(['install']);
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.source).toBe('install');
+    expect(alerts[0]?.confidence).toBe(0.85);
+    expect(alerts[0]?.recommendedAction).toContain('package trust evidence');
 
     const acknowledged = acknowledgeUnifiedSecurityAlert({
       alertId: 'install-1',
