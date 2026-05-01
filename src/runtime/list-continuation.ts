@@ -10,6 +10,45 @@ export interface PagedListWindow {
 export type PagedListContinuationRoute = 'automation_control' | 'browser_task' | 'email_task';
 
 const DEFAULT_PAGE_SIZE = 20;
+export const DEFAULT_VERBOSE_LIST_CHAR_BUDGET = 6000;
+
+export function resolveListLimitWithinCharacterBudget<T>(
+  items: readonly T[],
+  input: {
+    header?: string;
+    renderItem: (item: T, index: number) => string;
+    footerForRemaining?: (remaining: number) => string;
+    maxChars?: number;
+    minItems?: number;
+    maxItems?: number;
+  },
+): number {
+  const total = items.length;
+  if (total <= 0) return 0;
+  const maxChars = Math.max(1, Math.floor(input.maxChars ?? DEFAULT_VERBOSE_LIST_CHAR_BUDGET));
+  const maxItems = Math.max(1, Math.min(total, Math.floor(input.maxItems ?? total)));
+  const minItems = Math.max(1, Math.min(maxItems, Math.floor(input.minItems ?? 1)));
+  const selectedLines = input.header?.trim() ? [input.header.trim()] : [];
+  let accepted = 0;
+
+  for (let index = 0; index < maxItems; index += 1) {
+    const itemLine = input.renderItem(items[index] as T, index);
+    const remaining = total - (index + 1);
+    const footerLine = remaining > 0 ? input.footerForRemaining?.(remaining) : undefined;
+    const projected = [
+      ...selectedLines,
+      itemLine,
+      ...(footerLine ? [footerLine] : []),
+    ].join('\n');
+    if (projected.length > maxChars && accepted >= minItems) {
+      break;
+    }
+    selectedLines.push(itemLine);
+    accepted += 1;
+  }
+
+  return Math.max(minItems, accepted);
+}
 
 export function buildPagedListContinuationState(
   kind: string,

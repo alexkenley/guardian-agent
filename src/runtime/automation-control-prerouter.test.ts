@@ -153,6 +153,57 @@ describe('tryAutomationControlPreRoute', () => {
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
+  it('lists all short automation entries that fit the verbose list budget', async () => {
+    const automations = Array.from({ length: 25 }, (_, index) => {
+      const ordinal = index + 1;
+      return {
+        id: `automation-${ordinal}`,
+        name: `Automation ${ordinal}`,
+        kind: 'assistant_task',
+        enabled: ordinal % 2 === 0,
+        task: {
+          id: `automation-${ordinal}`,
+          name: `Automation ${ordinal}`,
+          type: 'agent',
+          target: 'default',
+          enabled: ordinal % 2 === 0,
+          createdAt: ordinal,
+        },
+      };
+    });
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: { automations },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'List my automations.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'read',
+        summary: 'List the saved automations.',
+        entities: {},
+      },
+    });
+
+    expect(result?.content).toContain('Automation catalog (25): showing 1-25');
+    expect(result?.content).toMatch(/^- Automation 25 - disabled$/m);
+    expect(result?.content).toMatch(/^- Automation 1 - disabled$/m);
+    expect(result?.content).not.toContain('...and');
+  });
+
   it('returns only the automation count when the gateway asks for count view', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
       if (toolName === 'automation_list') {

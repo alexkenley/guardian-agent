@@ -22,6 +22,8 @@ import { extractAutomationListEntries } from './automation-tool-results.js';
 import type { ContinuityThreadRecord } from './continuity-threads.js';
 import {
   buildPagedListContinuationState,
+  DEFAULT_VERBOSE_LIST_CHAR_BUDGET,
+  resolveListLimitWithinCharacterBudget,
   resolvePagedListWindow,
   type PagedListWindow,
 } from './list-continuation.js';
@@ -93,7 +95,6 @@ interface AutomationControlUpdateRequest {
 }
 
 const AUTOMATION_CATALOG_CONTINUATION_KIND = 'automation_catalog_list';
-const DEFAULT_AUTOMATION_CATALOG_PAGE_SIZE = 20;
 
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
@@ -349,14 +350,10 @@ function renderAutomationInspectCopy(
     return `There are ${catalog.length} automations currently configured.`;
   }
 
-  const sortedCatalog = [...catalog].sort((left, right) => {
-    const createdDelta = getAutomationCatalogEntryCreatedAt(right) - getAutomationCatalogEntryCreatedAt(left);
-    if (createdDelta !== 0) return createdDelta;
-    return left.name.localeCompare(right.name);
-  });
+  const sortedCatalog = sortAutomationCatalogForList(catalog);
   const window = listWindow ?? {
     offset: 0,
-    limit: Math.min(DEFAULT_AUTOMATION_CATALOG_PAGE_SIZE, sortedCatalog.length),
+    limit: resolveAutomationCatalogDefaultPageSize(sortedCatalog),
     total: sortedCatalog.length,
   };
   const pageEntries = sortedCatalog.slice(window.offset, window.offset + window.limit);
@@ -372,7 +369,7 @@ function renderAutomationInspectCopy(
     return listLines.join('\n');
   }
   for (const entry of pageEntries) {
-    listLines.push(`- ${entry.name} - ${entry.enabled ? 'enabled' : 'disabled'}`);
+    listLines.push(formatAutomationCatalogListRow(entry));
   }
   if (window.offset + pageEntries.length < catalog.length) {
     listLines.push(`- ...and ${catalog.length - (window.offset + pageEntries.length)} more`);
@@ -386,14 +383,41 @@ function resolveAutomationCatalogListWindow(
   intent: AutomationControlIntent,
   content: string,
 ): PagedListWindow {
+  const sortedCatalog = sortAutomationCatalogForList(catalog);
   return resolvePagedListWindow({
     continuityThread,
     continuationKind: AUTOMATION_CATALOG_CONTINUATION_KIND,
     content,
-    total: catalog.length,
+    total: sortedCatalog.length,
     turnRelation: intent.turnRelation,
-    defaultPageSize: DEFAULT_AUTOMATION_CATALOG_PAGE_SIZE,
+    defaultPageSize: resolveAutomationCatalogDefaultPageSize(sortedCatalog),
   });
+}
+
+function sortAutomationCatalogForList(
+  catalog: SavedAutomationCatalogEntry[],
+): SavedAutomationCatalogEntry[] {
+  return [...catalog].sort((left, right) => {
+    const createdDelta = getAutomationCatalogEntryCreatedAt(right) - getAutomationCatalogEntryCreatedAt(left);
+    if (createdDelta !== 0) return createdDelta;
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function resolveAutomationCatalogDefaultPageSize(
+  sortedCatalog: readonly SavedAutomationCatalogEntry[],
+): number {
+  return resolveListLimitWithinCharacterBudget(sortedCatalog, {
+    header: `Automation catalog (${sortedCatalog.length})`,
+    renderItem: formatAutomationCatalogListRow,
+    footerForRemaining: (remaining) => `- ...and ${remaining} more`,
+    maxChars: DEFAULT_VERBOSE_LIST_CHAR_BUDGET,
+    maxItems: sortedCatalog.length,
+  });
+}
+
+function formatAutomationCatalogListRow(entry: SavedAutomationCatalogEntry): string {
+  return `- ${entry.name} - ${entry.enabled ? 'enabled' : 'disabled'}`;
 }
 
 function buildAutomationCatalogContinuationState(

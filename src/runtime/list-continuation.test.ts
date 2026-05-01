@@ -1,11 +1,40 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPagedListContinuationState,
+  resolveListLimitWithinCharacterBudget,
   resolvePagedListContinuationRoute,
   resolvePagedListWindow,
 } from './list-continuation.js';
 
 describe('list-continuation', () => {
+  it('keeps all list items that fit within the character budget', () => {
+    const limit = resolveListLimitWithinCharacterBudget(
+      ['alpha', 'beta', 'gamma', 'delta'],
+      {
+        header: 'Items',
+        renderItem: (item) => `- ${item}`,
+        footerForRemaining: (remaining) => `...and ${remaining} more`,
+        maxChars: 120,
+      },
+    );
+
+    expect(limit).toBe(4);
+  });
+
+  it('stops list output before exceeding the character budget', () => {
+    const limit = resolveListLimitWithinCharacterBudget(
+      ['alpha', 'beta', 'gamma', 'delta'],
+      {
+        header: 'Items',
+        renderItem: (item) => `- ${item}`,
+        footerForRemaining: (remaining) => `...and ${remaining} more`,
+        maxChars: 20,
+      },
+    );
+
+    expect(limit).toBe(1);
+  });
+
   it('advances to the requested additional page size for follow-up list requests', () => {
     const window = resolvePagedListWindow({
       continuityThread: {

@@ -5,8 +5,10 @@ import type { ContinuityThreadRecord } from './continuity-threads.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
 import {
   buildPagedListContinuationState,
+  DEFAULT_VERBOSE_LIST_CHAR_BUDGET,
   hasPagedListFollowUpRequest,
   readPagedListContinuationState,
+  resolveListLimitWithinCharacterBudget,
   resolvePagedListWindow,
 } from './list-continuation.js';
 
@@ -617,30 +619,32 @@ function formatLinksContent(
   intentDecision?: IntentGatewayDecision | null,
 ): BrowserPreRouteResult | null {
   const rawLinks = extractBrowserLinks(result.output);
-  const total = rawLinks.length;
+  const linkRecords = rawLinks.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+  const total = linkRecords.length;
   const priorWindow = readPagedListContinuationState(continuityThread, BROWSER_LINKS_CONTINUATION_KIND);
+  const defaultPageSize = resolveListLimitWithinCharacterBudget(linkRecords, {
+    header: toString(result.message),
+    renderItem: formatBrowserLinkLine,
+    footerForRemaining: (remaining) => `...and ${remaining} more`,
+    maxChars: DEFAULT_VERBOSE_LIST_CHAR_BUDGET,
+    maxItems: linkRecords.length,
+  });
   const window = resolvePagedListWindow({
     continuityThread,
     continuationKind: BROWSER_LINKS_CONTINUATION_KIND,
     content,
     total: priorWindow?.total ?? total,
     turnRelation: intentDecision?.turnRelation,
-    defaultPageSize: 20,
+    defaultPageSize,
   });
   const boundedWindow = {
     ...window,
     total,
     limit: Math.min(window.limit, Math.max(0, total - window.offset)),
   };
-  const links = rawLinks
-    .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+  const links = linkRecords
     .slice(boundedWindow.offset, boundedWindow.offset + boundedWindow.limit)
-    .map((entry) => {
-      const text = toString(entry.text).trim();
-      const href = toString(entry.href).trim();
-      if (!href) return '';
-      return text && text !== href ? `- ${text} → ${href}` : `- ${href}`;
-    })
+    .map(formatBrowserLinkLine)
     .filter(Boolean);
   const remaining = Math.max(0, total - (boundedWindow.offset + links.length));
   const sections = [toString(result.message)];
@@ -660,6 +664,13 @@ function formatLinksContent(
     content: sections.filter(Boolean).join('\n\n'),
     ...(continuationState ? { metadata: { continuationState } } : {}),
   };
+}
+
+function formatBrowserLinkLine(entry: Record<string, unknown>): string {
+  const text = toString(entry.text).trim();
+  const href = toString(entry.href).trim();
+  if (!href) return '';
+  return text && text !== href ? `- ${text} → ${href}` : `- ${href}`;
 }
 
 function resolveBrowserListContinuationIntent(

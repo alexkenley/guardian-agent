@@ -288,6 +288,46 @@ describe('tryBrowserPreRoute', () => {
     });
   });
 
+  it('renders all short browser links that fit the verbose list budget', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName !== 'browser_links') {
+        throw new Error(`Unexpected tool ${toolName}`);
+      }
+      expect(args).toEqual({ url: 'https://example.com' });
+      return {
+        success: true,
+        status: 'succeeded',
+        message: 'Extracted 25 links from https://example.com.',
+        output: {
+          url: 'https://example.com',
+          links: Array.from({ length: 25 }, (_, index) => ({
+            text: `Link ${index + 1}`,
+            href: `https://example.com/${index + 1}`,
+          })),
+        },
+      };
+    });
+
+    const result = await tryBrowserPreRoute({
+      agentId: 'test-agent',
+      message: {
+        id: 'msg-links-full',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Show me the links on https://example.com',
+        timestamp: Date.now(),
+      },
+      executeTool,
+    }, {
+      intentDecision: browserIntentDecision,
+    });
+
+    expect(result?.content).toContain('Link 1 → https://example.com/1');
+    expect(result?.content).toContain('Link 25 → https://example.com/25');
+    expect(result?.content).not.toContain('...and');
+    expect(result?.metadata).toBeUndefined();
+  });
+
   it('continues browser link lists from the prior window on follow-up requests', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
       if (toolName !== 'browser_links') {
