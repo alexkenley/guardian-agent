@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { AuditLog } from '../guardian/audit-log.js';
 import { GuardianAgentService, SentinelAuditService } from './sentinel.js';
 
@@ -137,5 +137,42 @@ describe('SentinelAuditService', () => {
     const findings = auditLog.query({ type: 'anomaly_detected' })
       .filter((event) => event.details['source'] === 'llm_analysis');
     expect(findings).toHaveLength(1);
+  });
+
+  it('returns heuristic anomalies when LLM audit analysis times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const auditLog = new AuditLog(1000);
+      for (let i = 0; i < 40; i += 1) {
+        auditLog.record({
+          type: 'action_denied',
+          severity: 'warn',
+          agentId: 'bad-agent',
+          details: {},
+        });
+      }
+
+      let observedSignal: AbortSignal | undefined;
+      const service = new SentinelAuditService({ timeoutMs: 50 });
+      service.setProvider({
+        name: 'stuck-provider',
+        chat: async (_messages, options) => {
+          observedSignal = options?.signal;
+          return new Promise<never>(() => undefined);
+        },
+        stream: async function* () {},
+        listModels: async () => [],
+      });
+
+      const auditPromise = service.runAudit(auditLog, 60_000);
+      await vi.advanceTimersByTimeAsync(50);
+      const result = await auditPromise;
+
+      expect(result.anomalies).toHaveLength(1);
+      expect(result.llmFindings).toEqual([]);
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

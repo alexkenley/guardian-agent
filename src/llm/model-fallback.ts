@@ -16,6 +16,7 @@ import { classifyError, type ErrorClass } from './circuit-breaker.js';
 import { createLogger } from '../util/logging.js';
 
 const log = createLogger('model-fallback');
+export const DEFAULT_CHAT_PROVIDER_TIMEOUT_MS = 30_000;
 
 /** Cooldown entry for a provider that recently failed. */
 interface CooldownEntry {
@@ -32,6 +33,50 @@ export interface FallbackResult {
   usedFallback: boolean;
   /** Providers that were skipped or failed. */
   skipped: string[];
+}
+
+export async function chatProviderWithTimeout(input: {
+  provider: LLMProvider;
+  providerName: string;
+  messages: ChatMessage[];
+  options?: ChatOptions;
+  timeoutMs?: number;
+}): Promise<ChatResponse> {
+  const timeoutMs = input.timeoutMs ?? DEFAULT_CHAT_PROVIDER_TIMEOUT_MS;
+  if (input.options?.signal?.aborted) {
+    throw input.options.signal.reason instanceof Error
+      ? input.options.signal.reason
+      : new Error('LLM request aborted');
+  }
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  const abortFromParent = (): void => {
+    controller.abort(input.options?.signal?.reason ?? new Error('LLM request aborted'));
+  };
+  if (input.options?.signal) {
+    input.options.signal.addEventListener('abort', abortFromParent, { once: true });
+    removeAbortListener = () => input.options?.signal?.removeEventListener('abort', abortFromParent);
+  }
+  try {
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        const error = new Error(`LLM provider '${input.providerName}' timed out after ${timeoutMs}ms`);
+        controller.abort(error);
+        reject(error);
+      }, timeoutMs);
+    });
+    return await Promise.race([
+      input.provider.chat(input.messages, {
+        ...input.options,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    removeAbortListener?.();
+  }
 }
 
 /** Cooldown durations per error class (ms). */
@@ -147,7 +192,12 @@ export class ModelFallbackChain {
       }
 
       try {
-        const response = await provider.chat(messages, options);
+        const response = await chatProviderWithTimeout({
+          provider,
+          providerName: name,
+          messages,
+          options,
+        });
         // Clear cooldown on success
         this.cooldowns.delete(name);
         return {

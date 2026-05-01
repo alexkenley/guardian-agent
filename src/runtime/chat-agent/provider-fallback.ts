@@ -1,6 +1,6 @@
 import type { AgentContext } from '../../agent/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../../llm/types.js';
-import type { ModelFallbackChain } from '../../llm/model-fallback.js';
+import { chatProviderWithTimeout, type ModelFallbackChain } from '../../llm/model-fallback.js';
 import {
   buildLocalModelTooComplicatedMessage,
   getProviderLocalityFromName,
@@ -85,10 +85,20 @@ export async function chatWithFallback(input: ChatWithFallbackInput): Promise<Ch
     return (await input.fallbackChain!.chatWithProviderOrder(preferredOrder!, input.messages, input.options)).response;
   }
   if (!input.fallbackChain) {
-    return input.ctx.llm!.chat(input.messages, input.options);
+    return chatProviderWithTimeout({
+      provider: input.ctx.llm!,
+      providerName: input.ctx.llm?.name ?? 'unknown',
+      messages: input.messages,
+      options: input.options,
+    });
   }
   try {
-    return await input.ctx.llm!.chat(input.messages, input.options);
+    return await chatProviderWithTimeout({
+      provider: input.ctx.llm!,
+      providerName: input.ctx.llm?.name ?? 'unknown',
+      messages: input.messages,
+      options: input.options,
+    });
   } catch (primaryError) {
     input.log.warn(
       { agent: input.agentId, error: primaryError instanceof Error ? primaryError.message : String(primaryError) },
@@ -155,7 +165,12 @@ export async function chatWithRoutingMetadata(
   if (!input.fallbackChain) {
     try {
       const startedAt = Date.now();
-      const response = await input.ctx.llm!.chat(input.messages, input.options);
+      const response = await chatProviderWithTimeout({
+        provider: input.ctx.llm!,
+        providerName: primaryProviderName,
+        messages: input.messages,
+        options: input.options,
+      });
       return {
         response,
         providerName: primaryProviderName,
@@ -176,7 +191,12 @@ export async function chatWithRoutingMetadata(
 
   try {
     const startedAt = Date.now();
-    const response = await input.ctx.llm!.chat(input.messages, input.options);
+    const response = await chatProviderWithTimeout({
+      provider: input.ctx.llm!,
+      providerName: primaryProviderName,
+      messages: input.messages,
+      options: input.options,
+    });
     return {
       response,
       providerName: primaryProviderName,

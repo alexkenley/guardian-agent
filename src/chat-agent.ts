@@ -101,7 +101,10 @@ import {
 import {
   hasRequiredToolBackedAnswerPlan,
 } from './runtime/intent/planned-steps.js';
-import { looksLikeSelfContainedDirectAnswerTurn } from './runtime/intent/request-patterns.js';
+import {
+  looksLikeSelfContainedDirectAnswerTurn,
+  looksLikeStandaloneGreetingTurn,
+} from './runtime/intent/request-patterns.js';
 import {
   buildFrontierIntentPlanRepairProviderOrder,
   tryRepairGenericIntentGatewayPlan,
@@ -807,7 +810,13 @@ interface DegradedDirectIntentResponseInput {
     activeSkillCount: number;
   }): boolean {
     if (input.activeSkillCount > 0) return false;
-    if (!looksLikeSelfContainedDirectAnswerTurn(input.messageContent)) return false;
+    const requestContent = stripLeadingContextPrefix(input.messageContent);
+    if (
+      !looksLikeSelfContainedDirectAnswerTurn(requestContent)
+      && !looksLikeStandaloneGreetingTurn(requestContent)
+    ) {
+      return false;
+    }
     return this.shouldHandleDirectAssistantInline(input);
   }
 

@@ -4653,6 +4653,7 @@ async function main(): Promise<void> {
   const sentinelAuditConfig = config.guardian?.sentinel;
   const sentinelAuditService = new SentinelAuditService({
     enabled: sentinelAuditConfig?.enabled !== false,
+    timeoutMs: sentinelAuditConfig?.timeoutMs,
     anomalyThresholds: sentinelAuditConfig?.anomalyThresholds,
   });
 
@@ -6154,7 +6155,7 @@ async function main(): Promise<void> {
       constructor() {
         super('sentinel', 'Sentinel Audit Agent', {
           handleMessages: false,
-          handleEvents: true,
+          handleEvents: false,
           handleSchedule: true,
         });
       }
@@ -6163,15 +6164,15 @@ async function main(): Promise<void> {
         if (!auditLog) return;
         await sentinelAuditService.runAudit(auditLog);
       }
-      async onEvent(event: import('./queue/event-bus.js').AgentEvent): Promise<void> {
-        if (event.type === 'guardian.critical') {
-          // Future: automated response to critical events
-        }
-      }
     })();
     runtime.registerAgent(createAgentDefinition({
       agent: sentinelAuditAgent,
       schedule: auditSchedule,
+      resourceLimits: {
+        maxInvocationBudgetMs: sentinelAuditConfig?.timeoutMs ?? 30_000,
+        maxQueueDepth: 1,
+        maxConcurrentTools: 1,
+      },
       orchestration: {
         role: 'verifier',
         label: 'Sentinel Verifier',

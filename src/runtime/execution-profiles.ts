@@ -8,6 +8,7 @@ import type {
 import {
   getManagedCloudRoleBindingsForProviderType,
   isManagedCloudProfileForProviderType,
+  listConfiguredManagedCloudProviderTypes,
   listConfiguredManagedCloudProfilesForType,
   resolvePreferredManagedCloudSelection,
   resolvePreferredManagedCloudProviderType,
@@ -313,6 +314,8 @@ function getManagedCloudRoutingRole(input: {
   return 'general';
 }
 
+const MANAGED_CLOUD_FAMILY_FALLBACK_ORDER = ['ollama_cloud', 'openrouter', 'nvidia'];
+
 function inferManagedCloudRoleFromProviderName(providerName: string): ManagedCloudRoutingRole {
   const normalized = providerName.trim().toLowerCase();
   if (!normalized) return 'general';
@@ -393,6 +396,35 @@ function getManagedCloudProviderSelection(input: {
   return { providerName: preferred };
 }
 
+function listManagedCloudFamilyFallbackProviders(
+  config: GuardianAgentConfig,
+  primaryProvider: string,
+): string[] {
+  const ordered: string[] = [];
+  const addProvider = (providerName: string | undefined): void => {
+    const trimmed = providerName?.trim();
+    if (!trimmed || trimmed === primaryProvider || ordered.includes(trimmed)) return;
+    if (getProviderTier(config.llm[trimmed]?.provider) !== 'managed_cloud') return;
+    ordered.push(trimmed);
+  };
+  const configuredTypes = listConfiguredManagedCloudProviderTypes(config);
+  const familyOrder = [
+    ...MANAGED_CLOUD_FAMILY_FALLBACK_ORDER,
+    ...configuredTypes.filter((providerType) => !MANAGED_CLOUD_FAMILY_FALLBACK_ORDER.includes(providerType)),
+  ];
+
+  for (const providerType of familyOrder) {
+    const bindings = getManagedCloudRoleBindingsForProviderType(config, providerType);
+    for (const role of ['general', 'direct', 'toolLoop', 'coding'] as const) {
+      addProvider(bindings[role]);
+    }
+    for (const providerName of listConfiguredManagedCloudProfilesForType(config, providerType)) {
+      addProvider(providerName);
+    }
+  }
+  return ordered;
+}
+
 function buildFallbackTierOrder(
   primaryTier: ProviderTier,
   policy: AssistantModelSelectionConfig,
@@ -415,7 +447,17 @@ function buildFallbackProviderOrder(
   policy: AssistantModelSelectionConfig,
 ): string[] {
   const ordered: string[] = [primaryProvider];
+  if (primaryTier === 'managed_cloud') {
+    for (const providerName of listManagedCloudFamilyFallbackProviders(config, primaryProvider)) {
+      if (!ordered.includes(providerName)) {
+        ordered.push(providerName);
+      }
+    }
+  }
   for (const tier of buildFallbackTierOrder(primaryTier, policy)) {
+    if (primaryTier === 'managed_cloud' && tier === 'managed_cloud') {
+      continue;
+    }
     for (const providerName of listProvidersForTier(config, tier)) {
       if (!ordered.includes(providerName)) {
         ordered.push(providerName);

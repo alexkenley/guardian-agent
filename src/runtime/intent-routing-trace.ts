@@ -71,6 +71,8 @@ const TRACE_SAFE_CORRELATION_KEYS = new Set([
 export type IntentRoutingTraceStage =
   | 'incoming_dispatch'
   | 'gateway_classified'
+  | 'gateway_classification_failed'
+  | 'gateway_classification_skipped'
   | 'clarification_requested'
   | 'tier_routing_decided'
   | 'profile_selection_decided'

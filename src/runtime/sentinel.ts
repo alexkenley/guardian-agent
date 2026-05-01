@@ -43,6 +43,8 @@ export interface GuardianAgentServiceConfig {
 export interface SentinelAuditConfig {
   /** Enable sentinel audit (default: true). */
   enabled: boolean;
+  /** Timeout for optional LLM audit analysis in ms (default: 30000). */
+  timeoutMs: number;
   /** Anomaly detection thresholds. */
   anomalyThresholds: AnomalyThresholds;
 }
@@ -104,6 +106,7 @@ const DEFAULT_GUARDIAN_CONFIG: GuardianAgentServiceConfig = {
 
 const DEFAULT_SENTINEL_CONFIG: SentinelAuditConfig = {
   enabled: true,
+  timeoutMs: 30_000,
   anomalyThresholds: {
     volumeSpikeMultiplier: 3,
     capabilityProbeThreshold: 5,
@@ -310,6 +313,9 @@ export class SentinelAuditService {
 
   constructor(config?: Partial<SentinelAuditConfig>) {
     this.config = { ...DEFAULT_SENTINEL_CONFIG, ...config };
+    if (typeof config?.timeoutMs !== 'number' || !Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0) {
+      this.config.timeoutMs = DEFAULT_SENTINEL_CONFIG.timeoutMs;
+    }
     if (config?.anomalyThresholds) {
       this.config.anomalyThresholds = {
         ...DEFAULT_SENTINEL_CONFIG.anomalyThresholds,
@@ -390,15 +396,39 @@ export class SentinelAuditService {
         { role: 'system', content: SENTINEL_AUDIT_SYSTEM_PROMPT },
         { role: 'user', content: JSON.stringify({ summary, anomalies }) },
       ];
-      const response = await provider.chat(messages, {
-        maxTokens: 220,
-        temperature: 0,
-        responseFormat: { type: 'json_object' },
-        tools: [],
-      });
+      const controller = new AbortController();
+      const response = await Promise.race([
+        provider.chat(messages, {
+          maxTokens: 220,
+          temperature: 0,
+          responseFormat: { type: 'json_object' },
+          tools: [],
+          signal: controller.signal,
+        }),
+        timeoutPromise(this.config.timeoutMs).then(() => {
+          controller.abort(new Error(`Sentinel audit analysis timed out after ${this.config.timeoutMs}ms`));
+          return undefined;
+        }),
+      ]);
+      if (!response) {
+        log.warn({ timeoutMs: this.config.timeoutMs }, 'Sentinel audit LLM analysis timed out');
+        return [];
+      }
       const parsed = await recoverStructuredObjectWithRepair<{ findings?: AuditFinding[] }>({
         response,
-        repairChat: (repairMessages, options) => provider.chat(repairMessages, options),
+        repairChat: (repairMessages, options) => {
+          const repairController = new AbortController();
+          return Promise.race([
+            provider.chat(repairMessages, {
+              ...options,
+              signal: options?.signal ?? repairController.signal,
+            }),
+            timeoutPromise(this.config.timeoutMs).then(() => {
+              repairController.abort(new Error(`Sentinel audit repair timed out after ${this.config.timeoutMs}ms`));
+              throw new Error(`Sentinel audit repair timed out after ${this.config.timeoutMs}ms`);
+            }),
+          ]);
+        },
         repairMessages: messages,
         repairSchemaDescription: '{ "findings": [{ "severity": "warn"|"critical", "description": "...", "recommendation": "..." }] }',
         repairMaxTokens: 220,

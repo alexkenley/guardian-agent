@@ -143,7 +143,7 @@ export function classifyError(error: unknown): ErrorClass {
   }
 
   // Timeout
-  if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || message.includes('timeout') || message.includes('aborted') || (error instanceof Error && error.name === 'AbortError')) {
+  if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || message.includes('timeout') || message.includes('timed out') || message.includes('aborted') || (error instanceof Error && error.name === 'AbortError')) {
     return 'timeout';
   }
 

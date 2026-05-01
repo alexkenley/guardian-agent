@@ -110,11 +110,11 @@ describe('execution profiles', () => {
     });
     expect(profile?.fallbackProviderOrder).toEqual([
       'ollama-cloud-tools',
+      'ollama-cloud-general',
+      'ollama-cloud-direct',
+      'ollama-cloud-coding',
       'anthropic',
       'ollama',
-      'ollama-cloud-general',
-      'ollama-cloud-coding',
-      'ollama-cloud-direct',
     ]);
   });
 
@@ -157,8 +157,8 @@ describe('execution profiles', () => {
 
     expect(current?.providerName).toBe('ollama-cloud-tools');
     expect(sibling).toMatchObject({
-      providerName: 'ollama-cloud-general',
-      providerModel: 'gpt-oss:120b',
+      providerName: 'ollama-cloud-coding',
+      providerModel: 'qwen3-coder-next',
       providerTier: 'managed_cloud',
       selectionSource: 'delegated_role',
     });
@@ -394,6 +394,13 @@ describe('execution profiles', () => {
       providerTier: 'managed_cloud',
       id: 'managed_cloud_tool',
     });
+    expect(profile?.fallbackProviderOrder.slice(0, 5)).toEqual([
+      'openrouter-coding',
+      'ollama-cloud-coding',
+      'ollama-cloud-direct',
+      'ollama-cloud-general',
+      'ollama-cloud-tools',
+    ]);
     expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'openrouter-coding'");
   });
 
@@ -661,7 +668,12 @@ describe('execution profiles', () => {
       requestedTier: 'external',
       id: 'managed_cloud_tool',
     });
-    expect(profile?.fallbackProviderOrder[0]).toBe('ollama-cloud-direct');
+    expect(profile?.fallbackProviderOrder.slice(0, 4)).toEqual([
+      'ollama-cloud-direct',
+      'ollama-cloud-general',
+      'ollama-cloud-tools',
+      'ollama-cloud-coding',
+    ]);
     expect(profile?.reason).toContain("request-scoped provider override selected provider 'ollama-cloud-direct'");
   });
 

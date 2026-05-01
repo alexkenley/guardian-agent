@@ -420,6 +420,8 @@ export interface GuardianConfig {
     enabled: boolean;
     /** Cron schedule for automatic audit (default: every 5 min). */
     schedule: string;
+    /** Timeout for optional LLM audit analysis in ms (default: 30000). */
+    timeoutMs?: number;
     /** Anomaly detection thresholds. */
     anomalyThresholds?: {
       /** Denial rate multiplier to trigger volume spike (default: 3). */
@@ -1725,6 +1727,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     sentinel: {
       enabled: true,
       schedule: '*/5 * * * *',
+      timeoutMs: 30_000,
       anomalyThresholds: {
         volumeSpikeMultiplier: 3,
         capabilityProbeThreshold: 5,

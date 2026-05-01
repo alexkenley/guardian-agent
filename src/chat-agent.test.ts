@@ -9276,6 +9276,123 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect((response.metadata?.contextAssembly as Record<string, unknown> | undefined)?.selectedMemoryEntryCount ?? 0).toBe(0);
   });
 
+  it('does not load memory context for standalone direct-assistant greetings', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const nowMs = Date.now();
+    const conversationService = new ConversationService({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-greeting-minimal-context.test.sqlite',
+      maxTurns: 50,
+      maxMessageChars: 20_000,
+      maxContextChars: 20_000,
+      retentionDays: 30,
+      now: () => nowMs,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-greeting-minimal-context-code-session.test.sqlite',
+    });
+    const memoryStore = {
+      getMaxContextChars: vi.fn(() => 20_000),
+      loadForContextWithSelection: vi.fn(() => ({
+        content: 'Stored smoke test marker: UI-MEM-SHOULD-NOT-LOAD',
+        selectedEntries: [
+          {
+            category: 'Smoke Tests',
+            createdAt: '2026-05-01',
+            preview: 'Stored smoke test marker: UI-MEM-SHOULD-NOT-LOAD',
+            renderMode: 'full',
+            queryScore: 100,
+            isContextFlush: false,
+            matchReasons: ['content terms 1'],
+          },
+        ],
+        candidateEntries: 1,
+        omittedEntries: 0,
+        queryPreview: 'hello',
+      })),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      conversationService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      memoryStore as never,
+      undefined,
+      codeSessionStore,
+    );
+
+    const localChat = vi.fn(async () => ({
+      content: 'Hello there.',
+      toolCalls: [],
+      model: 'test-model',
+      finishReason: 'stop',
+    }));
+    const response = await agent.onMessage!({
+      id: 'msg-greeting-minimal-context',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Hello',
+      timestamp: nowMs,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'unknown',
+          summary: 'Answer a standalone greeting.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+          simpleVsComplex: 'simple',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama-cloud-direct',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(response.content).toBe('Hello there.');
+    expect(memoryStore.loadForContextWithSelection).not.toHaveBeenCalled();
+    const rendered = (localChat.mock.calls[0][0] as Array<{ role: string; content: string }>)
+      .map((entry) => entry.content)
+      .join('\n');
+    expect(rendered).not.toContain('UI-MEM-SHOULD-NOT-LOAD');
+    expect(response.metadata?.contextAssembly).toMatchObject({
+      knowledgeBaseLoaded: false,
+    });
+  });
+
   it('delegates fresh repo-grounded shared code-session requests without stale code-session history', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

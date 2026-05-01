@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
 import { attachChatProviderSelectionMetadata } from './chat-provider-selection.js';
 import { resolveConversationHistoryChannel } from './channel-surface-ids.js';
@@ -36,6 +37,59 @@ function createGatewayRecord(
       preferredAnswerPath: 'chat_synthesis',
       entities: {},
       ...partial,
+    },
+  };
+}
+
+function configureManagedCloudClassifierFixture(config: GuardianAgentConfig): void {
+  config.defaultProvider = 'ollama';
+  config.llm.ollama = {
+    provider: 'ollama',
+    model: 'local-test-model',
+  };
+  config.llm['ollama-cloud-general'] = {
+    provider: 'ollama_cloud',
+    model: 'gpt-oss:120b',
+    credentialRef: 'llm.ollama_cloud.general',
+  };
+  config.llm['ollama-cloud-direct'] = {
+    provider: 'ollama_cloud',
+    model: 'minimax-m2.1',
+    credentialRef: 'llm.ollama_cloud.direct',
+  };
+  config.llm['nvidia general'] = {
+    provider: 'nvidia',
+    model: 'moonshotai/kimi-k2-instruct-0905',
+    credentialRef: 'llm.nvidia.general',
+  };
+  config.llm.anthropic = {
+    provider: 'anthropic',
+    model: 'claude-opus-4.6',
+    apiKey: 'test-key',
+  };
+  config.assistant.tools.preferredProviders = {
+    local: 'ollama',
+    managedCloud: 'ollama_cloud',
+    frontier: 'anthropic',
+  };
+  config.assistant.tools.modelSelection = {
+    ...(config.assistant.tools.modelSelection ?? {}),
+    autoPolicy: 'balanced',
+    preferManagedCloudForLowPressureExternal: true,
+    preferFrontierForRepoGrounded: true,
+    preferFrontierForSecurity: true,
+    managedCloudRouting: {
+      enabled: true,
+      providerRoleBindings: {
+        ollama_cloud: {
+          general: 'ollama-cloud-general',
+          direct: 'ollama-cloud-direct',
+        },
+        nvidia: {
+          general: 'nvidia general',
+        },
+      },
+      roleBindings: {},
     },
   };
 }
@@ -560,6 +614,192 @@ describe('createIncomingDispatchPreparer', () => {
       providerTier: 'managed_cloud',
       preferredAnswerPath: 'tool_loop',
     });
+  });
+
+  it('bounds requested classifier providers and falls through when provider calls hang', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = createConfig();
+      config.llm['stuck-classifier'] = {
+        provider: 'nvidia',
+        model: 'stuck-model',
+        credentialRef: 'llm.nvidia.stuck',
+      };
+      config.llm['fallback-classifier'] = {
+        provider: 'ollama_cloud',
+        model: 'minimax-m2.1',
+        credentialRef: 'llm.ollama_cloud.fallback',
+      };
+      const fallbackGatewayRecord = createGatewayRecord({
+        route: 'general_assistant',
+        operation: 'answer',
+        executionClass: 'direct_assistant',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      });
+      const stuckChat = vi.fn(() => new Promise<ChatResponse>(() => undefined));
+      const fallbackChat = vi.fn(async () => ({
+        content: 'ok',
+        model: 'fallback-model',
+        finishReason: 'stop' as const,
+      }));
+      const routingIntentGateway = {
+        classify: vi.fn(async (_input: IntentGatewayInput, chat: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>) => {
+          await chat([], {});
+          return fallbackGatewayRecord;
+        }),
+      };
+      const runtime = {
+        getProvider: vi.fn((providerName: string) => ({
+          chat: providerName === 'stuck-classifier' ? stuckChat : fallbackChat,
+        })),
+      };
+      const trace = {
+        record: vi.fn(),
+      };
+      const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+        configRef: { current: config },
+        routingIntentGateway,
+        runtime,
+        intentRoutingTrace: trace,
+        findProviderByLocality: vi.fn((_config: GuardianAgentConfig, locality: 'local' | 'external') => (
+          locality === 'external' ? 'fallback-classifier' : config.defaultProvider
+        )),
+      }));
+
+      const resultPromise = prepareIncomingDispatch('default-agent', {
+        content: 'List Guardian Agent capabilities',
+        userId: 'owner',
+        principalId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        metadata: attachChatProviderSelectionMetadata({}, 'stuck-classifier'),
+      });
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(resultPromise).resolves.toMatchObject({
+        decision: {
+          agentId: 'default-agent',
+          confidence: 'high',
+          reason: 'channel default override',
+        },
+        gateway: fallbackGatewayRecord,
+      });
+      expect(stuckChat).toHaveBeenCalledOnce();
+      expect(fallbackChat).toHaveBeenCalledOnce();
+      expect(routingIntentGateway.classify).toHaveBeenCalledTimes(2);
+      expect(trace.record).toHaveBeenCalledWith(expect.objectContaining({
+        stage: 'gateway_classification_failed',
+        details: expect.objectContaining({
+          providerName: 'stuck-classifier',
+          timedOut: true,
+        }),
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('orders classifier providers by configured tier preference before generic external fallback', async () => {
+    const config = createConfig();
+    configureManagedCloudClassifierFixture(config);
+    const providerCalls: string[] = [];
+    const routingIntentGateway = {
+      classify: vi.fn(async (_input: IntentGatewayInput, chat: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>) => {
+        await chat([], {});
+        return createGatewayRecord({
+          route: 'general_assistant',
+          operation: 'answer',
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        });
+      }),
+    };
+    const runtime = {
+      getProvider: vi.fn((providerName: string) => ({
+        chat: vi.fn(async () => {
+          providerCalls.push(providerName);
+          return { content: 'ok', model: providerName, finishReason: 'stop' as const };
+        }),
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      routingIntentGateway,
+      runtime,
+      findProviderByLocality: vi.fn((_config: GuardianAgentConfig, locality: 'local' | 'external') => (
+        locality === 'external' ? 'nvidia general' : 'ollama'
+      )),
+    }));
+
+    await prepareIncomingDispatch('default-agent', {
+      content: 'Hello',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(providerCalls).toEqual(['ollama-cloud-general']);
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
+  it('skips a failed classifier provider family before escalating to the next configured family', async () => {
+    const config = createConfig();
+    configureManagedCloudClassifierFixture(config);
+    const providerCalls: string[] = [];
+    const routingIntentGateway = {
+      classify: vi.fn(async (_input: IntentGatewayInput, chat: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>) => {
+        await chat([], {});
+        return createGatewayRecord({
+          route: 'general_assistant',
+          operation: 'answer',
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        });
+      }),
+    };
+    const runtime = {
+      getProvider: vi.fn((providerName: string) => ({
+        chat: vi.fn(async () => {
+          providerCalls.push(providerName);
+          if (providerName === 'ollama-cloud-general') {
+            throw new Error('preferred managed-cloud classifier failed');
+          }
+          return { content: 'ok', model: providerName, finishReason: 'stop' as const };
+        }),
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      routingIntentGateway,
+      runtime,
+      findProviderByLocality: vi.fn((_config: GuardianAgentConfig, locality: 'local' | 'external') => (
+        locality === 'external' ? 'nvidia general' : 'ollama'
+      )),
+    }));
+
+    await prepareIncomingDispatch('default-agent', {
+      content: 'Hello',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(providerCalls).toEqual(['ollama-cloud-general', 'nvidia general']);
+    expect(routingIntentGateway.classify).toHaveBeenCalledTimes(2);
   });
 
   it('does not force gateway classification for exact replies on an active code-session surface', async () => {

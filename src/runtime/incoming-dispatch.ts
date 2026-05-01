@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { GuardianAgentConfig, RoutingTierMode } from '../config/types.js';
+import {
+  listConfiguredManagedCloudProfilesForType,
+  resolvePreferredManagedCloudProviderType,
+} from '../config/managed-cloud-routing.js';
 import { stripLeadingContextPrefix } from '../chat-agent-helpers.js';
 import { SHARED_TIER_AGENT_STATE_ID } from './agent-state-context.js';
 import type { CodeSessionStore, ResolvedCodeSessionContext } from './code-sessions.js';
@@ -44,6 +48,9 @@ import type { MessageRouter, RouteDecision } from './message-router.js';
 import type { PendingActionStore } from './pending-actions.js';
 import type { Runtime } from './runtime.js';
 
+const DEFAULT_INTENT_GATEWAY_PROVIDER_TIMEOUT_MS = 20_000;
+const INTENT_GATEWAY_PROVIDER_COOLDOWN_MS = 30_000;
+
 export interface IncomingDispatchMessage {
   content: string;
   userId?: string;
@@ -76,6 +83,49 @@ export type PrepareIncomingDispatch = (
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readAbortMessage(signal: AbortSignal): string | undefined {
+  const reason = signal.reason as unknown;
+  if (reason instanceof Error) return reason.message;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
+async function withIntentGatewayProviderTimeout<T>(
+  providerName: string,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<{ value: T | null; timedOut: boolean; error?: Error }> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeoutResult = Symbol('intent-gateway-provider-timeout');
+    const result = await Promise.race([
+      run(controller.signal),
+      new Promise<typeof timeoutResult>((resolve) => {
+        timeout = setTimeout(() => {
+          controller.abort(new Error(`Intent Gateway provider '${providerName}' timed out after ${timeoutMs}ms`));
+          resolve(timeoutResult);
+        }, timeoutMs);
+      }),
+    ]);
+    if (result === timeoutResult) {
+      return {
+        value: null,
+        timedOut: true,
+        error: new Error(readAbortMessage(controller.signal) ?? `Intent Gateway provider '${providerName}' timed out`),
+      };
+    }
+    return { value: result as T, timedOut: false };
+  } catch (err) {
+    return {
+      value: null,
+      timedOut: controller.signal.aborted,
+      error: err instanceof Error ? err : new Error(String(err)),
+    };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export function createIncomingDispatchPreparer(args: {
@@ -117,6 +167,8 @@ export function createIncomingDispatchPreparer(args: {
   now?: () => number;
 }): PrepareIncomingDispatch {
   const now = args.now ?? Date.now;
+  const classifierProviderCooldowns = new Map<string, number>();
+  const classifierProviderFamilyCooldowns = new Map<string, number>();
   const availableCodingBackends = args.availableCodingBackends ?? ['codex', 'claude-code', 'gemini-cli', 'aider'];
   const resolveConfiguredAgentId = args.resolveConfiguredAgentId ?? ((agentId?: string) => (
     resolveConfiguredAgentIdAlias(agentId, {
@@ -138,10 +190,20 @@ export function createIncomingDispatchPreparer(args: {
         .filter(([, llmCfg]) => providerMatchesTier(llmCfg, tier))
         .map(([name]) => name)
         .sort((left, right) => left.localeCompare(right));
-      return uniqueProviders([preferred, ...matches]);
+      if (tier !== 'managed_cloud') {
+        return uniqueProviders([preferred, ...matches]);
+      }
+      const preferredManagedCloudType = resolvePreferredManagedCloudProviderType(config);
+      const preferredFamily = preferredManagedCloudType
+        ? listConfiguredManagedCloudProfilesForType(config, preferredManagedCloudType)
+        : [];
+      return uniqueProviders([preferred, ...preferredFamily, ...matches]);
     };
+    const listProvidersForTierOrder = (tiers: Array<'local' | 'managed_cloud' | 'frontier'>): string[] => (
+      uniqueProviders(tiers.flatMap((tier) => listProvidersForTier(tier)))
+    );
     if (mode === 'local-only') {
-      const localProviders = listProvidersForTier('local');
+      const localProviders = listProvidersForTierOrder(['local', 'managed_cloud', 'frontier']);
       return localProviders.length > 0
         ? localProviders
         : uniqueProviders([
@@ -150,34 +212,26 @@ export function createIncomingDispatchPreparer(args: {
           ]);
     }
     if (mode === 'managed-cloud-only') {
-      const managedCloudProviders = listProvidersForTier('managed_cloud');
+      const managedCloudProviders = listProvidersForTierOrder(['managed_cloud', 'frontier', 'local']);
       return managedCloudProviders.length > 0
-        ? uniqueProviders([
-            ...managedCloudProviders,
-            ...listProvidersForTier('frontier'),
-          ])
+        ? managedCloudProviders
         : uniqueProviders([
-            ...listProvidersForTier('frontier'),
-            ...listProvidersForTier('local'),
+          ...listProvidersForTier('frontier'),
+          ...listProvidersForTier('local'),
           ]);
     }
     if (mode === 'frontier-only') {
-      const frontierProviders = listProvidersForTier('frontier');
+      const frontierProviders = listProvidersForTierOrder(['frontier', 'managed_cloud', 'local']);
       return frontierProviders.length > 0
-        ? uniqueProviders([
-            ...frontierProviders,
-            ...listProvidersForTier('managed_cloud'),
-          ])
+        ? frontierProviders
         : uniqueProviders([
-            ...listProvidersForTier('managed_cloud'),
-            ...listProvidersForTier('local'),
-          ]);
+          ...listProvidersForTier('managed_cloud'),
+          ...listProvidersForTier('local'),
+        ]);
     }
     return uniqueProviders([
+      ...listProvidersForTierOrder(['managed_cloud', 'frontier', 'local']),
       args.findProviderByLocality(config, 'external'),
-      ...listProvidersForTier('managed_cloud'),
-      ...listProvidersForTier('frontier'),
-      args.findProviderByLocality(config, 'local'),
       config.defaultProvider,
     ]);
   };
@@ -277,12 +331,80 @@ export function createIncomingDispatchPreparer(args: {
     };
     const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
       if (!providerName) return null;
+      const providerType = currentConfig.llm[providerName]?.provider?.trim();
+      const normalizedProviderType = providerType?.toLowerCase() || '';
+      const familyCooldownUntil = normalizedProviderType
+        ? classifierProviderFamilyCooldowns.get(normalizedProviderType)
+        : undefined;
+      if (familyCooldownUntil && now() < familyCooldownUntil) {
+        recordIntentRoutingTrace('gateway_classification_skipped', {
+          msg,
+          requestId,
+          details: {
+            providerName,
+            providerType,
+            reason: 'provider family cooldown after recent classifier failure',
+            cooldownUntil: familyCooldownUntil,
+          },
+        });
+        return null;
+      }
+      if (familyCooldownUntil) {
+        classifierProviderFamilyCooldowns.delete(normalizedProviderType);
+      }
+      const cooldownUntil = classifierProviderCooldowns.get(providerName);
+      if (cooldownUntil && now() < cooldownUntil) {
+        recordIntentRoutingTrace('gateway_classification_skipped', {
+          msg,
+          requestId,
+          details: {
+            providerName,
+            reason: 'provider cooldown after recent classifier failure',
+            cooldownUntil,
+          },
+        });
+        return null;
+      }
+      if (cooldownUntil) {
+        classifierProviderCooldowns.delete(providerName);
+      }
       const provider = args.runtime.getProvider(providerName);
       if (!provider) return null;
-      const classified = await args.routingIntentGateway.classify(
-        gatewayInput,
-        (messages, options) => provider.chat(messages, options),
+      const startedAt = now();
+      const classifiedResult = await withIntentGatewayProviderTimeout(
+        providerName,
+        DEFAULT_INTENT_GATEWAY_PROVIDER_TIMEOUT_MS,
+        (signal) => args.routingIntentGateway.classify(
+          gatewayInput,
+          (messages, options) => provider.chat(messages, {
+            ...options,
+            signal: options?.signal ?? signal,
+          }),
+        ),
       );
+      if (classifiedResult.error || classifiedResult.timedOut) {
+        recordIntentRoutingTrace('gateway_classification_failed', {
+          msg,
+          requestId,
+          details: {
+            providerName,
+            latencyMs: now() - startedAt,
+            timedOut: classifiedResult.timedOut,
+            error: classifiedResult.error?.message,
+          },
+        });
+        classifierProviderCooldowns.set(providerName, now() + INTENT_GATEWAY_PROVIDER_COOLDOWN_MS);
+        if (normalizedProviderType) {
+          classifierProviderFamilyCooldowns.set(normalizedProviderType, now() + INTENT_GATEWAY_PROVIDER_COOLDOWN_MS);
+        }
+        return null;
+      }
+      const classified = classifiedResult.value;
+      if (!classified) return null;
+      classifierProviderCooldowns.delete(providerName);
+      if (normalizedProviderType) {
+        classifierProviderFamilyCooldowns.delete(normalizedProviderType);
+      }
       return enrichIntentGatewayRecordWithContentPlan(classified, normalizedContent);
     };
     const repairGenericGatewayPlan = async (
