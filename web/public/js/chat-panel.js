@@ -33,6 +33,7 @@ import {
   shouldUseChatProviderSelector,
 } from './chat-mode-selector.js';
 import { createClientRequestId } from './chat-request-id.js';
+import { renderLinkedText } from './chat-linkify.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import {
   findTargetCodeSession,
@@ -1597,7 +1598,7 @@ function createMessageEl(role, content, opts) {
   const contentEl = document.createElement('div');
   contentEl.className = 'chat-msg-content';
   contentEl.style.whiteSpace = 'pre-wrap';
-  contentEl.textContent = content;
+  renderLinkedText(contentEl, content);
   const sourceEl = role === 'user' ? null : buildSourceBadge(opts?.responseSource);
   if (sourceEl) {
     body.appendChild(sourceEl);

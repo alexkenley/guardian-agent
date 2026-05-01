@@ -735,7 +735,10 @@ export class HybridBrowserService {
 
   private async navigatePlaywright(scopeKey: string, url: string): Promise<ToolResult> {
     if (this.managedPlaywrightCapabilities().navigate) {
-      return this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url });
+      const result = await this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url });
+      if (!shouldFallbackFromManagedPlaywrightResult(result) || !this.directPlaywright?.getCapabilities().navigate) {
+        return result;
+      }
     }
     if (this.directPlaywright?.getCapabilities().navigate) {
       return this.directPlaywright.navigate(scopeKey, url);
@@ -745,7 +748,12 @@ export class HybridBrowserService {
 
   private async capturePlaywrightSnapshot(scopeKey: string): Promise<ToolResult> {
     if (this.managedPlaywrightCapabilities().snapshot) {
-      return this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+      const result = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+      if (!shouldFallbackFromManagedPlaywrightResult(result) || !this.directPlaywright?.getCapabilities().snapshot) {
+        return result;
+      }
+      const sync = await this.syncDirectPlaywrightToSession(scopeKey);
+      if (sync) return sync;
     }
     if (this.directPlaywright?.getCapabilities().snapshot) {
       return this.directPlaywright.snapshot(scopeKey);
@@ -755,10 +763,15 @@ export class HybridBrowserService {
 
   private async evaluatePlaywright(scopeKey: string, fnSource: string): Promise<ToolResult> {
     if (this.managedPlaywrightCapabilities().evaluate) {
-      return this.callTool(
+      const result = await this.callTool(
         PLAYWRIGHT_EVALUATE_TOOL,
         buildPlaywrightEvaluatePayload(this.getToolDefinition(PLAYWRIGHT_EVALUATE_TOOL), fnSource),
       );
+      if (!shouldFallbackFromManagedPlaywrightResult(result) || !this.directPlaywright?.getCapabilities().evaluate) {
+        return result;
+      }
+      const sync = await this.syncDirectPlaywrightToSession(scopeKey);
+      if (sync) return sync;
     }
     if (this.directPlaywright?.getCapabilities().evaluate) {
       return this.directPlaywright.evaluate(scopeKey, fnSource);
@@ -781,7 +794,12 @@ export class HybridBrowserService {
           : PLAYWRIGHT_TYPE_TOOL;
       const definition = this.getToolDefinition(toolName);
       const payload = buildPlaywrightMutationPayload(definition, action, ref, value);
-      return this.callTool(toolName, payload);
+      const result = await this.callTool(toolName, payload);
+      if (!shouldFallbackFromManagedPlaywrightResult(result) || !this.directPlaywright?.getCapabilities().interact) {
+        return result;
+      }
+      const sync = await this.syncDirectPlaywrightToSession(scopeKey);
+      if (sync) return sync;
     }
     if (this.directPlaywright?.getCapabilities().interact) {
       return this.directPlaywright.act(scopeKey, { action, ref, value, label });
@@ -819,6 +837,15 @@ export class HybridBrowserService {
     args: Record<string, unknown>,
   ): Promise<ToolResult> {
     return this.manager.callTool(toolName, args);
+  }
+
+  private async syncDirectPlaywrightToSession(scopeKey: string): Promise<ToolResult | null> {
+    const currentUrl = this.sessions.get(scopeKey)?.currentUrl;
+    if (!currentUrl || !this.directPlaywright?.getCapabilities().navigate) {
+      return null;
+    }
+    const result = await this.directPlaywright.navigate(scopeKey, currentUrl);
+    return result.success ? null : result;
   }
 
   private updateSession(scopeKey: string, patch: Partial<HybridBrowserSessionState>): void {
@@ -888,6 +915,20 @@ function summarizeNavigationResult(
     url: fallbackUrl,
     title: undefined,
   };
+}
+
+function shouldFallbackFromManagedPlaywrightResult(result: ToolResult): boolean {
+  if (result.success) {
+    return false;
+  }
+  const message = asOptionalString(result.error) ?? asOptionalString(result.message) ?? '';
+  return message.includes("MCP server 'playwright'")
+    && (
+      message.includes('oversized')
+      || message.includes('stdout buffer limit')
+      || message.includes('newline-delimited frame')
+      || message.includes('Content-Length frame')
+    );
 }
 
 function normalizeLinkEntries(output: unknown, currentUrl: string): Array<{ text: string; href: string }> {

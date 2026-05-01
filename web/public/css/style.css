@@ -1561,6 +1561,19 @@ tr:hover td {
   overflow-wrap: anywhere;
 }
 
+.chat-msg-content a {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-msg-content a:hover,
+.chat-msg-content a:focus-visible {
+  color: var(--accent);
+}
+
 .chat-message.user .msg-body {
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);

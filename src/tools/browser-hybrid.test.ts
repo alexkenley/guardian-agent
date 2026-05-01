@@ -205,6 +205,37 @@ describe('HybridBrowserService', () => {
     });
   });
 
+  it('falls back to direct Playwright when managed evaluate returns an oversized frame error', async () => {
+    const directBackend = makeDirectBackend({
+      evaluate: vi.fn(async () => ({
+        success: true,
+        output: [{ text: 'Trending repo', href: 'https://github.com/example/repo' }],
+      })),
+    });
+    const callTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'mcp-playwright-browser_navigate') {
+        return { success: true, output: JSON.stringify({ url: 'https://github.com/trending', title: 'Trending' }) };
+      }
+      if (toolName === 'mcp-playwright-browser_evaluate') {
+        return { success: false, error: "MCP server 'playwright' emitted oversized newline-delimited frame." };
+      }
+      return { success: false, error: `Unexpected tool ${toolName}` };
+    });
+    const manager = makeManager(PLAYWRIGHT_DEFINITIONS, callTool);
+    const service = new HybridBrowserService(manager, {
+      directPlaywright: directBackend,
+    });
+
+    const result = await service.links('scope-oversized', { url: 'https://github.com/trending' });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      links: [{ text: 'Trending repo', href: 'https://github.com/example/repo' }],
+    });
+    expect(directBackend.navigate).toHaveBeenCalledWith('scope-oversized', 'https://github.com/trending');
+    expect(directBackend.evaluate).toHaveBeenCalledWith('scope-oversized', expect.stringContaining('querySelectorAll'));
+  });
+
   it('extracts structured metadata and semantic outline through Playwright', async () => {
     const callTool = vi.fn(async (toolName: string) => {
       if (toolName === 'mcp-playwright-browser_navigate') {
