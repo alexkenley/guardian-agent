@@ -5315,6 +5315,50 @@ describe('WebChannel', () => {
       expect(body.byStatus.completed).toBe(1);
     });
 
+    it('GET /api/security/ai/findings should redact finding evidence details', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onAiSecurityFindings: () => [{
+          id: 'ai-finding-1',
+          dedupeKey: 'ai-security:workspace:credential',
+          targetId: 'workspace-1',
+          targetType: 'workspace',
+          targetLabel: 'GuardianAgent workspace',
+          category: 'workspace',
+          severity: 'high',
+          confidence: 0.92,
+          alertSemantics: 'incident_candidate',
+          status: 'new',
+          title: 'Credential-like material in workspace evidence',
+          summary: 'A workspace trust review surfaced credential-like material.',
+          firstSeenAt: 1,
+          lastSeenAt: 2,
+          occurrenceCount: 1,
+          evidence: [{
+            kind: 'workspace',
+            summary: 'Observed token slack-token-fixture-findingsecret in review output.',
+            details: {
+              apiKey: 'sk-test-ai-security-finding-secret',
+              nested: { awsAccessKeyId: 'AKIAIOSFODNN7EXAMPLE' },
+            },
+          }],
+        }],
+      };
+      web = new WebChannel({ port: 18975, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18975/api/security/ai/findings?limit=10&status=new', { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const body = await res.json() as Array<{
+        evidence: Array<{ summary: string; details?: { apiKey?: unknown; nested?: { awsAccessKeyId?: unknown } } }>;
+      }>;
+      expect(body[0]?.evidence[0]?.details?.apiKey).toBe('[REDACTED]');
+      expect(body[0]?.evidence[0]?.details?.nested?.awsAccessKeyId).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('sk-test-ai-security-finding-secret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      expect(JSON.stringify(body)).not.toContain('slack-token-fixture-findingsecret');
+    });
+
     it('GET /api/windows-defender/status should return native provider status', async () => {
       web = new WebChannel({ port: 18973, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));

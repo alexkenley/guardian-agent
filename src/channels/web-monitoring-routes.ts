@@ -263,7 +263,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, dashboard.onAiSecuritySummary());
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecuritySummary()));
     return true;
   }
 
@@ -272,7 +272,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, dashboard.onAiSecurityProfiles());
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityProfiles()));
     return true;
   }
 
@@ -281,7 +281,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, dashboard.onAiSecurityTargets());
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityTargets()));
     return true;
   }
 
@@ -292,7 +292,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '20', 10);
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 20;
-    sendJSON(res, 200, dashboard.onAiSecurityRuns(limit));
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityRuns(limit)));
     return true;
   }
 
@@ -310,7 +310,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
           : undefined,
         source: parsed.source as Parameters<NonNullable<DashboardCallbacks['onAiSecurityScan']>>[0]['source'],
       });
-      sendJSON(res, 200, result);
+      sendJSON(res, 200, redactSecurityMonitoringResponse(result));
       context.maybeEmitUIInvalidation(result, ['security', 'ai-security'], 'security.ai.scan.completed', url.pathname);
       return true;
     } catch (err) {
@@ -327,10 +327,10 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '50', 10);
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
     const status = trimOptionalString(url.searchParams.get('status'))?.toLowerCase();
-    sendJSON(res, 200, dashboard.onAiSecurityFindings({
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityFindings({
       limit,
       status: status as Parameters<NonNullable<DashboardCallbacks['onAiSecurityFindings']>>[0]['status'],
-    }));
+    })));
     return true;
   }
 
