@@ -29,6 +29,7 @@ Completed and committed slices:
 - `fix(web): centralize response redaction` — centralized web response redaction and extended it to audit, routing trace, and assistant run/timeline API boundaries.
 - `fix(logging): redact secret-shaped log fields` — added central structured-log redaction for error objects, stack text, and secret-shaped log fields.
 - `fix(routing): remove automation capability shortcut` — removed an existing content-matched automation-help shortcut so gateway-classified capability questions stay on the selected model path.
+- `fix(routing): remove tool inventory shortcut` — removed the adjacent content-matched tool-inventory shortcut so tool capability questions also stay on the gateway-selected model path.
 
 Proven in this pass:
 
@@ -42,7 +43,7 @@ Proven in this pass:
 - Manual Second Brain memory/routine checks showed the Kimi raw tool-call response issue was handled without regex/keyword routing; routing remains Intent Gateway/direct-dispatch based and the memory overview path can answer from tool evidence.
 - Security monitoring now has defense-in-depth redaction at both UI display and backend web API boundaries for security alerts, activity, Assistant Security, direct monitoring, audit, routing trace, and assistant run/timeline surfaces.
 - Structured logging now redacts secret-shaped strings in logged error objects/stacks and sensitive keyed fields; the channel regression that emitted a secret-shaped config-update stack now prints `[REDACTED]`.
-- Automation capability questions now have focused regression coverage proving they do not bypass the gateway-selected model with hard-coded content matching; `src/chat-agent.test.ts`, `npm run check`, `npm run build`, `node scripts/test-security-verification.mjs`, and `node scripts/test-cross-domain-orchestration-stress.mjs` pass for the slice.
+- Automation capability and tool inventory questions now have focused regression coverage proving they do not bypass the gateway-selected model with hard-coded content matching; `src/chat-agent.test.ts`, `npm run check`, `npm run build`, `node scripts/test-security-verification.mjs`, and `node scripts/test-cross-domain-orchestration-stress.mjs` pass for the slices.
 
 Known caveats from the latest pass:
 

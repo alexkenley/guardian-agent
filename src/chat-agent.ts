@@ -634,47 +634,6 @@ interface DegradedDirectIntentResponseInput {
     return formatSkillInventoryResponse(this.skillRegistry.listStatus());
   }
 
-  private tryDirectToolInventoryResponse(content: string): string | null {
-    if (!/\bwhat tools do you have available\b|\bwhich tools do you have available\b|\bwhat tools can you use\b|\bwhich tools can you use\b/i.test(content)) {
-      return null;
-    }
-    if (!this.tools?.isEnabled()) return null;
-    const definitions = this.tools.listToolDefinitions();
-    if (definitions.length === 0) {
-      return 'No assistant-visible tools are currently available on this surface.';
-    }
-
-    const categoryLabels: Record<string, string> = {
-      coding: 'Coding',
-      filesystem: 'Filesystem',
-      browser: 'Browser',
-      search: 'Search',
-      memory: 'Memory',
-      shell: 'Shell',
-      automation: 'Automation',
-      workspace: 'Workspace',
-      system: 'System',
-      security: 'Security',
-      mcp: 'MCP',
-      google_workspace: 'Google Workspace',
-      microsoft_365: 'Microsoft 365',
-    };
-    const grouped = definitions.reduce<Map<string, string[]>>((acc, definition) => {
-      const category = definition.category ?? 'other';
-      const names = acc.get(category) ?? [];
-      names.push(definition.name);
-      acc.set(category, names);
-      return acc;
-    }, new Map<string, string[]>());
-
-    const lines = ['Available tools on this surface right now:'];
-    for (const [category, names] of [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      lines.push(`- ${categoryLabels[category] ?? category}: ${names.sort((a, b) => a.localeCompare(b)).join(', ')}`);
-    }
-    lines.push('If a coding session is attached, repo-local coding actions stay anchored to that workspace, but broader Guardian tools remain available from this chat surface.');
-    return lines.join('\n');
-  }
-
   private tryDirectPendingApprovalStatusResponse(
     message: UserMessage,
     options?: { exactOnly?: boolean },
@@ -1520,23 +1479,6 @@ interface DegradedDirectIntentResponseInput {
             ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
             : undefined,
         };
-      }
-
-      const directToolInventory = allowGeneralShortcut
-        ? this.tryDirectToolInventoryResponse(routedScopedMessage.content)
-        : null;
-      if (directToolInventory) {
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            directToolInventory,
-          );
-        }
-        if (resolvedCodeSession) {
-          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
-        }
-        return { content: directToolInventory };
       }
 
       const directToolReport = allowGeneralShortcut
