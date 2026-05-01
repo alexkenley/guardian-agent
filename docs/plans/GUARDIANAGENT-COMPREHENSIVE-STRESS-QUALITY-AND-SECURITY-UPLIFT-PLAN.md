@@ -6,6 +6,57 @@
 **Historical context:** `docs/plans/archive/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`
 **Security reference:** `SECURITY.md`, `docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md`, `docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md`
 
+## Current Progress Snapshot
+
+**Last updated:** 2026-05-01
+
+The current uplift has completed several trace-backed refinement slices while preserving the core architecture constraints: Intent Gateway authority, graph/PendingActionStore approval ownership, brokered-worker isolation, contextual security, audit, sandbox, taint, and containment boundaries. No keyword, regex, channel-specific, compatibility-shim, or second-executor routing changes have been added.
+
+Completed and committed slices:
+
+- `fix(security): reject approval replay conflicts` — hardened approval replay/scope conflict handling.
+- `fix(google): retire legacy gws auth path` — removed the stale Google Workspace CLI path in favor of direct Google authentication/status behavior.
+- `test(connectors): add live status-only harness lanes` — added deterministic/live status-only connector coverage for Google and Microsoft-style auth checks without content reads.
+- `fix(routing): preserve mixed connector status evidence` — improved mixed connector/status evidence preservation without adding keyword routing.
+- `fix(routing): normalize read-only evidence run plans` — normalized post-gateway structured recovery when the plan is read-only evidence gathering but the operation was over-broadly marked `run`.
+- `test(security): guard skip-start auth harness` — prevented `test-security-api.ps1 -SkipStart` from generating an invalid token and rate-limiting a live app.
+- `fix(security-ui): broaden raw detail redaction` — broadened Security page display redaction for AWS access keys and wider Slack token prefixes.
+- `fix(security): redact alert API evidence` — added backend redaction for `/api/security/alerts` evidence.
+- `fix(security): redact activity API details` — added backend redaction for `/api/security/activity` details.
+- `fix(security): redact assistant security API evidence` — added backend redaction for Assistant Security findings, targets, runs, summaries, and scan results.
+- `fix(security): redact direct monitor API responses` — added backend redaction for direct network, Defender, host, gateway, posture, containment, and scan/check security monitoring responses.
+- `docs(security): document redacted monitoring details` — aligned `SECURITY.md`, `src/reference-guide.ts`, and the as-built security design with redacted raw-detail behavior.
+
+Proven in this pass:
+
+- Core TypeScript gates pass: `npm run check` and `npm run build`.
+- Full Vitest regression passes: `npm test -- --reporter=dot` completed with 319 files and 3571 tests passing.
+- Security harnesses pass: `node scripts/test-security-verification.mjs` and `node scripts/test-contextual-security-uplifts.mjs`.
+- Cross-domain orchestration stress passes after routing/evidence changes: `node scripts/test-cross-domain-orchestration-stress.mjs`.
+- Web approval continuity passes: `node scripts/test-web-approvals.mjs`.
+- Code UI smoke passes: `node scripts/test-code-ui-smoke.mjs`.
+- Connector status-only harnesses are available for deterministic status checks, and the user confirmed Google and Microsoft manual Test Connection checks report authenticated successfully.
+- Manual Second Brain memory/routine checks showed the Kimi raw tool-call response issue was handled without regex/keyword routing; routing remains Intent Gateway/direct-dispatch based and the memory overview path can answer from tool evidence.
+- Security monitoring now has defense-in-depth redaction at both UI display and backend web API boundaries for security alerts, activity, Assistant Security, and direct monitoring surfaces.
+
+Known caveats from the latest pass:
+
+- `scripts/test-security-verification.mjs` timed out once waiting for a temporary `/health` endpoint, then passed cleanly on rerun; no product regression was found.
+- `scripts/test-security-content.ps1 -SkipStart` may skip or under-report when a live app has already been rate-limited by earlier invalid-token probes; the skip-start API harness now avoids causing that condition.
+- `node scripts/test-code-ui-smoke.mjs` passes but still prints noisy Monaco teardown console errors during harness navigation/cleanup. A local detach-before-dispose experiment did not reduce the noise and was not kept.
+- `.guardianagent/marketing-state.json` remains local dirty state and is intentionally out of scope for this plan.
+
+Remaining work:
+
+- Continue Workstream 1 breadth where live/manual coverage is still thin: automations pagination/follow-up, memory quarantine/save edge cases, package-install review paths, MCP namespace/startup behavior, and mixed web/repo/memory/connector/security synthesis.
+- Continue Workstream 2 only for trace-backed intelligence gaps: exactness, source coverage, connector status phrasing, memory-vs-temporary-context clarity, and final-verifier false positives/negatives.
+- Continue Workstream 3 adversarial breadth beyond the completed mini-sweeps: indirect injection via mail/docs/repo/package metadata/MCP output, encoded/fragmented secret requests, denied-path path-shape variants, tainted memory-save and scheduled mutation attempts, and approval actor/scope drift.
+- Continue Workstream 4 semantics and operator usefulness: recommended next action consistency, severity semantics across alert sources, audit-chain failure surfacing as security state, related run/tool/approval/config correlation, and exported incident bundle/notification redaction if those surfaces are added or exercised.
+- Continue Workstream 5 UX polish with real viewport inspection: Security, Code, Automations, System, Configuration, and chat loading/empty/error/blocked/running/completed/failed/cancelled states. The Monaco teardown console noise is a candidate if it becomes reproducible as user-visible instability rather than harness-only noise.
+- Continue Workstream 6 diagnostics only from concrete traces: sandbox/provider failure classification, Vercel/Daytona recurrence, WHM/cPanel status, and connector timeline/profile metadata redaction.
+- Continue Workstream 7 harness discipline: convert repeated high-risk manual findings into focused tests; keep live connector/model sweeps small and redacted.
+- Continue Workstream 8 docs only when behavior changes are operator-visible or architecture-relevant.
+
 ## Purpose
 
 The durable execution graph uplift and the post-graph coding-quality pass are complete enough to stop treating the next phase as an architecture build-out. The next uplift is a comprehensive product-hardening program across GuardianAgent's capabilities.
