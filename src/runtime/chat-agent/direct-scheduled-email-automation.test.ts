@@ -83,6 +83,44 @@ describe('direct scheduled email automation', () => {
     );
   });
 
+  it('passes principal and taint metadata into scheduled email automation saves', async () => {
+    const deps = makeDeps();
+    const message: UserMessage = {
+      ...makeMessage(
+        'Create a task to send an email to alex@example.com tomorrow at 12 pm with subject Status and body Everything is green.',
+      ),
+      principalId: 'operator-1',
+      principalRole: 'operator',
+      metadata: {
+        security: {
+          contentTrustLevel: 'low_trust',
+          taintReasons: ['remote_http_content'],
+          derivedFromTaintedContent: true,
+        },
+      },
+    };
+
+    await tryDirectScheduledEmailAutomation({
+      message,
+      ctx: { checkAction: vi.fn() } as unknown as AgentContext,
+      userKey: 'owner:web',
+      stateAgentId: 'agent-1',
+    }, deps);
+
+    expect(deps.tools?.executeModelTool).toHaveBeenCalledWith(
+      'automation_save',
+      expect.any(Object),
+      expect.objectContaining({
+        surfaceId: 'surface-1',
+        principalId: 'operator-1',
+        principalRole: 'operator',
+        contentTrustLevel: 'low_trust',
+        taintReasons: ['remote_http_content'],
+        derivedFromTaintedContent: true,
+      }),
+    );
+  });
+
   it('wraps scheduled email automation approvals in shared pending-action metadata', async () => {
     const deps = makeDeps({
       tools: {

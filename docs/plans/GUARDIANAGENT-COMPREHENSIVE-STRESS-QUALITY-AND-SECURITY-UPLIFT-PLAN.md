@@ -33,6 +33,7 @@ Completed and committed slices:
 - `test(security): make llmmap harness portable` — made the LLMMap security harness resolve sibling repo/Python paths on Windows and use compact live defaults for reliable adversarial smoke runs.
 - `fix(security): sanitize triage raw tool output` — prevented raw provider tool-call envelopes and tool-round-only status text from being recorded as security triage audit/activity findings.
 - `fix(memory): preserve taint on direct saves` — carried taint metadata through the direct memory-save path and made quarantined writes explicit in the user acknowledgement.
+- `fix(automation): preserve taint on scheduled email saves` — carried surface, principal, and taint metadata through direct scheduled-email automation creation.
 
 Proven in this pass:
 
@@ -50,6 +51,7 @@ Proven in this pass:
 - `npm run test:llmmap` now completes on Windows with the local sibling LLMMap repo and `python`; the latest compact live run blocked the deterministic preflight injection, selected 1 prompt from 227, recorded 2 evidence items, and reported 0 findings.
 - Security triage findings now have focused coverage proving MiniMax-style raw tool markup and tool-round-only fallback text are replaced with an explicit unusable-summary fallback before audit, activity, or completion-event recording; the latest LLMMap Guardian stdout contained 0 matches for `<minimax:tool_call>` or `Tool round status`.
 - Direct memory saves now preserve `contentTrustLevel`, `taintReasons`, and `derivedFromTaintedContent` metadata when the direct handler invokes `memory_save`; quarantined writes report as quarantined instead of presenting as active saved memory.
+- Direct scheduled email automation saves now preserve `surfaceId`, `principalId`, `principalRole`, `contentTrustLevel`, `taintReasons`, and `derivedFromTaintedContent` into `automation_save` so approval and policy checks see the originating security context.
 
 Known caveats from the latest pass:
 

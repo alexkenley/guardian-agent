@@ -17,6 +17,7 @@ import type {
   PendingActionApprovalSummary,
   PendingActionRecord,
 } from '../pending-actions.js';
+import { readToolMessageSecurityContext } from './message-security-context.js';
 
 type ScheduledEmailAutomationResponse =
   | string
@@ -182,9 +183,13 @@ async function createDirectScheduledEmailAutomation(
     origin: 'assistant' as const,
     agentId: deps.agentId,
     userId: input.message.userId,
+    surfaceId: input.message.surfaceId,
+    principalId: input.message.principalId ?? input.message.userId,
+    principalRole: input.message.principalRole,
     channel: input.message.channel,
     requestId: input.message.id,
     agentContext: { checkAction: input.ctx.checkAction },
+    ...readToolMessageSecurityContext(input.message),
   };
 
   const toolResult = await deps.tools!.executeModelTool(
