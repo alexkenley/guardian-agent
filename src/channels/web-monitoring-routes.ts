@@ -10,6 +10,7 @@ import {
 import { isSecurityAlertStatus } from '../runtime/security-alert-lifecycle.js';
 import { isSecurityActivityStatus } from '../runtime/security-activity-log.js';
 import { isDeploymentProfile, isSecurityOperatingMode } from '../runtime/security-posture.js';
+import { redactSensitiveText, redactSensitiveValue } from '../util/crypto-guardrails.js';
 
 interface WebMonitoringRoutesContext {
   req: IncomingMessage;
@@ -126,7 +127,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
 
     const sources = normalizeSecurityAlertSources(rawSource, rawSources);
-    sendJSON(res, 200, dashboard.onSecurityAlerts({
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onSecurityAlerts({
       query,
       source: rawSource?.toLowerCase() as SecurityAlertSource | undefined,
       sources,
@@ -136,7 +137,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       includeAcknowledged,
       includeInactive,
       limit,
-    }));
+    })));
     return true;
   }
 
@@ -587,4 +588,26 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
   }
 
   return false;
+}
+
+function redactSecurityMonitoringResponse<T>(value: T): T {
+  return redactSecurityMonitoringValue(value) as T;
+}
+
+function redactSecurityMonitoringValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactSensitiveText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecurityMonitoringValue(item));
+  }
+  if (value && typeof value === 'object') {
+    const keyRedacted = redactSensitiveValue(value);
+    if (!keyRedacted || typeof keyRedacted !== 'object' || Array.isArray(keyRedacted)) {
+      return redactSecurityMonitoringValue(keyRedacted);
+    }
+    return Object.fromEntries(Object.entries(keyRedacted as Record<string, unknown>)
+      .map(([key, child]) => [key, redactSecurityMonitoringValue(child)]));
+  }
+  return value;
 }

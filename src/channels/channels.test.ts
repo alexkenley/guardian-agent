@@ -4174,7 +4174,12 @@ describe('WebChannel', () => {
           acknowledged: false,
           description: 'New device detected',
           dedupeKey: 'new_device:aa:bb:cc:dd:ee:ff',
-          evidence: { ip: '192.168.1.25', macs: ['aa:bb:cc:dd:ee:ff'] },
+          evidence: {
+            ip: '192.168.1.25',
+            macs: ['aa:bb:cc:dd:ee:ff'],
+            apiKey: 'sk-test-security-alert-secret',
+            note: 'AWS key AKIAIOSFODNN7EXAMPLE observed in diagnostic text',
+          },
           subject: '192.168.1.25',
         }],
         totalMatches: 1,
@@ -5226,12 +5231,15 @@ describe('WebChannel', () => {
       const body = await res.json() as {
         totalMatches: number;
         searchedSources: string[];
-        alerts: Array<{ id: string; source: string; subject: string }>;
+        alerts: Array<{ id: string; source: string; subject: string; evidence: Record<string, unknown> }>;
       };
       expect(body.totalMatches).toBe(1);
       expect(body.searchedSources).toEqual(['network']);
       expect(body.alerts[0].id).toBe('net-alert-1');
       expect(body.alerts[0].subject).toBe('192.168.1.25');
+      expect(body.alerts[0].evidence.apiKey).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('sk-test-security-alert-secret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
     });
 
     it('POST /api/security/alerts/ack should acknowledge unified security alerts', async () => {
