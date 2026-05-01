@@ -1,4 +1,4 @@
-const RAW_TOOL_MARKUP_PATTERN = /<\/?tool_results?\b|<\/?tool_calls?\b|<\/?tool_call\b|<\|tool_(?:calls_section|call)(?:_begin|_end)?\|>|\[\s*\/?\s*tool_results?\s*\]|\[\s*\/?\s*tool_calls?\s*\]|\[\s*\/?\s*tool_call\s*\]/i;
+const RAW_TOOL_MARKUP_PATTERN = /<\/?tool_results?\b|<\/?tool_calls?\b|<\/?tool_call\b|<\/?[a-z][\w.-]*:tool_calls?\b|<\/?invoke\b|<\/?parameter\b|<\|tool_(?:calls_section|call)(?:_begin|_end)?\|>|\[\s*\/?\s*tool_results?\s*\]|\[\s*\/?\s*tool_calls?\s*\]|\[\s*\/?\s*tool_call\s*\]/i;
 
 export function looksLikeRawToolMarkup(content: string | undefined): boolean {
   if (!content?.trim()) return false;
@@ -10,6 +10,7 @@ export function lacksUsableAssistantContent(content: string | undefined): boolea
   const trimmed = content.trim();
   const lower = trimmed.toLowerCase();
   const degradedPatterns = [
+    'tool round status:',
     'i could not generate',
     'i cannot generate',
     'i can\'t assist with that',

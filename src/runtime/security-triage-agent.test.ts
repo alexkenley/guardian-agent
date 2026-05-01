@@ -75,6 +75,91 @@ describe('SecurityEventTriageAgent', () => {
     }));
   });
 
+  it('does not write raw provider tool markup into triage findings', async () => {
+    const auditLog = new AuditLog();
+    const activityLog = new SecurityActivityLogService({ persistPath: '/tmp/security-triage-agent-raw-tool-test-activity.json' });
+    const agent = new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: 'owner',
+      auditLog,
+      activityLog,
+      now: () => 1_250,
+    });
+    const ctx = makeContext({
+      dispatch: vi.fn().mockResolvedValue({
+        content: [
+          '<minimax:tool_call>',
+          '<invoke name="assistant_security_summary">',
+          '<parameter name="scope">recent</parameter>',
+          '</invoke>',
+          '</minimax:tool_call>',
+        ].join(''),
+      }),
+    });
+
+    await agent.onEvent({
+      type: 'security:native:provider',
+      sourceAgentId: 'windows-defender',
+      targetAgentId: '*',
+      payload: {
+        alert: {
+          type: 'defender_threat_detected',
+          severity: 'critical',
+          description: 'Windows Defender detected a threat.',
+        },
+      },
+      timestamp: 1_200,
+    }, ctx);
+
+    const finding = auditLog.query({ type: 'automation_finding' })[0];
+    expect(finding?.details['description']).toBe(
+      'Security triage completed for defender_threat_detected, but the model did not return a usable narrative summary. Review the security activity trail and corroborating tool evidence before taking action.',
+    );
+    expect(activityLog.list().entries[0]?.summary).toBe(finding?.details['description']);
+    expect(vi.mocked(ctx.emit)).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        summary: finding?.details['description'],
+      }),
+    }));
+  });
+
+  it('does not write tool-round-only status text into triage findings', async () => {
+    const auditLog = new AuditLog();
+    const agent = new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: 'owner',
+      auditLog,
+      now: () => 1_500,
+    });
+    const ctx = makeContext({
+      dispatch: vi.fn().mockResolvedValue({
+        content: [
+          'Tool round status:',
+          '- Tool \'find_tools\' completed.',
+          '- Tool \'find_tools\' completed.',
+        ].join('\n'),
+      }),
+    });
+
+    await agent.onEvent({
+      type: 'security:native:provider',
+      sourceAgentId: 'windows-defender',
+      targetAgentId: '*',
+      payload: {
+        alert: {
+          type: 'defender_threat_detected',
+          severity: 'critical',
+          description: 'Windows Defender detected a threat.',
+        },
+      },
+      timestamp: 1_450,
+    }, ctx);
+
+    const finding = auditLog.query({ type: 'automation_finding' })[0];
+    expect(finding?.details['description']).toContain('did not return a usable narrative summary');
+    expect(finding?.details['description']).not.toContain('Tool round status');
+  });
+
   it('deduplicates repeated events inside the cooldown window', async () => {
     let now = 1_000;
     const auditLog = new AuditLog();

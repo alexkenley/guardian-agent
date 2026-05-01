@@ -8,6 +8,7 @@ import {
   isExpectedGuardrailSecurityDetailType,
   isLowConfidenceSecurityDetailType,
 } from './security-signal-taxonomy.js';
+import { lacksUsableAssistantContent } from '../util/assistant-response-shape.js';
 
 export const SECURITY_TRIAGE_AGENT_ID = 'security-triage';
 export const SECURITY_TRIAGE_DISPATCHER_AGENT_ID = 'security-triage-dispatcher';
@@ -223,7 +224,7 @@ export class SecurityEventTriageAgent extends BaseAgent {
         },
       );
 
-      const content = response.content.trim() || `Security triage completed for ${candidate.detailType}.`;
+      const content = summarizeSecurityTriageContent(response.content, candidate.detailType);
       this.recordActivity({
         timestamp: this.now(),
         agentId: this.id,
@@ -541,6 +542,17 @@ function buildSecurityTriagePrompt(event: AgentEvent, candidate: SecurityEventTr
     '3. Recommended operating mode',
     '4. Immediate next action',
   ].join('\n');
+}
+
+function summarizeSecurityTriageContent(content: string, detailType: string): string {
+  const trimmed = content.trim();
+  if (trimmed && !lacksUsableAssistantContent(trimmed)) {
+    return trimmed;
+  }
+  return [
+    `Security triage completed for ${detailType}, but the model did not return a usable narrative summary.`,
+    'Review the security activity trail and corroborating tool evidence before taking action.',
+  ].join(' ');
 }
 
 function extractDetailType(payload: Record<string, unknown>): string {
