@@ -4149,7 +4149,10 @@ describe('WebChannel', () => {
           ip: '192.168.1.25',
           description: 'New device detected',
           dedupeKey: 'new_device:aa:bb:cc:dd:ee:ff',
-          evidence: {},
+          evidence: {
+            apiKey: 'sk-test-network-threat-secret',
+            note: 'Observed AWS key AKIAIOSFODNN7EXAMPLE during network scan.',
+          },
           acknowledged: false,
           firstSeenAt: Date.now(),
           lastSeenAt: Date.now(),
@@ -4259,7 +4262,11 @@ describe('WebChannel', () => {
           timestamp: Date.now(),
           description: 'Windows Defender detected a threat.',
           dedupeKey: 'wd:threat:1',
-          evidence: { threatName: 'TestThreat' },
+          evidence: {
+            threatName: 'TestThreat',
+            nested: { token: 'slack-token-fixture-defendersecret' },
+            note: 'Diagnostic value sk-test-defender-alert-secret should not render.',
+          },
           acknowledged: false,
           status: 'active',
           lastStateChangedAt: Date.now(),
@@ -5207,9 +5214,15 @@ describe('WebChannel', () => {
 
       const res = await fetch('http://localhost:18962/api/network/threats?limit=10', { headers: authHeaders });
       expect(res.status).toBe(200);
-      const body = await res.json() as { activeAlertCount: number; alerts: Array<{ id: string }> };
+      const body = await res.json() as {
+        activeAlertCount: number;
+        alerts: Array<{ id: string; evidence?: { apiKey?: unknown } }>;
+      };
       expect(body.activeAlertCount).toBe(1);
       expect(body.alerts[0].id).toBe('net-alert-1');
+      expect(body.alerts[0].evidence?.apiKey).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('sk-test-network-threat-secret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
     });
 
     it('POST /api/network/threats/ack should acknowledge alert', async () => {
@@ -5365,10 +5378,16 @@ describe('WebChannel', () => {
 
       const res = await fetch('http://localhost:18973/api/windows-defender/status', { headers: authHeaders });
       expect(res.status).toBe(200);
-      const body = await res.json() as { status: { provider: string; supported: boolean }; alerts: Array<{ id: string }> };
+      const body = await res.json() as {
+        status: { provider: string; supported: boolean };
+        alerts: Array<{ id: string; evidence?: { nested?: { token?: unknown } } }>;
+      };
       expect(body.status.provider).toBe('windows_defender');
       expect(body.status.supported).toBe(true);
       expect(body.alerts[0].id).toBe('wd-1');
+      expect(body.alerts[0].evidence?.nested?.token).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('slack-token-fixture-defendersecret');
+      expect(JSON.stringify(body)).not.toContain('sk-test-defender-alert-secret');
     });
 
     it('POST /api/windows-defender/scan should validate scan payload and call the dashboard action', async () => {
