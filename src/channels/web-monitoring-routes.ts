@@ -10,7 +10,7 @@ import {
 import { isSecurityAlertStatus } from '../runtime/security-alert-lifecycle.js';
 import { isSecurityActivityStatus } from '../runtime/security-activity-log.js';
 import { isDeploymentProfile, isSecurityOperatingMode } from '../runtime/security-posture.js';
-import { redactSensitiveText, redactSensitiveValue } from '../util/crypto-guardrails.js';
+import { redactWebResponse } from './web-redaction.js';
 
 interface WebMonitoringRoutesContext {
   req: IncomingMessage;
@@ -62,7 +62,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
     const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onNetworkThreats({
+    sendJSON(res, 200, redactWebResponse(dashboard.onNetworkThreats({
       includeAcknowledged,
       limit: Number.isFinite(limit) ? limit : 100,
     })));
@@ -127,7 +127,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
 
     const sources = normalizeSecurityAlertSources(rawSource, rawSources);
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onSecurityAlerts({
+    sendJSON(res, 200, redactWebResponse(dashboard.onSecurityAlerts({
       query,
       source: rawSource?.toLowerCase() as SecurityAlertSource | undefined,
       sources,
@@ -249,7 +249,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 400, { error: "status must be one of 'started', 'skipped', 'completed', or 'failed'" });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onSecurityActivityLog({
+    sendJSON(res, 200, redactWebResponse(dashboard.onSecurityActivityLog({
       limit,
       status: rawStatus && isSecurityActivityStatus(rawStatus) ? rawStatus : undefined,
       agentId,
@@ -263,7 +263,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecuritySummary()));
+    sendJSON(res, 200, redactWebResponse(dashboard.onAiSecuritySummary()));
     return true;
   }
 
@@ -272,7 +272,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityProfiles()));
+    sendJSON(res, 200, redactWebResponse(dashboard.onAiSecurityProfiles()));
     return true;
   }
 
@@ -281,7 +281,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityTargets()));
+    sendJSON(res, 200, redactWebResponse(dashboard.onAiSecurityTargets()));
     return true;
   }
 
@@ -292,7 +292,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '20', 10);
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 20;
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityRuns(limit)));
+    sendJSON(res, 200, redactWebResponse(dashboard.onAiSecurityRuns(limit)));
     return true;
   }
 
@@ -310,7 +310,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
           : undefined,
         source: parsed.source as Parameters<NonNullable<DashboardCallbacks['onAiSecurityScan']>>[0]['source'],
       });
-      sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+      sendJSON(res, 200, redactWebResponse(result));
       context.maybeEmitUIInvalidation(result, ['security', 'ai-security'], 'security.ai.scan.completed', url.pathname);
       return true;
     } catch (err) {
@@ -327,7 +327,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '50', 10);
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 50;
     const status = trimOptionalString(url.searchParams.get('status'))?.toLowerCase();
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onAiSecurityFindings({
+    sendJSON(res, 200, redactWebResponse(dashboard.onAiSecurityFindings({
       limit,
       status: status as Parameters<NonNullable<DashboardCallbacks['onAiSecurityFindings']>>[0]['status'],
     })));
@@ -376,7 +376,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const profile = rawProfile && isDeploymentProfile(rawProfile) ? rawProfile : undefined;
     const currentMode = rawCurrentMode && isSecurityOperatingMode(rawCurrentMode) ? rawCurrentMode : undefined;
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onSecurityPosture({
+    sendJSON(res, 200, redactWebResponse(dashboard.onSecurityPosture({
       profile,
       currentMode,
       includeAcknowledged,
@@ -401,7 +401,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const profile = rawProfile && isDeploymentProfile(rawProfile) ? rawProfile : undefined;
     const currentMode = rawCurrentMode && isSecurityOperatingMode(rawCurrentMode) ? rawCurrentMode : undefined;
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onSecurityContainmentStatus({
+    sendJSON(res, 200, redactWebResponse(dashboard.onSecurityContainmentStatus({
       profile,
       currentMode,
     })));
@@ -413,7 +413,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onWindowsDefenderStatus()));
+    sendJSON(res, 200, redactWebResponse(dashboard.onWindowsDefenderStatus()));
     return true;
   }
 
@@ -423,7 +423,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       return true;
     }
     const result = await dashboard.onWindowsDefenderRefresh();
-    sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+    sendJSON(res, 200, redactWebResponse(result));
     context.maybeEmitUIInvalidation(result, ['security'], 'windows-defender.refreshed', url.pathname);
     return true;
   }
@@ -446,7 +446,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
         return true;
       }
       const result = await dashboard.onWindowsDefenderScan({ type, path });
-      sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+      sendJSON(res, 200, redactWebResponse(result));
       context.maybeEmitUIInvalidation(result, ['security'], 'windows-defender.scan.requested', url.pathname);
       return true;
     } catch (err) {
@@ -461,7 +461,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       return true;
     }
     const result = await dashboard.onWindowsDefenderUpdateSignatures();
-    sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+    sendJSON(res, 200, redactWebResponse(result));
     context.maybeEmitUIInvalidation(result, ['security'], 'windows-defender.signatures.updated', url.pathname);
     return true;
   }
@@ -472,7 +472,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       return true;
     }
     const result = await dashboard.onNetworkScan();
-    sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+    sendJSON(res, 200, redactWebResponse(result));
     context.maybeEmitUIInvalidation(result, ['network', 'automations', 'security'], 'network.scan.completed', url.pathname);
     return true;
   }
@@ -482,7 +482,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onHostMonitorStatus()));
+    sendJSON(res, 200, redactWebResponse(dashboard.onHostMonitorStatus()));
     return true;
   }
 
@@ -493,7 +493,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
     const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onHostMonitorAlerts({
+    sendJSON(res, 200, redactWebResponse(dashboard.onHostMonitorAlerts({
       includeAcknowledged,
       limit: Number.isFinite(limit) ? limit : 100,
     })));
@@ -527,7 +527,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       return true;
     }
     const result = await dashboard.onHostMonitorCheck();
-    sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+    sendJSON(res, 200, redactWebResponse(result));
     context.emitUIInvalidation(['security'], 'host-monitor.check.completed', url.pathname);
     return true;
   }
@@ -537,7 +537,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onGatewayMonitorStatus()));
+    sendJSON(res, 200, redactWebResponse(dashboard.onGatewayMonitorStatus()));
     return true;
   }
 
@@ -548,7 +548,7 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
     }
     const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
     const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
-    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onGatewayMonitorAlerts({
+    sendJSON(res, 200, redactWebResponse(dashboard.onGatewayMonitorAlerts({
       includeAcknowledged,
       limit: Number.isFinite(limit) ? limit : 100,
     })));
@@ -582,32 +582,10 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       return true;
     }
     const result = await dashboard.onGatewayMonitorCheck();
-    sendJSON(res, 200, redactSecurityMonitoringResponse(result));
+    sendJSON(res, 200, redactWebResponse(result));
     context.emitUIInvalidation(['security'], 'gateway-monitor.check.completed', url.pathname);
     return true;
   }
 
   return false;
-}
-
-function redactSecurityMonitoringResponse<T>(value: T): T {
-  return redactSecurityMonitoringValue(value) as T;
-}
-
-function redactSecurityMonitoringValue(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return redactSensitiveText(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactSecurityMonitoringValue(item));
-  }
-  if (value && typeof value === 'object') {
-    const keyRedacted = redactSensitiveValue(value);
-    if (!keyRedacted || typeof keyRedacted !== 'object' || Array.isArray(keyRedacted)) {
-      return redactSecurityMonitoringValue(keyRedacted);
-    }
-    return Object.fromEntries(Object.entries(keyRedacted as Record<string, unknown>)
-      .map(([key, child]) => [key, redactSecurityMonitoringValue(child)]));
-  }
-  return value;
 }

@@ -5108,6 +5108,12 @@ describe('WebChannel', () => {
                 timestamp: Date.now(),
                 stage: 'dispatch_response',
                 requestId: 'req-1',
+                details: {
+                  apiKey: 'sk-test-routing-trace-secret',
+                  nested: { token: 'slack-token-fixture-routingsecret' },
+                  note: 'Observed AWS key AKIAIOSFODNN7EXAMPLE in routing details.',
+                },
+                contentPreview: 'Authorization: Bearer routing-secret-token-123456',
                 matchedRun: {
                   runId: 'req-1',
                   title: 'Fix repo',
@@ -5139,6 +5145,8 @@ describe('WebChannel', () => {
             focusItemId?: string;
             focusItemHref?: string;
           };
+          details?: { apiKey?: unknown; nested?: { token?: unknown } };
+          contentPreview?: string;
         }>;
       };
       expect(body.entries).toHaveLength(1);
@@ -5154,17 +5162,54 @@ describe('WebChannel', () => {
         focusItemTitle: 'Assembled context',
         focusItemHref: '#/automations?assistantRunId=req-1&assistantRunItemId=item-context',
       });
+      expect(body.entries[0]?.details?.apiKey).toBe('[REDACTED]');
+      expect(body.entries[0]?.details?.nested?.token).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('sk-test-routing-trace-secret');
+      expect(JSON.stringify(body)).not.toContain('slack-token-fixture-routingsecret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      expect(JSON.stringify(body)).not.toContain('routing-secret-token-123456');
     });
 
     it('GET /api/assistant/runs should forward continuity and execution-ref filters', async () => {
       let receivedArgs: Record<string, unknown> | null = null;
+      const now = Date.now();
       web = new WebChannel({
         port: 18979,
         authToken: TEST_TOKEN,
         dashboard: {
           onAssistantRuns: (args) => {
             receivedArgs = args as Record<string, unknown>;
-            return { runs: [] };
+            return {
+              runs: [{
+                summary: {
+                  runId: 'run-redact-1',
+                  groupId: 'web:web-user',
+                  kind: 'assistant_dispatch',
+                  status: 'completed',
+                  title: 'Run with token sk-test-run-list-secret',
+                  startedAt: now,
+                  completedAt: now + 1,
+                  lastUpdatedAt: now + 1,
+                  pendingApprovalCount: 0,
+                  verificationPendingCount: 0,
+                  tags: ['web'],
+                },
+                items: [{
+                  id: 'item-redact-1',
+                  runId: 'run-redact-1',
+                  timestamp: now + 1,
+                  type: 'note',
+                  status: 'info',
+                  source: 'system',
+                  title: 'Tool output',
+                  detail: 'Observed AWS key AKIAIOSFODNN7EXAMPLE in run detail.',
+                }],
+                liveSummary: {
+                  label: 'Bearer run-live-secret-token-123456',
+                  items: [{ title: 'Done', detail: 'slack-token-fixture-runsecret' }],
+                },
+              }],
+            };
           },
         },
       });
@@ -5176,8 +5221,16 @@ describe('WebChannel', () => {
       );
 
       expect(res.status).toBe(200);
-      const body = await res.json() as { runs: unknown[] };
-      expect(body.runs).toEqual([]);
+      const body = await res.json() as { runs: Array<{
+        summary: { title: string };
+        items: Array<{ detail?: string }>;
+        liveSummary: { label: string; items: Array<{ detail?: string }> };
+      }> };
+      expect(body.runs).toHaveLength(1);
+      expect(JSON.stringify(body)).not.toContain('sk-test-run-list-secret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      expect(JSON.stringify(body)).not.toContain('run-live-secret-token-123456');
+      expect(JSON.stringify(body)).not.toContain('slack-token-fixture-runsecret');
       expect(receivedArgs).toEqual({
         limit: 5,
         continuityKey: 'continuity-1',

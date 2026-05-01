@@ -3,7 +3,7 @@ import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readJsonBody, sendJSON } from './web-json.js';
 import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
-import { redactSensitiveText, redactSensitiveValue } from '../util/crypto-guardrails.js';
+import { redactWebResponse } from './web-redaction.js';
 
 type PrivilegedTicketAction =
   | 'auth.config'
@@ -223,7 +223,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const before = url.searchParams.get('before');
     if (before) filter.before = parseInt(before, 10);
 
-    sendJSON(res, 200, redactAuditResponse(dashboard.onAuditQuery(filter)));
+    sendJSON(res, 200, redactWebResponse(dashboard.onAuditQuery(filter)));
     return true;
   }
 
@@ -1423,7 +1423,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
     const continuityKey = trimOptionalString(url.searchParams.get('continuityKey'));
     const activeExecutionRef = trimOptionalString(url.searchParams.get('activeExecutionRef'));
-    sendJSON(res, 200, dashboard.onAssistantRuns({
+    sendJSON(res, 200, redactWebResponse(dashboard.onAssistantRuns({
       limit: Number.isFinite(limit) ? limit : 20,
       ...(status ? { status } : {}),
       ...(kind ? { kind } : {}),
@@ -1433,7 +1433,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       ...(codeSessionId ? { codeSessionId } : {}),
       ...(continuityKey ? { continuityKey } : {}),
       ...(activeExecutionRef ? { activeExecutionRef } : {}),
-    }));
+    })));
     return true;
   }
 
@@ -1455,7 +1455,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const agentId = trimOptionalString(url.searchParams.get('agentId'));
     const userId = trimOptionalString(url.searchParams.get('userId'));
     const requestId = trimOptionalString(url.searchParams.get('requestId'));
-    sendJSON(res, 200, await dashboard.onIntentRoutingTrace({
+    sendJSON(res, 200, redactWebResponse(await dashboard.onIntentRoutingTrace({
       limit: Number.isFinite(limit) ? limit : 20,
       ...(continuityKey ? { continuityKey } : {}),
       ...(activeExecutionRef ? { activeExecutionRef } : {}),
@@ -1469,7 +1469,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       ...(agentId ? { agentId } : {}),
       ...(userId ? { userId } : {}),
       ...(requestId ? { requestId } : {}),
-    }));
+    })));
     return true;
   }
 
@@ -1487,7 +1487,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       sendJSON(res, 404, { error: 'Run not found' });
       return true;
     }
-    sendJSON(res, 200, result);
+    sendJSON(res, 200, redactWebResponse(result));
     return true;
   }
 
@@ -1523,26 +1523,4 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
   }
 
   return false;
-}
-
-function redactAuditResponse<T>(value: T): T {
-  return redactAuditValue(value) as T;
-}
-
-function redactAuditValue(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return redactSensitiveText(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactAuditValue(item));
-  }
-  if (value && typeof value === 'object') {
-    const keyRedacted = redactSensitiveValue(value);
-    if (!keyRedacted || typeof keyRedacted !== 'object' || Array.isArray(keyRedacted)) {
-      return redactAuditValue(keyRedacted);
-    }
-    return Object.fromEntries(Object.entries(keyRedacted as Record<string, unknown>)
-      .map(([key, child]) => [key, redactAuditValue(child)]));
-  }
-  return value;
 }
