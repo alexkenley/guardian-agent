@@ -14,6 +14,10 @@
  * Against a running instance:
  *   HARNESS_PORT=3000 HARNESS_TOKEN=your-token SKIP_START=1 node scripts/test-m365.mjs
  *
+ * Live authenticated status-only lane:
+ *   HARNESS_HOST=localhost HARNESS_PORT=3000 SKIP_START=1 HARNESS_STATUS_ONLY=1 node scripts/test-m365.mjs
+ *   node scripts/test-m365.mjs --status-only
+ *
  * See docs/guides/INTEGRATION-TEST-HARNESS.md for full documentation.
  */
 
@@ -26,10 +30,12 @@ import { spawn } from 'node:child_process';
 import { DEFAULT_HARNESS_OLLAMA_MODEL } from './ollama-harness-defaults.mjs';
 
 const HARNESS_PORT = parseInt(process.env.HARNESS_PORT || '3015', 10);
+const HARNESS_HOST = process.env.HARNESS_HOST || '127.0.0.1';
 const HARNESS_TOKEN = process.env.HARNESS_TOKEN || `test-m365-${Date.now()}`;
 const HARNESS_MODEL = process.env.HARNESS_OLLAMA_MODEL?.trim() || DEFAULT_HARNESS_OLLAMA_MODEL;
 const SKIP_START = process.env.SKIP_START === '1';
-const BASE_URL = `http://127.0.0.1:${HARNESS_PORT}`;
+const STATUS_ONLY = process.env.HARNESS_STATUS_ONLY === '1' || process.argv.includes('--status-only');
+const BASE_URL = `http://${HARNESS_HOST}:${HARNESS_PORT}`;
 const TEMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-m365-'));
 const CONFIG_PATH = path.join(TEMP_DIR, 'config.yaml');
 const LOG_FILE = path.join(TEMP_DIR, 'guardian.log');
@@ -551,6 +557,50 @@ async function testMicrosoftApiRoutes() {
   }
 }
 
+async function testMicrosoftStatusOnly() {
+  log('');
+  log('=== Microsoft Live Status-Only Checks ===');
+
+  try {
+    const status = await request('GET', '/api/microsoft/status');
+    if (status?.authenticated === true) {
+      logPass('api: /api/microsoft/status authenticated');
+    } else if (typeof status?.authenticated === 'boolean') {
+      logFail('api: /api/microsoft/status authenticated', `authenticated=${status.authenticated}`);
+    } else {
+      logFail('api: /api/microsoft/status', `unexpected response: ${JSON.stringify(status).slice(0, 200)}`);
+    }
+  } catch (e) {
+    logFail('api: /api/microsoft/status', e.message);
+  }
+
+  const statusTool = await toolRun('m365_status', {});
+  if (statusTool.status === 'pending_approval') {
+    logFail('tool: m365_status', 'status-only tool required approval');
+  } else if (statusTool.success === true && statusTool.output?.authenticated === true) {
+    logPass('tool: m365_status authenticated without content read');
+  } else {
+    logFail('tool: m365_status', `status=${statusTool.status}, msg=${statusTool.message || statusTool.error}`);
+  }
+
+  const schemaTool = await toolRun('m365_schema', { schemaPath: 'mail.messages.list' });
+  if (schemaTool.status === 'pending_approval') {
+    logFail('tool: m365_schema', 'read-only schema lookup required approval');
+  } else if (schemaTool.success === true || schemaTool.status === 'succeeded') {
+    logPass('tool: m365_schema executes without approval');
+  } else {
+    logFail('tool: m365_schema', `status=${schemaTool.status}, msg=${schemaTool.message || schemaTool.error}`);
+  }
+
+  const jobs = await getJobs(30);
+  const statusJobs = jobs.filter(j => j.toolName?.match(/m365_status|m365_schema/));
+  if (statusJobs.length > 0) {
+    logPass('job history: M365 status/schema executions recorded');
+  } else {
+    logFail('job history', 'no M365 status/schema jobs recorded');
+  }
+}
+
 async function testJobHistory() {
   log('');
   log('=== Job History ===');
@@ -607,6 +657,21 @@ async function run() {
       }
     }
   } catch { /* ignore */ }
+
+  if (STATUS_ONLY) {
+    await testMicrosoftStatusOnly();
+
+    console.log('');
+    console.log('============================================');
+    console.log(`  \x1b[32mPASS: ${pass}\x1b[0m  \x1b[31mFAIL: ${fail}\x1b[0m  \x1b[33mSKIP: ${skip}\x1b[0m  Total: ${pass + fail + skip}`);
+    console.log('============================================');
+    console.log('');
+
+    if (fail > 0) {
+      log(`Full app log: ${LOG_FILE}`);
+    }
+    return;
+  }
 
   // Run tests
   const toolRegistered = await testPrerequisites();

@@ -25,11 +25,18 @@
 .PARAMETER Token
     Auth token (default: auto-generated, or env HARNESS_TOKEN).
 
+.PARAMETER StatusOnly
+    Validate live Google auth/status and schema surfaces without reading content,
+    changing tool policy, or exercising write/approval probes.
+
 .EXAMPLE
     .\scripts\test-gws.ps1
 
 .EXAMPLE
     .\scripts\test-gws.ps1 -SkipStart -Port 3000 -Token "your-token"
+
+.EXAMPLE
+    .\scripts\test-gws.ps1 -SkipStart -Port 3000 -StatusOnly
 
 .NOTES
     See docs/guides/INTEGRATION-TEST-HARNESS.md for full documentation.
@@ -40,6 +47,7 @@
 param(
     [switch]$SkipStart,
     [switch]$Keep,
+    [switch]$StatusOnly,
     [int]$Port = $( if ($env:HARNESS_PORT) { [int]$env:HARNESS_PORT } else { 3000 } ),
     [string]$Token = $( if ($env:HARNESS_TOKEN) { $env:HARNESS_TOKEN } else { "test-gws-$(Get-Date -Format 'yyyyMMddHHmmss')" } )
 )
@@ -393,6 +401,98 @@ try {
 }
 catch {
     Write-Log "LLM Provider: could not query /api/providers"
+}
+
+if ($StatusOnly) {
+    Write-Host ""
+    Write-Log "=== GWS Live Status-Only Checks ==="
+
+    try {
+        $googleStatus = Invoke-RestMethod -Uri "$BaseUrl/api/google/status" `
+            -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 10
+        if ($googleStatus.authenticated -eq $true) {
+            Write-Pass "api: /api/google/status authenticated"
+        }
+        elseif ($null -ne $googleStatus.authenticated) {
+            Write-Fail "api: /api/google/status authenticated" "authenticated=$($googleStatus.authenticated)"
+        }
+        else {
+            Write-Fail "api: /api/google/status" "missing authenticated field"
+        }
+    }
+    catch {
+        Write-Fail "api: /api/google/status" $_.Exception.Message
+    }
+
+    try {
+        $legacyStatus = Invoke-RestMethod -Uri "$BaseUrl/api/gws/status" `
+            -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 10
+        if ($legacyStatus.authenticated -eq $true -and $legacyStatus.authMethod -eq "native_oauth") {
+            Write-Pass "api: /api/gws/status maps native OAuth compatibility status"
+        }
+        else {
+            Write-Fail "api: /api/gws/status" "unexpected response: $(($legacyStatus | ConvertTo-Json -Compress -Depth 4))"
+        }
+    }
+    catch {
+        Write-Fail "api: /api/gws/status" $_.Exception.Message
+    }
+
+    $statusTool = Invoke-ToolRun -ToolName "gws_status" -ToolArgs @{}
+    if ($statusTool.success -eq $true -and $statusTool.output.authenticated -eq $true) {
+        Write-Pass "tool: gws_status authenticated without content read"
+    }
+    elseif ($statusTool.status -eq "pending_approval") {
+        Write-Fail "tool: gws_status" "status-only tool required approval"
+    }
+    else {
+        Write-Fail "tool: gws_status" "status=$($statusTool.status), message=$($statusTool.message)"
+    }
+
+    $schemaTool = Invoke-ToolRun -ToolName "gws_schema" -ToolArgs @{ schemaPath = "gmail.users.messages.list" }
+    if ($schemaTool.status -eq "pending_approval") {
+        Write-Fail "tool: gws_schema" "read-only schema lookup required approval"
+    }
+    elseif ($schemaTool.success -eq $true -or $schemaTool.status -eq "succeeded") {
+        Write-Pass "tool: gws_schema executes without approval"
+    }
+    else {
+        Write-Fail "tool: gws_schema" "status=$($schemaTool.status), message=$($schemaTool.message)"
+    }
+
+    try {
+        $state = Invoke-RestMethod -Uri "$BaseUrl/api/tools?limit=30" `
+            -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 5
+        $statusJobs = $state.jobs | Where-Object { $_.toolName -match "gws_status|gws_schema" }
+        if ($statusJobs -and $statusJobs.Count -gt 0) {
+            Write-Pass "job history: GWS status/schema executions recorded"
+        }
+        else {
+            Write-Fail "job history" "no GWS status/schema jobs recorded"
+        }
+    }
+    catch {
+        Write-Fail "job history" $_.Exception.Message
+    }
+
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "  PASS: $Pass  " -ForegroundColor Green -NoNewline
+    Write-Host "FAIL: $Fail  " -ForegroundColor Red -NoNewline
+    Write-Host "SKIP: $Skip  " -ForegroundColor Yellow -NoNewline
+    Write-Host "Total: $($Pass + $Fail + $Skip)"
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    if ($Fail -gt 0) {
+        Write-Host "Failed tests:" -ForegroundColor Red
+        foreach ($r in $Results) {
+            if ($r.StartsWith("FAIL")) { Write-Host "  $r" }
+        }
+        Write-Host ""
+    }
+
+    exit $Fail
 }
 
 # ===============================================================

@@ -767,7 +767,7 @@ Verifies that all tool executions from the test session are recorded in the job 
 
 ### Google Workspace Suite (`test-gws.ps1`, ~25+ assertions)
 
-Tests Google Workspace tool integration: discovery, content-reading operations, write approval gating, and schema lookup through the native Google Workspace integration. Content-read tests require Google Workspace to be connected through the web UI and skip gracefully when the account is not authenticated. For Gmail, Google Calendar, or Google Workspace status-only requests, prefer `gws_status`; it reports connection, enabled-service state, configured scopes, and content-read prerequisites without reading mailbox, calendar, Drive, Docs, Sheets, or Contacts contents.
+Tests Google Workspace tool integration: discovery, content-reading operations, write approval gating, and schema lookup through the native Google Workspace integration. Content-read tests require Google Workspace to be connected through the web UI and skip gracefully when the account is not authenticated. For Gmail, Google Calendar, or Google Workspace status-only requests, prefer `gws_status`; it reports connection, enabled-service state, configured scopes, and content-read prerequisites without reading mailbox, calendar, Drive, Docs, Sheets, or Contacts contents. Against a live authenticated account, run `.\scripts\test-gws.ps1 -SkipStart -Port 3000 -StatusOnly` to validate `/api/google/status`, legacy `/api/gws/status` compatibility, `gws_status`, `gws_schema`, and job history without content reads, policy changes, or write probes.
 
 **Prerequisite:** Probes GWS availability via a direct `POST /api/tools/run` call with a Gmail read. Content-read tests skip if GWS is not enabled or the Google account is not connected. Status-only `gws_status` coverage should not depend on a content-read probe.
 
@@ -796,6 +796,10 @@ Tests Google Workspace tool integration: discovery, content-reading operations, 
 
 #### Approval Lifecycle
 Each write approval test denies the pending approval via `POST /api/tools/approvals/decision` and verifies the denial is accepted.
+
+### Microsoft 365 Suite (`test-m365.mjs`, ~34 assertions)
+
+Tests Microsoft 365 tool registration, approval gating, schema lookup, read passthrough, and web API routes. Full runs include denied write-approval probes and autonomous-mode semantics checks, so do not run the full harness against a live authenticated account unless disposable test data is acceptable. Against a live authenticated account, run `HARNESS_HOST=localhost HARNESS_PORT=3000 SKIP_START=1 HARNESS_STATUS_ONLY=1 node scripts/test-m365.mjs` to validate `/api/microsoft/status`, `m365_status`, `m365_schema`, and job history without mailbox, calendar, OneDrive, contact, policy, disconnect, or write probes.
 
 ### Network Tools Suite (`test-network.ps1`, ~10 assertions)
 
