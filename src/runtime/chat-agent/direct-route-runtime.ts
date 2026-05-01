@@ -15,8 +15,13 @@ import {
   hasRequiredToolBackedAnswerPlan,
 } from '../intent/planned-steps.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
-import type { PendingActionRecord } from '../pending-actions.js';
 import {
+  toPendingActionClientMetadata,
+  type PendingActionBlocker,
+  type PendingActionRecord,
+} from '../pending-actions.js';
+import {
+  parseDirectFilesystemSaveReference,
   parseDirectFilesystemSaveIntent,
   parseDirectFileSearchIntent,
 } from '../search-intent.js';
@@ -25,6 +30,8 @@ import {
 } from './chat-continuation-payloads.js';
 import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
+
+const FILESYSTEM_SAVE_TARGET_CLARIFICATION_PROMPT = 'What file name or full path should I use to save the previous assistant output?';
 
 export interface DirectRouteRuntimeResponse {
   content: string;
@@ -41,6 +48,7 @@ export function readLatestAssistantOutput(input: {
     const entry = history[index];
     if (entry?.role !== 'assistant') continue;
     const content = entry.content.trim();
+    if (content === FILESYSTEM_SAVE_TARGET_CLARIFICATION_PROMPT) continue;
     if (content) return content;
   }
   return '';
@@ -64,6 +72,26 @@ export interface DirectFilesystemIntentInput {
     approvalId: string,
     copy: { approved?: string; denied?: string },
   ) => void;
+  parsePendingActionUserKey?: (userKey: string) => { userId: string; channel: string };
+  setClarificationPendingAction?: (
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: {
+      blockerKind: PendingActionBlocker['kind'];
+      field?: string;
+      prompt: string;
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      provenance?: PendingActionRecord['intent']['provenance'];
+      entities?: Record<string, unknown>;
+    },
+  ) => PendingActionSetResult;
   getPendingApprovals: (
     userKey: string,
     surfaceId?: string,
@@ -100,11 +128,11 @@ export interface DirectFilesystemIntentInput {
 }
 
 export async function tryDirectFilesystemIntent(input: DirectFilesystemIntentInput): Promise<string | DirectRouteRuntimeResponse | null> {
+  const directSave = await tryDirectFilesystemSave(input);
+  if (directSave) return directSave;
   if (shouldDeferFilesystemIntentToOrchestration(input)) {
     return null;
   }
-  const directSave = await tryDirectFilesystemSave(input);
-  if (directSave) return directSave;
   return tryDirectFilesystemSearch(input);
 }
 
@@ -146,7 +174,13 @@ export async function tryDirectFilesystemSave(input: DirectFilesystemIntentInput
     fallbackDirectory: input.codeContext?.workspaceRoot,
     pathHint,
   });
-  if (!intent) return null;
+  if (!intent) {
+    const missingTarget = parseDirectFilesystemSaveReference(stripLeadingContextPrefix(input.message.content), { pathHint })
+      ?? parseDirectFilesystemSaveReference(stripLeadingContextPrefix(input.originalUserContent ?? ''), { pathHint });
+    return missingTarget
+      ? buildMissingFilesystemSaveTargetResponse(input)
+      : null;
+  }
 
   const lastAssistantOutput = readLatestAssistantOutput({
     conversationService: input.conversationService,
@@ -171,6 +205,41 @@ export async function tryDirectFilesystemSave(input: DirectFilesystemIntentInput
     codeContext: input.codeContext,
     allowPathRemediation: true,
   });
+}
+
+function buildMissingFilesystemSaveTargetResponse(input: DirectFilesystemIntentInput): DirectRouteRuntimeResponse {
+  const prompt = FILESYSTEM_SAVE_TARGET_CLARIFICATION_PROMPT;
+  if (!input.parsePendingActionUserKey || !input.setClarificationPendingAction) {
+    return { content: prompt };
+  }
+  const { userId, channel } = input.parsePendingActionUserKey(input.userKey);
+  const pendingActionResult = input.setClarificationPendingAction(
+    userId,
+    channel,
+    input.message.surfaceId,
+    {
+      blockerKind: 'clarification',
+      field: 'path',
+      prompt,
+      originalUserContent: input.message.content,
+      route: 'filesystem_task',
+      operation: 'save',
+      summary: 'Save the previous assistant output to a file.',
+      turnRelation: input.gatewayDecision?.turnRelation ?? 'new_request',
+      resolution: 'needs_clarification',
+      missingFields: ['path'],
+      provenance: input.gatewayDecision?.provenance,
+      ...(input.gatewayDecision?.entities
+        ? { entities: { ...input.gatewayDecision.entities } }
+        : {}),
+    },
+  );
+  return {
+    content: pendingActionResult.collisionPrompt ?? prompt,
+    metadata: pendingActionResult.action
+      ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) }
+      : undefined,
+  };
 }
 
 export async function tryDirectFilesystemSearch(input: DirectFilesystemIntentInput) {

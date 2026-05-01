@@ -4,6 +4,7 @@ import {
   extractSearchQuery,
   isDirectBrowserAutomationIntent,
   parseDirectFileSearchIntent,
+  parseDirectFilesystemSaveReference,
   parseDirectFilesystemSaveIntent,
   parseWebSearchIntent,
 } from './search-intent.js';
@@ -88,6 +89,19 @@ describe('search-intent parser', () => {
       path: 'S:\\Development\\GuardianAgent\\routing-review.txt',
       source: 'last_assistant_output',
     });
+  });
+
+  it('does not treat a generic "text file" descriptor as the filename for an assistant-output save', () => {
+    const text = 'Can you save that information as a text file?';
+    const reference = parseDirectFilesystemSaveReference(text);
+    const intent = parseDirectFilesystemSaveIntent(text, {
+      fallbackDirectory: 'S:\\Development\\GuardianAgent',
+    });
+
+    expect(reference).toEqual({
+      source: 'last_assistant_output',
+    });
+    expect(intent).toBeNull();
   });
 
   it('detects explicit browser URL automation requests', () => {

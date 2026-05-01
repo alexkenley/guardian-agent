@@ -402,10 +402,12 @@ export function inferExplicitFilesystemTaskOperation(
   }
   const parsedIsMutating = parsedOperation === 'create'
     || parsedOperation === 'update'
-    || parsedOperation === 'delete';
+    || parsedOperation === 'delete'
+    || parsedOperation === 'save';
   const inferredIsMutating = inferredOperation === 'create'
     || inferredOperation === 'update'
-    || inferredOperation === 'delete';
+    || inferredOperation === 'delete'
+    || inferredOperation === 'save';
   if (!parsedIsMutating && inferredIsMutating) {
     return inferredOperation;
   }
@@ -422,7 +424,10 @@ export function hasExplicitRepoPathReference(normalized: string): boolean {
 }
 
 function inferFilesystemOperationFromVerbs(normalized: string): IntentGatewayOperation | null {
-  if (/\b(?:create|add|make|write|save|store|put|touch|mkdir)\b/.test(normalized)) {
+  if (/\b(?:save|store|export)\b/.test(normalized)) {
+    return 'save';
+  }
+  if (/\b(?:create|add|make|write|put|touch|mkdir)\b/.test(normalized)) {
     return 'create';
   }
   if (/\b(?:update|edit|change|modify|append|rename|move|copy)\b/.test(normalized)) {

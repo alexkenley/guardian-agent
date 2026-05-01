@@ -16,6 +16,12 @@ export interface DirectFilesystemSaveIntent {
   source: 'last_assistant_output';
 }
 
+export interface DirectFilesystemSaveReference {
+  source: 'last_assistant_output';
+  explicitPath?: string;
+  fileName?: string;
+}
+
 interface DirectFileSearchIntentOptions {
   fallbackPath?: string;
 }
@@ -121,19 +127,14 @@ export function parseDirectFilesystemSaveIntent(
   content: string,
   options: DirectFilesystemSaveIntentOptions = {},
 ): DirectFilesystemSaveIntent | null {
-  const text = content.trim();
-  if (!text) return null;
-  if (!/\b(save|write|export|store|put)\b/i.test(text)) return null;
-  if (!/\b(last|previous)\s+(?:assistant\s+)?(?:output|response|reply|answer|message)\b/i.test(text)
-    && !/\b(?:save|write|export|store|put)\s+that\b/i.test(text)) {
-    return null;
-  }
+  const reference = parseDirectFilesystemSaveReference(content, options);
+  if (!reference) return null;
 
-  const explicitPath = sanitizePathHint(options.pathHint) ?? extractPathHint(text);
-  const fileName = extractFilesystemSaveFileName(text);
+  const explicitPath = reference.explicitPath;
+  const fileName = reference.fileName;
   if (explicitPath) {
     return {
-      path: shouldAppendFilesystemSaveFileName(explicitPath, fileName)
+      path: shouldAppendFilesystemSaveFileName(explicitPath, fileName ?? null)
         ? joinFilesystemSavePath(explicitPath, fileName!)
         : explicitPath,
       source: 'last_assistant_output',
@@ -148,6 +149,27 @@ export function parseDirectFilesystemSaveIntent(
   }
 
   return null;
+}
+
+export function parseDirectFilesystemSaveReference(
+  content: string,
+  options: DirectFilesystemSaveIntentOptions = {},
+): DirectFilesystemSaveReference | null {
+  const text = content.trim();
+  if (!text) return null;
+  if (!/\b(save|write|export|store|put)\b/i.test(text)) return null;
+  if (!/\b(last|previous)\s+(?:assistant\s+)?(?:output|response|reply|answer|message)\b/i.test(text)
+    && !/\b(?:save|write|export|store|put)\s+that\b/i.test(text)) {
+    return null;
+  }
+
+  const explicitPath = sanitizePathHint(options.pathHint) ?? extractPathHint(text) ?? undefined;
+  const fileName = extractFilesystemSaveFileName(text) ?? undefined;
+  return {
+    source: 'last_assistant_output',
+    ...(explicitPath ? { explicitPath } : {}),
+    ...(fileName ? { fileName } : {}),
+  };
 }
 
 export function extractSearchQuery(text: string): string | null {
@@ -202,6 +224,17 @@ function normalizeFilesystemSaveFileName(value: string | undefined): string | nu
   if (!value) return null;
   const cleaned = value.trim().replace(/[.,;:!?]+$/, '');
   if (!cleaned) return null;
+  const genericDescriptor = cleaned.toLowerCase().replace(/\s+/g, ' ');
+  if ([
+    'a file',
+    'a text file',
+    'a document',
+    'file',
+    'text file',
+    'document',
+  ].includes(genericDescriptor)) {
+    return null;
+  }
   if (cleaned.includes('/') || cleaned.includes('\\')) return null;
   return cleaned;
 }

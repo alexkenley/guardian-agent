@@ -293,6 +293,8 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       conversationService: input.conversationService,
       executeStoredFilesystemSave: input.executeStoredFilesystemSave,
       setApprovalFollowUp: input.runtimeDeps.setApprovalFollowUp,
+      parsePendingActionUserKey: input.runtimeDeps.parsePendingActionUserKey,
+      setClarificationPendingAction: input.runtimeDeps.setClarificationPendingAction,
       getPendingApprovals: input.runtimeDeps.getPendingApprovals,
       formatPendingApprovalPrompt: input.runtimeDeps.formatPendingApprovalPrompt,
       setPendingApprovalActionForRequest: input.runtimeDeps.setPendingApprovalActionForRequest,

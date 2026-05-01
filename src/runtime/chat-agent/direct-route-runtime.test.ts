@@ -105,6 +105,109 @@ describe('direct route filesystem runtime', () => {
     expect(tools.executeModelTool).not.toHaveBeenCalled();
   });
 
+  it('asks for a save target instead of delegating an assistant-output save with no path', async () => {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(),
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({})),
+    };
+    const executeStoredFilesystemSave = vi.fn();
+    const setClarificationPendingAction = vi.fn(() => ({ action: null }));
+
+    const result = await tryDirectFilesystemIntent({
+      message: message('Can you save that information as a text file?'),
+      ctx: context(),
+      userKey: 'owner:web',
+      conversationKey: { agentId: 'default', userId: 'owner', channel: 'web' },
+      codeContext: { workspaceRoot: 'S:/Development/TestApp', sessionId: 'code-1' },
+      gatewayDecision: decision({
+        operation: 'create',
+        summary: 'Save the previous answer to a file.',
+        plannedSteps: [
+          { kind: 'write', summary: 'Write a text file.', required: true },
+        ],
+      }),
+      agentId: 'default',
+      tools,
+      conversationService: { getSessionHistory: vi.fn(() => [{ role: 'assistant', content: 'Config options overview.' }]) },
+      executeStoredFilesystemSave,
+      setApprovalFollowUp: vi.fn(),
+      parsePendingActionUserKey: vi.fn(() => ({ userId: 'owner', channel: 'web' })),
+      setClarificationPendingAction,
+      getPendingApprovals: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => ''),
+      setPendingApprovalActionForRequest: vi.fn(),
+      buildPendingApprovalBlockedResponse: vi.fn(),
+    });
+
+    expect(result).toMatchObject({
+      content: 'What file name or full path should I use to save the previous assistant output?',
+    });
+    expect(setClarificationPendingAction).toHaveBeenCalledWith(
+      'owner',
+      'web',
+      undefined,
+      expect.objectContaining({
+        blockerKind: 'clarification',
+        field: 'path',
+        route: 'filesystem_task',
+        operation: 'save',
+        missingFields: ['path'],
+      }),
+    );
+    expect(executeStoredFilesystemSave).not.toHaveBeenCalled();
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+  });
+
+  it('saves the original assistant output after a save-target clarification answer', async () => {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(),
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({})),
+    };
+    const executeStoredFilesystemSave = vi.fn(async () => 'saved');
+
+    const result = await tryDirectFilesystemIntent({
+      message: message('Use path S:/Development/TestApp/config-options.txt for this request: Can you save that information as a text file?'),
+      ctx: context(),
+      userKey: 'owner:web',
+      conversationKey: { agentId: 'default', userId: 'owner', channel: 'web' },
+      codeContext: { workspaceRoot: 'S:/Development/TestApp', sessionId: 'code-1' },
+      gatewayDecision: decision({
+        operation: 'save',
+        turnRelation: 'clarification_answer',
+        entities: { path: 'S:/Development/TestApp/config-options.txt' },
+        plannedSteps: undefined,
+      }),
+      agentId: 'default',
+      tools,
+      conversationService: {
+        getSessionHistory: vi.fn(() => [
+          { role: 'assistant', content: 'Config options overview.' },
+          { role: 'assistant', content: 'What file name or full path should I use to save the previous assistant output?' },
+        ]),
+      },
+      executeStoredFilesystemSave,
+      setApprovalFollowUp: vi.fn(),
+      parsePendingActionUserKey: vi.fn(() => ({ userId: 'owner', channel: 'web' })),
+      setClarificationPendingAction: vi.fn(),
+      getPendingApprovals: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => ''),
+      setPendingApprovalActionForRequest: vi.fn(),
+      buildPendingApprovalBlockedResponse: vi.fn(),
+    });
+
+    expect(result).toBe('saved');
+    expect(executeStoredFilesystemSave).toHaveBeenCalledWith(expect.objectContaining({
+      targetPath: 'S:/Development/TestApp/config-options.txt',
+      content: 'Config options overview.',
+      originalUserContent: 'Use path S:/Development/TestApp/config-options.txt for this request: Can you save that information as a text file?',
+    }));
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+  });
+
   it('defers repo-grounded search and answer requests to synthesis orchestration', async () => {
     const tools = {
       isEnabled: vi.fn(() => true),

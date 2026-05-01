@@ -1031,6 +1031,47 @@ describe('IntentGateway', () => {
     expect(result.decision.summary).toContain('exact external path');
   });
 
+  it('preserves assistant-output filesystem saves as save operations during structured repair', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Can you save that information as a text file?',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'filesystem_task',
+          confidence: 'low',
+          operation: 'save',
+          summary: 'Save the previous assistant answer as a text file.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          plannedSteps: [
+            {
+              kind: 'read',
+              summary: 'Read the previous assistant answer.',
+              required: true,
+              expectedToolCategories: ['search', 'read'],
+            },
+            {
+              kind: 'answer',
+              summary: 'Confirm the save target.',
+              required: true,
+              dependsOn: ['step_1'],
+            },
+          ],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('filesystem_task');
+    expect(result.decision.operation).toBe('save');
+  });
+
   it('drops generic "current attached" session targets from structured gateway output', async () => {
     const gateway = new IntentGateway();
 
