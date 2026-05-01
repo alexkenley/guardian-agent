@@ -3939,7 +3939,14 @@ describe('WebChannel', () => {
       onAgentDetail: (id) => id === 'agent-1' ? mockDetail : null,
       onAuditQuery: (filter) => [{
         id: 'audit-1', timestamp: Date.now(), type: 'action_denied' as const,
-        severity: 'warn' as const, agentId: 'agent-1', details: { reason: 'test' },
+        severity: 'warn' as const,
+        agentId: 'agent-1',
+        details: {
+          reason: 'test',
+          apiKey: 'sk-test-audit-route-secret',
+          nested: { token: 'slack-token-fixture-auditsecret' },
+          note: 'Observed AWS key AKIAIOSFODNN7EXAMPLE in audit details.',
+        },
       }],
       onAuditSummary: (windowMs) => ({
         totalEvents: 5, byType: { action_denied: 2 }, bySeverity: { info: 1, warn: 3, critical: 1 },
@@ -4317,8 +4324,15 @@ describe('WebChannel', () => {
 
       const res = await fetch('http://localhost:18943/api/audit?type=action_denied&limit=10', { headers: authHeaders });
       expect(res.status).toBe(200);
-      const body = await res.json() as unknown[];
+      const body = await res.json() as Array<{
+        details?: { apiKey?: unknown; nested?: { token?: unknown } };
+      }>;
       expect(body.length).toBeGreaterThan(0);
+      expect(body[0]?.details?.apiKey).toBe('[REDACTED]');
+      expect(body[0]?.details?.nested?.token).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('sk-test-audit-route-secret');
+      expect(JSON.stringify(body)).not.toContain('slack-token-fixture-auditsecret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
     });
 
     it('GET /api/audit/summary should return summary', async () => {

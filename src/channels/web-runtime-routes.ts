@@ -3,6 +3,7 @@ import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readJsonBody, sendJSON } from './web-json.js';
 import { resolveWebSurfaceId } from '../runtime/channel-surface-ids.js';
+import { redactSensitiveText, redactSensitiveValue } from '../util/crypto-guardrails.js';
 
 type PrivilegedTicketAction =
   | 'auth.config'
@@ -222,7 +223,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     const before = url.searchParams.get('before');
     if (before) filter.before = parseInt(before, 10);
 
-    sendJSON(res, 200, dashboard.onAuditQuery(filter));
+    sendJSON(res, 200, redactAuditResponse(dashboard.onAuditQuery(filter)));
     return true;
   }
 
@@ -1522,4 +1523,26 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
   }
 
   return false;
+}
+
+function redactAuditResponse<T>(value: T): T {
+  return redactAuditValue(value) as T;
+}
+
+function redactAuditValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactSensitiveText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactAuditValue(item));
+  }
+  if (value && typeof value === 'object') {
+    const keyRedacted = redactSensitiveValue(value);
+    if (!keyRedacted || typeof keyRedacted !== 'object' || Array.isArray(keyRedacted)) {
+      return redactAuditValue(keyRedacted);
+    }
+    return Object.fromEntries(Object.entries(keyRedacted as Record<string, unknown>)
+      .map(([key, child]) => [key, redactAuditValue(child)]));
+  }
+  return value;
 }
