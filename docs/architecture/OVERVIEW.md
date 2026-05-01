@@ -29,8 +29,11 @@ Core principles:
 Current extensions:
 - **Native skills layer** for reusable procedural knowledge, templates, and task guidance
 - **Native Google and Microsoft connectors** for provider-owned mail, calendar, drive, docs, sheets, and contacts through direct OAuth integrations
+- **Second Brain product surface** for Guardian-owned tasks, notes, people, routines, briefs, and local calendar context
+- **Backend-owned Code sessions** with repo maps, working sets, trust review, PTY terminals, and session-bound file/diff APIs
 - **Brokered worker execution** for the built-in chat/planner path, enabled by default
-- **Strict sandbox availability model** that disables risky tools when strong OS isolation is unavailable
+- **Remote execution service** for bounded Vercel and Daytona sandbox jobs while Guardian keeps routing, approvals, memory, and audit local
+- **Strict sandbox availability model** that disables risky tools when strong OS isolation is unavailable and exposes degraded-host status to operators
 
 ## Architecture Diagram
 
@@ -110,11 +113,15 @@ Current extensions:
 │  └────────────────────────────────────────────────────────────────┘  │
 │                                                                       │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │                    External Integrations                       │  │
-│  │  ┌──────────────────┐  ┌──────────────────┐                   │  │
-│  │  │  MCP Client Mgr  │  │  Eval Runner     │                   │  │
-│  │  │  (tool servers)  │  │  (agent testing)  │                   │  │
-│  │  └──────────────────┘  └──────────────────┘                   │  │
+│  │              Capabilities, Providers, and Execution            │  │
+│  │  ┌────────────────┐ ┌────────────────┐ ┌────────────────────┐ │  │
+│  │  │ Second Brain   │ │ Code Sessions  │ │ Native Google/M365 │ │  │
+│  │  │ local context  │ │ repo context   │ │ provider adapters  │ │  │
+│  │  └────────────────┘ └────────────────┘ └────────────────────┘ │  │
+│  │  ┌────────────────┐ ┌────────────────┐ ┌────────────────────┐ │  │
+│  │  │ Remote Exec    │ │ MCP Client     │ │ Eval Runner        │ │  │
+│  │  │ Vercel/Daytona │ │ tool servers   │ │ agent testing      │ │  │
+│  │  └────────────────┘ └────────────────┘ └────────────────────┘ │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -124,7 +131,7 @@ Current extensions:
 ```
 Runtime (src/runtime/runtime.ts)
 ├── Config (src/config/)                — YAML config with env var interpolation
-├── LLM Providers (src/llm/)            — Ollama, Anthropic, OpenAI + 6 OpenAI-compatible via ProviderRegistry
+├── LLM Providers (src/llm/)            — local, managed-cloud, and frontier providers via ProviderRegistry + provider metadata
 ├── Assistant Orchestrator (src/runtime/orchestrator.ts) — per-session queueing + timing state
 ├── Registry (src/agent/registry.ts)    — agent registration/discovery
 ├── EventBus (src/queue/event-bus.ts)   — inter-agent events + opt-in classify/policy pipeline hooks
@@ -136,6 +143,9 @@ Runtime (src/runtime/runtime.ts)
 ├── Intent Gateway (src/runtime/intent-gateway.ts) — authoritative top-level direct-action route classification plus Auto-mode tier preference inputs
 ├── Execution State (src/runtime/executions.ts, src/runtime/continuity-threads.ts, src/runtime/pending-actions.ts) — durable request identity, blocker state, continuation, and lineage across channels and delegated work
 ├── Automation Authoring + Control Plane (src/runtime/automation-authoring.ts, src/runtime/automation-prerouter.ts, src/runtime/automation-control-prerouter.ts, src/runtime/automation-runtime-service.ts) — natural-language automation requests -> canonical automation contract
+├── Second Brain (src/runtime/second-brain/) — Guardian-owned tasks, notes, links, people, routines, briefs, usage, local calendar, and provider sync cursors
+├── Code Sessions (src/runtime/code-sessions.ts, src/runtime/code-session-*.ts) — backend-owned coding sessions, repo maps, working sets, trust state, and managed sandbox attachments
+├── Remote Execution (src/runtime/remote-execution/) — provider-neutral bounded execution over Vercel and Daytona sandbox targets
 ├── Skills (src/skills/)                — native procedural knowledge, templates, and references
 ├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting
 │   └── Moltbook Connector (src/runtime/moltbook-connector.ts) — hostile-site constrained forum ingestion
@@ -164,7 +174,8 @@ Runtime (src/runtime/runtime.ts)
 ├── Document Search (src/search/) — native hybrid search (BM25 + vector) over document collections
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
 ├── Native Google Service (src/google/)  — direct googleapis SDK integration (OAuth PKCE, encrypted tokens)
-├── Managed Provider Tool Facade         — stable tool names such as `gws` backed by native adapters
+├── Native Microsoft Service (src/microsoft/) — Microsoft Graph integration for Outlook, calendar, OneDrive, and contacts
+├── Managed Provider Tool Facade         — stable tool names such as `gws`, Microsoft provider tools, cloud tools, and sandbox tools backed by native adapters
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
 │   ├── types.ts                        — test case, matcher, and result types
 │   ├── metrics.ts                      — content, trajectory, metadata, workflow, evidence, and safety metrics
@@ -322,13 +333,13 @@ Not yet implemented:
 
 See [Native Skills Spec](../design/SKILLS-DESIGN.md).
 
-## Managed Providers
+## Native Provider Integrations
 
-GuardianAgent includes a managed MCP provider foundation for complex ecosystems where both tool schemas and procedural guidance matter.
+GuardianAgent includes native provider integrations for complex ecosystems where tool schemas, OAuth state, provider-specific policy, and procedural guidance all matter. These integrations are not separate orchestration stacks; they are capability adapters behind the same Runtime, ToolExecutor, Guardian, approval, and audit boundaries.
 
-Google Workspace integration uses the native backend:
+Google Workspace integration uses a native backend:
 
-**Native mode (default):**
+**Google Workspace:**
 
 - `src/google/` module calls Google APIs directly via `googleapis` SDK
 - OAuth 2.0 PKCE with localhost callback, tokens encrypted at `~/.guardianagent/secrets.enc.json`
@@ -336,14 +347,23 @@ Google Workspace integration uses the native backend:
 - No external CLI dependency, no subprocess overhead
 - Config: `assistant.tools.google` (enabled, services, oauthCallbackPort, credentialsPath)
 
-Tool facade:
+Microsoft 365 integration uses Microsoft Graph directly:
+
+- `src/microsoft/` module owns Graph client construction, OAuth token handling, and provider calls
+- Outlook mail, calendar, OneDrive, and contacts stay provider-owned for direct mutations
+- synced calendar/contact records can flow into `Second Brain` as provider-backed context
+- generic personal-assistant calendar work defaults to the local Guardian `Second Brain` calendar unless the user explicitly names Google or Microsoft
+
+Provider and tool facades:
 
 - use the same `gws` and `gws_schema` tool names (transparent routing in ToolExecutor)
+- Microsoft provider tools are exposed through the same tool discovery, policy, and approval flow
 - safety and approvals via ToolExecutor + Guardian
-- workflow guidance via native Google skills
-- Google Workspace tools mapped into Gmail/Calendar/Drive/Docs/Sheets capability checks before execution
+- workflow guidance via native skills
+- Google Workspace and Microsoft tools map into provider-specific mail/calendar/drive/contact capability checks before execution
+- Cloud hosting profiles, including Vercel and Daytona, are configured through the same control-plane pattern and can contribute remote sandbox targets where enabled
 
-See [Native Google Integration Spec](../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md). The earlier CLI-backed Google design is archived at `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`.
+See [Native Google Integration Spec](../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md), [Second Brain As-Built Design](../design/SECOND-BRAIN-AS-BUILT.md), [Cloud Hosting Integration Design](../design/CLOUD-HOSTING-INTEGRATION-DESIGN.md), and [Remote Sandboxing Design](../design/REMOTE-SANDBOXING-DESIGN.md). The earlier CLI-backed Google design is archived at `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`.
 
 ## Brokered Execution Boundary
 
@@ -364,6 +384,7 @@ Worker responsibilities:
 - prompt assembly
 - conversation-context assembly from supervisor-provided state
 - LLM chat/tool loop (via broker-proxied chat function)
+- brokered execution of the built-in complex-planning route
 - pending-approval continuation
 - memory_save suppression (user intent detection)
 - context budget compaction
@@ -373,7 +394,7 @@ Shared prompt/context rules are specified in [Context Assembly Spec](../design/C
 
 What this does not mean:
 
-- orchestration agents are not moved into the worker
+- deterministic workflow orchestration, handoff contracts, execution records, approvals, and control-plane state are not owned by the worker
 - every arbitrary developer-authored code path is not automatically sandboxed
 
 See [Brokered Agent Isolation Spec](../design/BROKERED-AGENT-ISOLATION-DESIGN.md).
@@ -387,13 +408,15 @@ The current subprocess sandbox layer now uses an explicit availability model:
 - surface warnings and disable reasons in CLI, web, and chat paths
 - degraded hosts use `workspace-write` profile (not `full-access`) for brokered workers
 - degraded Linux hosts do not apply a virtual-memory `ulimit` to long-lived brokered Node workers, because that cap destabilizes worker startup without adding meaningful filesystem isolation
+- Windows local isolation ships as the process-sandbox/helper tier, including AppContainer-backed process launch for supported sandbox profiles and portable-package bundling for `guardian-sandbox-win.exe`
+- remote sandbox targets are available through the shared remote-execution service when configured, with Vercel and Daytona provider adapters below Guardian-owned routing, approvals, memory, and audit
 
 Next stage:
 
-- ship the native Windows sandbox helper binary that matches the implemented adapter contract
 - add native macOS strong-backend support
+- continue broadening remote execution compatibility checks and provider lifecycle behavior without moving Guardian control-plane ownership into remote providers
 
-See [Security](../../SECURITY.md) for the security details and remaining gaps.
+See [Security](../../SECURITY.md) and [Remote Sandboxing Design](../design/REMOTE-SANDBOXING-DESIGN.md) for the security details and remaining gaps.
 
 ### Agent Evaluation Framework
 
@@ -566,12 +589,15 @@ Created → Ready → Running ⟷ Idle
 
 ## LLM Provider Layer
 
-Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
+Unified `LLMProvider` interface for local, managed-cloud, and frontier provider families:
 
 - No LangChain — direct SDK calls for full debuggability
+- built-in provider metadata currently covers Ollama, Ollama Cloud, OpenRouter, NVIDIA Cloud, OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together AI, xAI, and Google Gemini
+- `ProviderRegistry` remains internal-only: providers are curated in source rather than loaded dynamically from arbitrary packages
+- OpenAI-compatible providers use the shared OpenAI-compatible path while native adapters keep provider-specific behavior explicit
 - Ollama uses OpenAI-compatible `/v1/chat/completions` + native `/api/tags`
 - Both `chat()` (full response) and `stream()` (AsyncGenerator) methods
-- Each agent gets its own provider assignment via config
+- Each agent and route can resolve provider assignment via config, control-plane state, Auto-mode tier preference, and failover rules
 - **Failover Provider** (`src/llm/failover-provider.ts`): wraps multiple providers with priority-based failover and per-provider circuit breakers. On transient/quota/timeout errors, automatically retries with the next available provider.
 - **Circuit Breaker** (`src/llm/circuit-breaker.ts`): per-provider state machine (closed → open → half_open) that prevents cascading failures by short-circuiting requests to unhealthy providers.
 
@@ -579,14 +605,15 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/factory-reset`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
-- **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`, `/api/message/stream`, `/api/auth/session`, `/api/factory-reset`)
+- **Web**: Node.js HTTP server with modular route slices for chat, runtime/system, monitoring, automations, code sessions, code workspace, provider admin, terminals, and control operations
 - **Web Auth**: `channels.web.auth.mode` is enforced as `bearer_required`; browser clients can use HttpOnly `guardianagent_sid` session cookies after bearer authentication
-- **Live Dashboard Invalidation**: mutating web/API operations emit SSE `ui.invalidate` events so the active dashboard page refreshes in place without a manual browser reload
-- **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
+- **Second Brain**: web `#/` default home for Today, Calendar, Tasks, Notes, Library, People, and Routines backed by `src/runtime/second-brain/` and provider sync services
+- **System/Assistant State**: web `#/system` operator surface and CLI `/assistant` expose orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
+- **Live Dashboard Invalidation**: mutating web/API operations emit SSE `ui.invalidate` events so active web surfaces refresh in place without a manual browser reload
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
-- **Coding Workspace**: web `#/code` page — workbench client for backend Code sessions, with repo explorer, session-bound file/diff APIs, PTY-backed session terminals, trust review, inspection views, and a workspace activity rail; Guardian chat is the canonical conversational surface and can attach to the same backend Code session, while the workbench keeps the repo explorer, editor, activity, approvals, and verification state anchored to the active workspace. Code sessions carry backend workspace profiles plus a bounded repo map and per-turn working set, use retrieval-backed repo grounding instead of relying only on prompt wording, use separate Code-session long-term memory instead of Guardian global memory, default their reasoning context to the active session/workspace rather than the Guardian host app, fail closed if the targeted session cannot be resolved, keep file/git/shell/package-install actions pinned to the active workspace or allowed paths, monitor repo execution and SaaS anti-pattern trust findings, and still expose broader Guardian tools without turning the surface back into generic chat
+- **Coding Workspace**: web `#/code` page is a workbench client for backend Code sessions. It keeps repo explorer, editor, diffs, session terminals, activity, approvals, verification state, trust review, repo maps, and per-turn working sets anchored to the active workspace. Guardian chat can attach to the same session, but code actions remain pinned to the active workspace or allowed paths and can use managed Vercel/Daytona sandboxes through the shared remote-execution service.
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
-- **Connector Studio (Option 2)**: web Network > Connectors tab + configurable connector packs and engine controls via `assistant.connectors` (runtime-ready policy layer)
+- **Connectors and Cloud Profiles**: web Network/Cloud and Configuration surfaces expose connector packs, cloud profiles, provider health, and engine controls through `assistant.connectors` and provider-specific config contracts
 - **Automations**: web `#/automations` page — the single automation surface for saved step-based automations, assistant automations, standalone tool automations, schedules, starter examples, run history, raw definition editing for saved step-based automations, and engine settings. The assistant creates and controls these through the canonical automation tools (`automation_list`, `automation_save`, `automation_set_enabled`, `automation_run`, `automation_delete`)
 - **Network History**: web `#/network` includes recent network run history plus inline output views for quick scans and threat checks, so scheduled and manual network actions are inspectable beyond the device inventory snapshot
 - **Threat Intel**: web Security > Threat Intel tab, CLI `/intel`, Telegram `/intel` command surfaces

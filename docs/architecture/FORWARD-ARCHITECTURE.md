@@ -68,6 +68,9 @@ Current checkpoint:
 - `src/runtime/control-plane/config-state-helpers.ts` now owns shared config-state helper logic used by dashboard/control-plane flows: credential-ref normalization, local-secret upserts/deletes, and persistence helpers for tool, skill, and connector state.
 - `src/runtime/control-plane/provider-config-helpers.ts` now owns shared provider/config shaping helpers used by multiple control-plane flows: provider snapshot/status construction, provider credential resolution for ad hoc model discovery, and cloud profile lookup helpers used by direct config updates.
 - `src/runtime/control-plane/provider-dashboard-callbacks.ts` now owns provider discovery and model-enumeration callbacks for the dashboard surface.
+- `src/runtime/control-plane/provider-integration-callbacks.ts` now owns provider connection, credential, and integration callback behavior that should not live in web routes or the entrypoint.
+- `src/runtime/control-plane/auth-control-callbacks.ts` now owns authentication control-plane callback behavior for the web/admin surface.
+- `src/runtime/control-plane/tool-policy-runtime-sync.ts` now owns synchronization between persisted tool policy and the live ToolExecutor/runtime policy view.
 - `src/runtime/control-plane/agent-dashboard-callbacks.ts` now owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
 - `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now owns assistant-state summaries, worker follow-up actions, run timeline listing/detail callbacks, and routing-trace decoration for the dashboard surface.
 - `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now owns dashboard SSE subscription fan-out, streaming chat dispatch, direct dashboard dispatch delegation, and quick-action orchestration callbacks for the web control-plane surface.
@@ -77,6 +80,7 @@ Current checkpoint:
 - `src/chat-agent.ts` now owns the primary chat-turn orchestration path that used to live inline in `src/index.ts`: LLM/tool loop handling, direct-intent shortcuts, approval continuation handling, code-session interaction, and shared pending-action coordination.
 - `src/chat-agent-helpers.ts` now owns the shared support helpers used by the chat agent and control-plane surface for tool-result shaping, code-session prompt context, provider-routing defaults, Gmail/M365 summarization, and config redaction.
 - `src/index.ts` is still a heavy composition root at roughly 6.6k lines. The main remaining architecture work is residual callback-factory assembly, provider/config helper cleanup, and final composition-root trimming so `main()` becomes composition-only.
+- `src/tools/executor.ts` remains the other major extraction target at roughly 7.6k lines. The desired direction is still category registrars and narrow helper modules rather than adding more builtin implementations directly to the central executor.
 
 Suggested structure:
 
@@ -112,18 +116,26 @@ src/channels/
   cli.ts
   telegram.ts
   web.ts
-  web-auth.ts
   web-json.ts
-  web-sse.ts
   web-shell-launch.ts
-  web-terminals.ts
-  routes/
-    web-auth-routes.ts
-    web-tool-routes.ts
-    web-agent-routes.ts
-    web-config-routes.ts
-    web-automation-routes.ts
+  web-terminal-routes.ts
+  web-chat-routes.ts
+  web-runtime-routes.ts
+  web-monitoring-routes.ts
+  web-control-routes.ts
+  web-automation-routes.ts
+  web-code-session-routes.ts
+  web-code-workspace-routes.ts
+  web-provider-admin-routes.ts
 ```
+
+Current checkpoint:
+- `src/channels/web.ts` is still the HTTP composition module, but most route ownership now lives in focused sibling modules.
+- `src/channels/web-chat-routes.ts` owns chat, streaming, chat approvals, pending-action rendering, and run-tracking HTTP flow.
+- `src/channels/web-runtime-routes.ts`, `web-monitoring-routes.ts`, and `web-control-routes.ts` own runtime/system, monitoring, and control-plane endpoints.
+- `src/channels/web-code-session-routes.ts` and `web-code-workspace-routes.ts` own backend Code-session and workspace APIs.
+- `src/channels/web-provider-admin-routes.ts`, `web-terminal-routes.ts`, and `web-automation-routes.ts` own provider-admin, PTY terminal, and automation endpoints.
+- `web/public/` remains browser presentation only; route semantics and shared orchestration stay server-side.
 
 ### 3. Control Plane / Application Services
 
@@ -156,6 +168,9 @@ src/runtime/control-plane/
   config-state-helpers.ts
   provider-config-helpers.ts
   provider-dashboard-callbacks.ts
+  provider-integration-callbacks.ts
+  auth-control-callbacks.ts
+  tool-policy-runtime-sync.ts
   config-apply-service.ts
   config-validation-service.ts
   provider-routing-service.ts
@@ -188,8 +203,12 @@ Current checkpoint:
 - `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
 - `src/runtime/executions.ts` now owns the durable execution record for user work, including route/intent snapshots, blocker state, and parent/root/retry lineage used by resume and delegated-run correlation.
 - `src/runtime/dashboard-dispatch.ts` now owns the shared dispatch path used by dashboard callbacks and the web chat flow after route selection has been made.
+- `src/runtime/second-brain/` now owns the Guardian-local personal context store and services for tasks, notes, links, people, routines, briefs, usage, local calendar, provider sync cursors, and deterministic briefing/horizon scanning.
+- `src/runtime/code-sessions.ts` and the code-session helper modules now own backend Code-session identity, workspace profiles, repo grounding, working-set state, trust state, and managed sandbox attachments used by the web workbench and chat path.
+- `src/runtime/remote-execution/` now owns provider-neutral target discovery, health, lease acquisition, managed/ephemeral lease semantics, policy checks, provider adapters, and normalized remote run metadata for Vercel and Daytona sandbox execution.
 - `src/runtime/control-plane/config-state-helpers.ts` now owns the shared config-state helper surface that used to live inline in the callback factory.
 - `src/runtime/control-plane/provider-config-helpers.ts` and `src/runtime/control-plane/provider-dashboard-callbacks.ts` now keep provider-state shaping and provider dashboard callbacks out of the entrypoint factory.
+- `src/runtime/control-plane/provider-integration-callbacks.ts`, `auth-control-callbacks.ts`, and `tool-policy-runtime-sync.ts` now keep provider integration, auth-control, and live policy synchronization behavior out of channel routes and the entrypoint.
 - `src/runtime/control-plane/agent-dashboard-callbacks.ts` now keeps agent dashboard shaping and internal-agent classification out of the callback factory.
 - `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now keeps assistant-state summaries, run-history routing, and routing-trace decoration out of the callback factory.
 - `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now keeps dashboard SSE fan-out, stream dispatch, direct dispatch delegation, and quick-action orchestration out of the callback factory.
@@ -254,6 +273,8 @@ Examples:
 - `src/microsoft/`
 - `src/search/`
 - `src/runtime/second-brain/`
+- `src/runtime/code-sessions.ts` and code-session helpers
+- `src/runtime/remote-execution/`
 - `src/runtime/threat-intel.ts`
 - `src/runtime/automation-*`
 
@@ -274,6 +295,8 @@ Examples:
 - MCP client in `src/tools/mcp-client.ts`
 - native OAuth integrations in `src/google/` and `src/microsoft/`
 - sandbox and broker infrastructure in `src/sandbox/`, `src/broker/`, and `src/supervisor/`
+- remote sandbox provider adapters in `src/runtime/remote-execution/providers/`
+- cloud provider clients in `src/tools/cloud/`, including Vercel and Daytona sandbox clients
 
 Rules:
 - Infrastructure code should not absorb application decision logic.
@@ -333,6 +356,15 @@ Constraints:
 4. At runtime, ToolExecutor performs policy, approval, and context checks.
 5. Tool output is normalized and compacted through shared helpers before reinjection.
 
+### Code Session Remote Execution
+
+1. The web workbench or chat path resolves the active backend Code session through shared incoming-dispatch/session context.
+2. Code-session state provides workspace profile, repo map, working set, trust state, and any managed sandbox attachments.
+3. ToolExecutor applies Guardian, policy, approval, allowed-path, and command checks before any command leaves the supervisor.
+4. The shared remote-execution service selects a healthy compatible Vercel or Daytona target, reusing a managed lease when appropriate.
+5. Provider adapters perform bounded command execution and return stdout, stderr, artifacts, lifecycle state, and sandbox metadata.
+6. Guardian-owned state records the run, updates managed-sandbox visibility, and composes the final response locally.
+
 ## Module Placement Rules
 
 When adding new code:
@@ -366,6 +398,7 @@ These rules are mandatory for the modularization effort:
 - Control-plane changes: focused runtime/control-plane tests, `node scripts/test-coding-assistant.mjs`, `node scripts/test-contextual-security-uplifts.mjs`.
 - Incoming-dispatch and routing-preparation changes: focused `src/runtime/incoming-dispatch.test.ts`, bootstrap/channel-startup tests that exercise the preparer boundary, `npm run check`, `node scripts/test-code-ui-smoke.mjs`, and the routing/security harnesses affected by the touched path.
 - Tool execution changes: focused executor tests, relevant capability harnesses such as `node scripts/test-automation-authoring-compiler.mjs`, then full suite.
+- Code session or remote-execution changes: focused code-session, managed-sandbox, and remote-execution provider tests, `node scripts/test-code-ui-smoke.mjs`, `node scripts/test-coding-assistant.mjs`, and sandbox/security harnesses affected by the path.
 - Security or routing changes: always include the relevant security/routing harnesses and inspect the routing trace when applicable.
 
 See `docs/guides/INTEGRATION-TEST-HARNESS.md` for harness details and lane selection.
