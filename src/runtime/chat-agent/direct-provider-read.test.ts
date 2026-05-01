@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import {
+  formatDirectProviderInventoryResponse,
   formatDirectProviderModelsResponse,
   tryDirectProviderRead,
 } from './direct-provider-read.js';
@@ -81,9 +82,27 @@ describe('direct provider read runtime', () => {
     });
 
     const content = typeof result === 'string' ? result : result?.content ?? '';
-    expect(content).toContain('Configured AI providers:');
+    expect(content).toContain('Configured AI providers (2 providers):');
     expect(content).toContain('ollama [local · ollama] model gemma4:26b');
     expect(content).toContain('ollama-cloud-tools [managed cloud · ollama_cloud] model glm-4.7');
+  });
+
+  it('returns the full configured provider inventory without synthetic truncation', () => {
+    const providers = Array.from({ length: 17 }, (_, index) => ({
+      name: `provider-${index + 1}`,
+      type: 'ollama_cloud',
+      model: `model-${index + 1}`,
+      tier: index < 2 ? 'frontier' : 'managed_cloud',
+      connected: true,
+    }));
+
+    const content = formatDirectProviderInventoryResponse(providers);
+
+    expect(content).toContain('Configured AI providers (17 providers):');
+    expect(content).toContain('provider-1 [frontier · ollama_cloud] model model-1');
+    expect(content).toContain('provider-17 [managed cloud · ollama_cloud] model model-17');
+    expect(content).not.toContain('truncated');
+    expect(content).not.toContain('additional providers');
   });
 
   it('formats provider model catalogs', () => {

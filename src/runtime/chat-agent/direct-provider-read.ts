@@ -79,7 +79,8 @@ export function resolveDirectProviderInventoryTarget(
 export function formatDirectProviderInventoryResponse(
   providers: readonly Record<string, unknown>[],
 ): string {
-  const lines = ['Configured AI providers:'];
+  const providerLabel = providers.length === 1 ? 'provider' : 'providers';
+  const lines = [`Configured AI providers (${providers.length} ${providerLabel}):`];
   for (const provider of providers) {
     const name = toString(provider.name).trim() || '(unnamed)';
     const type = toString(provider.type).trim() || 'unknown';

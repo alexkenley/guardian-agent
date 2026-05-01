@@ -522,6 +522,18 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('keeps low-confidence provider CRUD general-assistant reads on the provider_read candidate', () => {
+    const gateway = mockGateway({ route: 'general_assistant', operation: 'read', confidence: 'low' });
+    gateway.decision.executionClass = 'provider_crud';
+    const result = resolveDirectIntentRoutingCandidates(
+      gateway,
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual(['provider_read']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
   it('does not let sandbox status preempt mixed connector and repo plans', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({

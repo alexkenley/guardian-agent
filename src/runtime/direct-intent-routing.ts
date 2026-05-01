@@ -23,8 +23,12 @@ export function resolveDirectIntentRoutingCandidates(
     };
   }
 
+  const ordered = resolveIntentCapabilityCandidates(gateway.decision)
+    .filter((candidate) => availableSet.has(candidate));
+
   if (gateway.decision.confidence === 'low'
-    && (gateway.decision.route === 'unknown' || gateway.decision.route === 'general_assistant')) {
+    && (gateway.decision.route === 'unknown' || gateway.decision.route === 'general_assistant')
+    && ordered.length === 0) {
     return {
       candidates: [],
       gatewayDirected: false,
@@ -32,8 +36,6 @@ export function resolveDirectIntentRoutingCandidates(
     };
   }
 
-  const ordered = resolveIntentCapabilityCandidates(gateway.decision)
-    .filter((candidate) => availableSet.has(candidate));
   return {
     candidates: ordered,
     gatewayDirected: true,

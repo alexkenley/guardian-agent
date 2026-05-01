@@ -1971,6 +1971,42 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('repairs explicit AI provider inventory workload metadata when classifier marks it direct', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'List my configured AI providers.',
+        channel: 'telegram',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Lists configured AI providers.',
+          uiSurface: 'config',
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.uiSurface).toBe('config');
+    expect(result.decision.executionClass).toBe('provider_crud');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('includes file-grounded coding review guidance in the gateway system prompt', async () => {
     const gateway = new IntentGateway();
     let inspectedSystemPrompt = '';
