@@ -8674,6 +8674,73 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(workerManager.handleMessage).not.toHaveBeenCalled();
   });
 
+  it('answers automation capability questions through the gateway-selected model instead of a content shortcut', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const localChat = vi.fn(async () => ({
+      content: 'Model-grounded automation capability answer.',
+      toolCalls: [],
+      model: 'local-model',
+      finishReason: 'stop',
+    }));
+    const agent = new ChatAgent('chat', 'Chat');
+    const workerManager = {
+      handleMessage: vi.fn(async () => ({
+        content: 'Delegated work failed.',
+      })),
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-automation-capability-inline',
+      userId: 'owner',
+      principalId: 'owner',
+      principalRole: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'What can you automate?',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Answer an automation capability question directly.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'chat_synthesis',
+          entities: {},
+        },
+      }),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: localChat,
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    }, workerManager as never);
+
+    expect(response.content).toBe('Model-grounded automation capability answer.');
+    expect(response.content).not.toContain('Guardian can automate three main shapes');
+    expect(localChat).toHaveBeenCalledOnce();
+    expect(workerManager.handleMessage).not.toHaveBeenCalled();
+  });
+
   it('uses active code-session continuity history for cross-surface direct follow-ups', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

@@ -688,22 +688,6 @@ interface DegradedDirectIntentResponseInput {
     }, options);
   }
 
-  private tryDirectAutomationCapabilitiesResponse(content: string): string | null {
-    if (!/\b(?:what|which)\b[\s\S]*\b(?:automate|automation|automations)\b/i.test(content)
-      && !/\bwhat can you automate\b/i.test(content)) {
-      return null;
-    }
-    return [
-      'Guardian can automate three main shapes:',
-      '- step workflows: fixed deterministic tool steps that can run manually or on a schedule',
-      '- assistant automations: scheduled or manual prompt-driven tasks such as summaries, reports, or triage runs',
-      '- standalone tool tasks: single-tool jobs behind the same approval and policy controls',
-      '',
-      'It can also inspect outputs, run saved automations, enable or disable them, and delete them.',
-      'If you want to create one, describe the goal, whether it should be manual or scheduled, and any fixed steps or browser actions it must follow.',
-    ].join('\n');
-  }
-
   private trackResolvedSkills(
     message: UserMessage,
     requestType: string,
@@ -1536,23 +1520,6 @@ interface DegradedDirectIntentResponseInput {
             ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
             : undefined,
         };
-      }
-
-      const directAutomationCapabilities = allowGeneralShortcut
-        ? this.tryDirectAutomationCapabilitiesResponse(routedScopedMessage.content)
-        : null;
-      if (directAutomationCapabilities) {
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            directAutomationCapabilities,
-          );
-        }
-        if (resolvedCodeSession) {
-          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
-        }
-        return { content: directAutomationCapabilities };
       }
 
       const directToolInventory = allowGeneralShortcut
