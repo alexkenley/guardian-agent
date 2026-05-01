@@ -232,6 +232,7 @@ Unlike unit tests (vitest), these exercise the HTTP stack, config loading, Guard
 ```
 
 These focused suites cover framework-level security controls only. They do not validate the strong OS sandbox backends (`bwrap`, Windows AppContainer helper).
+Run `test-security-api.ps1` without `-SkipStart` when you want the deterministic bearer-auth, ticket, policy, and audit assertions; the harness starts an isolated app with its own temporary token. If you use `-SkipStart` against an already-running app, pass the app's bearer token with `-Token` or `HARNESS_TOKEN`. Without a supplied token, `-SkipStart` now performs only a health preflight and skips the authenticated API sweep to avoid false failures and auth rate-limit pollution.
 
 ### Contextual Security Harness
 

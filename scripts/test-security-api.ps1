@@ -55,6 +55,7 @@ $TestDirRel = "tmp/security-api-harness"
 $TestFileRel = "$TestDirRel/policy-write.txt"
 $TestDir = Join-Path $ProjectRoot ($TestDirRel -replace '/', '\')
 $HarnessProfile = "security-api-harness-$([guid]::NewGuid().ToString("N"))"
+$TokenProvidedForSkipStart = $PSBoundParameters.ContainsKey('Token') -or -not [string]::IsNullOrWhiteSpace($env:HARNESS_TOKEN)
 
 function Write-Log($msg) { Write-Host "[security-api] $msg" -ForegroundColor Cyan }
 function Write-Pass($name) {
@@ -327,6 +328,35 @@ guardian:
 }
 else {
     Write-Log "Skipping app startup (-SkipStart). Using $BaseUrl"
+    if (-not $TokenProvidedForSkipStart) {
+        Write-Host ""
+        Write-Log "=== SkipStart Preflight ==="
+        try {
+            $health = Invoke-RestMethod -Uri "$BaseUrl/health" -TimeoutSec 5
+            if ($health.status) {
+                Write-Pass "GET /health returns valid JSON"
+            }
+            else {
+                Write-Fail "GET /health" "no status field"
+            }
+        }
+        catch {
+            Write-Fail "GET /health" $_.Exception.Message
+        }
+
+        Write-Skip "authenticated security API sweep" "SkipStart requires -Token or HARNESS_TOKEN for the already-running app. Re-run without -SkipStart for an isolated harness app."
+
+        Write-Host ""
+        Write-Host "============================================" -ForegroundColor Cyan
+        Write-Host "  PASS: $Pass  " -ForegroundColor Green -NoNewline
+        Write-Host "FAIL: $Fail  " -ForegroundColor Red -NoNewline
+        Write-Host "SKIP: $Skip  " -ForegroundColor Yellow -NoNewline
+        Write-Host "Total: $($Pass + $Fail + $Skip)"
+        Write-Host "============================================" -ForegroundColor Cyan
+        Write-Host ""
+
+        exit $Fail
+    }
 }
 
 $cleanupBlock = {
