@@ -3994,6 +3994,15 @@ export class ToolExecutor {
       };
     }
 
+    if (wasAlreadySettled && existingApprovalStatus !== decision) {
+      return {
+        success: false,
+        approved: existingApprovalStatus === 'approved',
+        message: `Approval '${approvalId}' was already ${existingApprovalStatus}; it cannot be changed to ${decision}.`,
+        job,
+      };
+    }
+
     if (wasAlreadySettled) {
       if (approval.status === 'approved') {
         if (job.status === 'succeeded') {

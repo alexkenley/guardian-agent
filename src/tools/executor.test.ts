@@ -2350,6 +2350,56 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('does not allow a denied approval to be replayed as approved', async () => {
+    const root = createExecutorRoot();
+    const onLlmProviderConfigUpdate = vi.fn(async () => ({ success: true, message: 'updated' }));
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      listLlmProviders: async () => [{
+        name: 'ollama',
+        type: 'ollama',
+        model: 'gpt-oss:120b',
+        locality: 'local',
+        tier: 'local',
+        connected: true,
+        availableModels: ['gpt-oss:120b', 'gemma3:latest'],
+        isDefault: true,
+        isPreferredLocal: true,
+      }],
+      listModelsForLlmProvider: async () => ['gpt-oss:120b', 'gemma3:latest'],
+      onLlmProviderConfigUpdate,
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'llm_provider_update',
+      args: {
+        action: 'set_model',
+        provider: 'ollama',
+        model: 'gemma3:latest',
+      },
+      origin: 'assistant',
+      channel: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+    });
+
+    expect(pending.status).toBe('pending_approval');
+    const denied = await executor.decideApproval(pending.approvalId!, 'denied', 'web-user');
+    expect(denied.success).toBe(true);
+    expect(denied.approved).toBe(false);
+
+    const replayed = await executor.decideApproval(pending.approvalId!, 'approved', 'web-user');
+    expect(replayed.success).toBe(false);
+    expect(replayed.approved).toBe(false);
+    expect(replayed.message).toContain('cannot be changed to approved');
+    expect(onLlmProviderConfigUpdate).not.toHaveBeenCalled();
+  });
+
   it('requires approval before running a performance cleanup action and can generate the preview internally', async () => {
     const root = createExecutorRoot();
     const previewAction = vi.fn(async () => ({

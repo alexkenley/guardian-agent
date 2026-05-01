@@ -59,6 +59,7 @@ $InjectionFixtureRel = "$TestDirRel/tool-injection-fixture.txt"
 $InjectionFixture = Join-Path $TestDir "tool-injection-fixture.txt"
 $PiiSsnRel = "$TestDirRel/pii-ssn.txt"
 $PiiCcRel = "$TestDirRel/pii-cc.txt"
+$HarnessProfile = "security-content-harness-$([guid]::NewGuid().ToString("N"))"
 
 function Write-Log($msg) { Write-Host "[security-content] $msg" -ForegroundColor Cyan }
 function Write-Pass($name) {
@@ -80,6 +81,51 @@ function Write-Skip($name, $reason) {
     $script:Results += "SKIP: $name - $reason"
 }
 
+function Set-HarnessWebChannel {
+    param(
+        [string]$Content,
+        [int]$Port,
+        [string]$Token
+    )
+
+    $channelsBlock = @"
+channels:
+  web:
+    enabled: true
+    port: $Port
+    authToken: "$Token"
+  cli:
+    enabled: false
+"@
+    $updated = $Content -replace '(?m)^channels:\r?\n(?:[ \t].*\r?\n?)*', "$channelsBlock`n"
+    if ($updated -eq $Content) {
+        $separator = if ($Content.EndsWith("`n")) { "" } else { "`n" }
+        $updated = "$Content$separator$channelsBlock`n"
+    }
+    return $updated
+}
+
+function Write-RedactedLogTail {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return }
+    Get-Content $Path -Tail 30 | ForEach-Object {
+        $_ `
+            -replace '(?i)(apiToken|apiKey|accessToken|refreshToken|authToken|botToken|token|secret|credential)(["":=\s]+)[^"",\s)}\]]+', '$1$2[REDACTED]' `
+            -replace '\b(?:vcp|dtn|sk|ghp)_[A-Za-z0-9_-]{12,}\b', '[REDACTED]' `
+            -replace '\bBearer\s+[A-Za-z0-9._~+/-]{12,}\b', 'Bearer [REDACTED]'
+    }
+}
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    if (-not $ProcessId) { return }
+    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    foreach ($child in $children) {
+        Stop-ProcessTree -ProcessId $child.ProcessId
+    }
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
 function Send-Message {
     param([string]$Content, [string]$AgentId)
 
@@ -99,14 +145,35 @@ function Send-Message {
     }
 }
 
+function Invoke-AuthTicket {
+    param([string]$Action)
+    try {
+        return Invoke-RestMethod -Uri "$BaseUrl/api/auth/ticket" `
+            -Method Post `
+            -Headers @{ Authorization = "Bearer $Token" } `
+            -ContentType "application/json" `
+            -Body (@{ action = $Action } | ConvertTo-Json -Compress) `
+            -TimeoutSec 10
+    }
+    catch {
+        return @{ error = $_.Exception.Message }
+    }
+}
+
 function Invoke-ToolPolicy {
     param([hashtable]$Policy)
     try {
+        $ticket = Invoke-AuthTicket -Action "tools.policy"
+        if (-not $ticket.ticket) {
+            return @{ error = Get-FirstText $ticket.error $ticket.message "Failed to obtain privileged ticket" }
+        }
+        $payload = @{} + $Policy
+        $payload.ticket = $ticket.ticket
         return Invoke-RestMethod -Uri "$BaseUrl/api/tools/policy" `
             -Method Post `
             -Headers @{ Authorization = "Bearer $Token" } `
             -ContentType "application/json" `
-            -Body ($Policy | ConvertTo-Json -Depth 4 -Compress) `
+            -Body ($payload | ConvertTo-Json -Depth 4 -Compress) `
             -TimeoutSec 15
     }
     catch {
@@ -202,15 +269,7 @@ if (-not $SkipStart) {
 
     if (Test-Path $userConfig) {
         $configContent = Get-Content $userConfig -Raw
-        $configContent = $configContent -replace '(?m)^  web:\r?\n(    .*\r?\n)*', ''
-        $configContent = $configContent -replace '(?m)^\s*authToken:.*\r?\n?', ''
-        $webBlock = @"
-  web:
-    enabled: true
-    port: $Port
-    authToken: "$Token"
-"@
-        $configContent = $configContent -replace '(channels:\s*\r?\n)', "`$1$webBlock`n"
+        $configContent = Set-HarnessWebChannel -Content $configContent -Port $Port -Token $Token
         $configContent | Set-Content $harnessConfig -Encoding utf8
     }
     else {
@@ -235,6 +294,7 @@ guardian:
 
     Write-Log "Starting GuardianAgent with token: $Token"
 
+    $env:GUARDIAN_PROFILE = $HarnessProfile
     $AppProcess = Start-Process -FilePath "cmd.exe" `
         -ArgumentList "/c npx tsx src/index.ts `"$harnessConfig`"" `
         -WorkingDirectory $ProjectRoot `
@@ -262,9 +322,9 @@ guardian:
 
     if (-not $healthy) {
         Write-Host "ERROR: App failed to start within ${TimeoutStartup}s" -ForegroundColor Red
-        if (Test-Path $LogFile) { Get-Content $LogFile -Tail 30 }
-        if (Test-Path "$LogFile.err") { Get-Content "$LogFile.err" -Tail 30 }
-        if ($AppProcess -and -not $AppProcess.HasExited) { $AppProcess.Kill() }
+        Write-RedactedLogTail $LogFile
+        Write-RedactedLogTail "$LogFile.err"
+        if ($AppProcess -and -not $AppProcess.HasExited) { Stop-ProcessTree -ProcessId $AppProcess.Id }
         exit 1
     }
 
@@ -286,7 +346,7 @@ $cleanupBlock = {
         }
         else {
             Write-Log "Stopping app (PID $($script:AppProcess.Id))..."
-            $script:AppProcess.Kill()
+            Stop-ProcessTree -ProcessId $script:AppProcess.Id
         }
     }
     $tempCfg = Join-Path $env:TEMP "guardian-security-content-harness-config.yaml"

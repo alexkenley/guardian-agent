@@ -1,14 +1,24 @@
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 // Minimal mock environment to test the business logic of our fixes
 // We could run the full harness, but unit-style validation of the logic is faster and more deterministic for these edge cases.
 
-import { ToolExecutor } from '../src/tools/executor.js';
-import { registerBuiltinFilesystemTools } from '../src/tools/builtin/filesystem-tools.ts';
+if (process.env.GUARDIAN_REMEDIATION_STRESS_TSX !== '1') {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(import.meta.url)], {
+    cwd: process.cwd(),
+    env: { ...process.env, GUARDIAN_REMEDIATION_STRESS_TSX: '1' },
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
 
 async function runTests() {
   console.log('Running Stress Test Remediation Verification...');
+
+  const { ToolExecutor } = await import('../src/tools/executor.ts');
 
   const executor = new ToolExecutor({
     workspaceRoot: process.cwd(),
@@ -52,12 +62,18 @@ async function runTests() {
   const { formatToolResultForLLM } = await import('../src/chat-agent-helpers.ts');
   
   const largeSearchResult = {
-    path: '.',
-    matches: Array.from({ length: 40 }, (_, i) => ({
-      path: `file_${i}.ts`,
-      line: i + 1,
-      content: `match ${i}`,
-    })),
+    success: true,
+    status: 'succeeded',
+    output: {
+      root: process.cwd(),
+      query: 'match',
+      mode: 'content',
+      matches: Array.from({ length: 40 }, (_, i) => ({
+        relativePath: `file_${i}.ts`,
+        matchType: 'content',
+        snippet: `match ${i}`,
+      })),
+    },
   };
 
   const formatted = formatToolResultForLLM('fs_search', largeSearchResult);
