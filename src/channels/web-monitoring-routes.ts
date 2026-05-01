@@ -249,12 +249,12 @@ export async function handleWebMonitoringRoutes(context: WebMonitoringRoutesCont
       sendJSON(res, 400, { error: "status must be one of 'started', 'skipped', 'completed', or 'failed'" });
       return true;
     }
-    sendJSON(res, 200, dashboard.onSecurityActivityLog({
+    sendJSON(res, 200, redactSecurityMonitoringResponse(dashboard.onSecurityActivityLog({
       limit,
       status: rawStatus && isSecurityActivityStatus(rawStatus) ? rawStatus : undefined,
       agentId,
       groupLowConfidence,
-    }));
+    })));
     return true;
   }
 

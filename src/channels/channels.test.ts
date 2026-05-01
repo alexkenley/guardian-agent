@@ -4221,6 +4221,11 @@ describe('WebChannel', () => {
           triggerEventType: 'security:network:threat',
           triggerDetailType: 'beaconing',
           dedupeKey: 'security:network:threat:beaconing',
+          details: {
+            apiKey: 'sk-test-security-activity-secret',
+            nested: { token: 'slack-token-fixture-activitysecret' },
+            note: 'Observed AWS key AKIAIOSFODNN7EXAMPLE during triage.',
+          },
         }],
         totalMatches: 1,
         returned: 1,
@@ -5292,12 +5297,21 @@ describe('WebChannel', () => {
       expect(res.status).toBe(200);
       const body = await res.json() as {
         totalMatches: number;
-        entries: Array<{ status: string; targetAgentId?: string; summary: string }>;
+        entries: Array<{
+          status: string;
+          targetAgentId?: string;
+          summary: string;
+          details?: { apiKey?: unknown; nested?: { token?: unknown } };
+        }>;
         byStatus: Record<string, number>;
       };
       expect(body.totalMatches).toBe(1);
       expect(body.entries[0]?.status).toBe('completed');
       expect(body.entries[0]?.targetAgentId).toBe('security-triage');
+      expect(body.entries[0]?.details?.apiKey).toBe('[REDACTED]');
+      expect(body.entries[0]?.details?.nested?.token).toBe('[REDACTED]');
+      expect(JSON.stringify(body)).not.toContain('sk-test-security-activity-secret');
+      expect(JSON.stringify(body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
       expect(body.byStatus.completed).toBe(1);
     });
 
