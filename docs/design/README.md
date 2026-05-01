@@ -14,6 +14,8 @@ It replaces the older `docs/specs` umbrella. In practice, most files here are in
   Forward-looking proposals, RFC-style ideas, and pre-implementation direction.
 - `docs/implemented/`
   Historical proposal-era documents whose core scope has shipped or whose current status now lives in `docs/design/`.
+- `docs/archive/`
+  Deprecated, superseded, or investigation-only material that is no longer a current design contract.
 - `docs/plans/`
   Sequencing, rollout, remediation, and implementation plans.
 - `docs/architecture/`
@@ -40,4 +42,4 @@ Reserve `spec` for the smaller set of documents that truly need normative contra
 
 ## Documentation Rule
 
-If a proposal is implemented and moved to `docs/implemented/`, it should link near the top of the file to its associated current design or as-built document in `docs/design/`.
+Keep `docs/design/` limited to current design/as-built contracts. If a file is only a future direction, move it to `docs/proposals/`. If it is retained only for historical context, move it to `docs/archive/` and leave the current replacement linked from the archive file when useful.

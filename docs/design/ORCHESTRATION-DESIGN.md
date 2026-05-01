@@ -1,10 +1,21 @@
 # Orchestration Design
 
-**Status:** Implemented current architecture, with durable execution graph uplift planned
-
-**Forward plan:** `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`
+**Status:** Implemented current architecture, including the durable execution-graph baseline
 
 Guardian has distinct orchestration layers. They solve different problems and should not be collapsed into one vague “orchestrator” concept.
+
+## Consolidated Scope
+
+This document is now the active design contract for several previously separate implemented slice docs:
+
+- agent orchestration recipes (`src/agent/recipes.ts`)
+- shared orchestration state (`src/runtime/shared-state.ts`)
+- multi-agent workflow hardening (`src/agent/orchestration.ts`, `src/runtime/orchestration-role-contracts.ts`, `src/supervisor/worker-manager.ts`)
+- brokered DAG planning (`src/runtime/planner/`, `src/worker/worker-session.ts`)
+- deterministic playbook resume (`src/runtime/graph-runner.ts`, `src/runtime/run-state-store.ts`, `src/runtime/graph-checkpoints.ts`)
+- evidence-grounded deterministic playbook instruction steps (`src/runtime/connectors.ts`)
+
+The older standalone docs have been moved to `docs/archive/design/` because their important current rules are captured here.
 
 ## 1. Intent Gateway
 
@@ -87,6 +98,21 @@ It provides:
 - incremental structured conversation flush into durable memory when prompt history is compacted
 - signal-aware prompt-time memory selection with traceable selection metadata and compact match reasons
 
+### Shared Orchestration State
+
+`SharedState` is the transient inter-agent data-passing primitive used by orchestration agents.
+
+Current contract:
+- owned by the orchestrator, not by sub-agents
+- scoped to one orchestration invocation
+- supports regular keys and `temp:` keys
+- stores per-key metadata (`producerAgent`, timestamp, schema validation status, taint reasons)
+- enforces a bounded `maxStateBytes` capacity, defaulting to 10 MB
+- exposes read-only views through `SharedStateView` when a caller explicitly needs that shape
+- does not persist to SQLite or disk
+
+Sub-agents should receive only the bounded input the orchestrator chooses to dispatch. Shared state is not a general cross-agent memory bus.
+
 Key rules:
 - continuity is bounded state, not an unbounded shared transcript bus
 - continuity is a projection of the active task, not the primary semantic authority for continuation
@@ -167,24 +193,44 @@ Current as-built delegation foundations:
 - delegated follow-up state is projected into both assistant-job views and assistant-dispatch trace/timeline nodes instead of being implicit in raw worker prose
 - delegated-worker lifecycle breadcrumbs are also recorded in audit
 
+Brokered DAG planning:
+- `complex_planning_task` is preserved as a gateway route and handled inside the brokered worker
+- planner components live under `src/runtime/planner/` and are instantiated by `src/worker/worker-session.ts`
+- planner LLM calls use the worker's brokered chat path; the worker remains network-disabled
+- executable planner actions are currently `tool_call` and `execute_code`
+- unsupported planner actions fail closed instead of being emulated by the supervisor
+- tool execution still crosses the supervisor-owned `ToolExecutor`, Guardian, approvals, sandbox, audit, and taint path
+- approval pauses keep planner node metadata, approval IDs, job IDs, and trust state so resume continues the existing plan
+
+Agent orchestration recipes:
+- `planner -> executor -> validator`
+- `researcher -> writer -> reviewer`
+- `research -> draft -> verify`
+
+Recipes are thin wrappers over existing orchestration primitives. They do not create persisted automation definitions, new authority, or a separate user-facing workflow builder.
+
 Current limitation:
 - delegated worker completion is still normalized around bounded handoff metadata plus result content
 - the sufficiency gate and retry policy prevent weak delegated completions from being treated as success, but they do not by themselves remove upstream tool-result truncation or guarantee that the first worker picked the best possible tool plan
 - recovery-advisor retry can repair some late failures, but it is intentionally bounded to one validated retry and should not become a second planner or an unbounded loop
 - the stronger split into distinct user-facing summary, evidence bundle, and machine-readable next-action channels is still follow-on work
 
-## 5b. Target Uplift: Durable Execution Graph
+## 5b. Durable Execution Graph
 
-The next orchestration uplift should replace the binary direct-reasoning/delegated-orchestration split with a durable execution graph. The current split remains the shipped behavior until that uplift lands, but future remediation should not add more prompt-specific or worker-manager-specific repair paths.
+**Primary files:** `src/runtime/execution-graph/`, `src/runtime/graph-checkpoints.ts`, `src/runtime/run-timeline.ts`
 
-The graph should make these concepts first-class:
+The durable execution-graph baseline is now implemented as a shared runtime module. It does not replace every legacy orchestrator path yet, but it is the current owner for graph-shaped node execution, typed artifacts, checkpointable transitions, worker suspension/resume, pending-action adaptation, timeline projection, node recovery, and delegated-worker verification/retry behavior.
+
+Implemented graph concepts:
 
 - request-scoped execution graph identity
-- typed execution nodes for classification, read-only exploration, synthesis, mutation, approval interrupt, delegated worker execution, verification, recovery, and finalization
-- immutable typed artifacts for search results, file reads, evidence ledgers, synthesis drafts, write specs, mutation receipts, and verification results
-- append-only graph events ingested by `RunTimelineStore`
-- graph-native pending-action interrupts for approvals, clarification, auth, workspace switch, and policy blockers
-- bounded recovery proposals that may retry or edit graph nodes but cannot execute tools, approve actions, or mark work complete
+- typed graph/node/run/artifact contracts in `src/runtime/execution-graph/types.ts`
+- graph controller, store, event, artifact, and checkpoint support
+- node runners for direct reasoning, synthesis, mutation, delegated-worker execution, verification, and recovery
+- pending-action adaptation for graph blockers
+- worker suspension/resume artifacts for interrupted delegated work
+- run-timeline projection from graph lifecycle events
+- bounded recovery and retry rules that cannot approve actions or mark work complete without verifier evidence
 
 Direct reasoning becomes an `explore_readonly` node. Delegated workers become `delegated_worker` or `mutate` node runners. Grounded synthesis becomes a no-tools `synthesize` node over typed evidence artifacts. Hybrid read/write requests should pass artifacts between nodes instead of prose between workers.
 
@@ -195,7 +241,9 @@ Security invariants remain unchanged:
 - all mutations execute through supervisor-owned `ToolExecutor`, Guardian policy, approvals, and audit
 - graph events and run-timeline payloads must use bounded previews and must not expose raw prompts, raw secrets, or unbounded tool output
 
-The implementation plan is `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`.
+Current limitation:
+- legacy assistant dispatch, deterministic workflows, and older delegated-worker handoff code still coexist with the graph module
+- future work should migrate remaining prompt-specific repair paths into graph-native node contracts instead of adding another orchestration adapter
 
 ## 5a. System-Owned Background Maintenance
 
@@ -233,6 +281,19 @@ It provides:
 - checkpointed transitions
 - persisted bounded resume context
 - approval-safe deterministic resume
+
+Resume state:
+- `RunStateStore` persists checkpoints through `InMemoryRunStateStore` or `JsonFileRunStateStore`
+- the runtime wires JSON persistence at `~/.guardianagent/playbook-run-state.json`
+- `GraphRunCheckpoint` records `nextNodeId`, pending approval IDs, and bounded resume context
+- `ConnectorPlaybookService.continueAfterApprovalDecision(...)` resumes the same graph run after approval decisions resolve
+
+Evidence-grounded instruction steps:
+- instruction steps support `evidenceMode: none | grounded | strict`
+- instruction steps support `citationStyle: sources_list | inline_markers`
+- prior tool outputs are normalized into citations/evidence when available
+- `strict` mode fails early when no prior evidence exists and validates required citation/source output
+- run history carries citations and evidence for inspection and evals
 
 Supported workflow step types:
 - `tool`

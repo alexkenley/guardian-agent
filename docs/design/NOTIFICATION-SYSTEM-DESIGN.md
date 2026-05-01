@@ -1,6 +1,6 @@
 # Notification System Design
 
-**Status:** Initial implementation + next-step design  
+**Status:** Initial implementation + next-step design
 **Date:** 2026-03-11
 
 ## Goal
@@ -60,7 +60,7 @@ Default notification-worthy audit events:
 
 Implementation file:
 
-- [notifications.ts](/mnt/s/Development/GuardianAgent/src/runtime/notifications.ts)
+- [notifications.ts](../../src/runtime/notifications.ts)
 
 Responsibilities:
 

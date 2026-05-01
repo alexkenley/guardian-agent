@@ -149,17 +149,11 @@ const sqliteServer: MCPServerConfig = {
 };
 ```
 
-### Managed Providers
+### Managed And Native Provider Boundary
 
-Some external integrations are better represented as **managed MCP providers** rather than raw user-authored server definitions.
+Some external integrations are represented as managed provider surfaces instead of raw user-authored MCP server definitions. The MCP client remains the boundary for third-party MCP servers and managed MCP-backed tools such as browser automation.
 
-Current foundation:
-
-- Google Workspace via `gws mcp`
-
-GuardianAgent now supports config-driven materialization of managed provider server definitions. This preserves the existing MCP runtime model while making complex provider bundles easier to secure and operate.
-
-See `docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`.
+Google Workspace is no longer a managed MCP backend in the current codebase. It uses the native `src/google/` service and keeps the stable `gws` tool facade through the supervisor-owned tool executor. The historical CLI/MCP design is archived at `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`; the current contract is `docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md`.
 
 ---
 

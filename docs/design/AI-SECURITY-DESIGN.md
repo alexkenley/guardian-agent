@@ -1,12 +1,12 @@
 # Assistant Security Design
 
-**Status:** Proposed intended implementation  
-**Date:** 2026-04-08  
-**Owner:** Security + Runtime + Web UI  
-**Amends:** [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md) for the future `Security > Assistant Security` tab  
-**Related:** [SECURITY-PANEL-CONSOLIDATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SECURITY-PANEL-CONSOLIDATION-DESIGN.md), [THREAT-INTEL-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/THREAT-INTEL-DESIGN.md), [CODE-WORKSPACE-TRUST-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODE-WORKSPACE-TRUST-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
+**Status:** Implemented current architecture, with deterministic posture scanning baseline
+**Date:** 2026-04-08
+**Owner:** Security + Runtime + Web UI
+**Amends:** [WEBUI-DESIGN.md](./WEBUI-DESIGN.md) for the `Security > Assistant Security` tab
+**Related:** [SECURITY-PANEL-CONSOLIDATION-DESIGN.md](./SECURITY-PANEL-CONSOLIDATION-DESIGN.md), [THREAT-INTEL-DESIGN.md](./THREAT-INTEL-DESIGN.md), [CODE-WORKSPACE-TRUST-DESIGN.md](./CODE-WORKSPACE-TRUST-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](./AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
 
-The as-built defensive-security suite document is the canonical shipped reference. This spec remains the forward-looking Assistant Security design doc and is updated here where shipped behavior now sets the contract.
+The as-built defensive-security suite document is the broad shipped reference. This document is the current Assistant Security design/as-built contract for the deterministic posture scanning baseline in [ai-security.ts](../../src/runtime/ai-security.ts), the Security page implementation in [security.js](../../web/public/js/pages/security.js), and the assistant-security tools in [security-intel-tools.ts](../../src/tools/builtin/security-intel-tools.ts).
 
 Configuration remains the owner of security settings. `Security > Assistant Security` is the operator command center.
 
@@ -44,14 +44,19 @@ What is missing is a first-class way to ask:
 
 ### Primary scan targets
 
-- `assistant_runtime`
-  - the main Guardian assistant behavior with its current prompt, policy, and tool routing
-- `code_session`
-  - the coding assistant with an attached workspace and current trust state
+Implemented target types:
+
+- `runtime`
+  - the active Guardian runtime posture, including sandbox availability, browser posture, MCP exposure, and agent policy update posture
+- `workspace`
+  - tracked coding-session workspaces with current trust assessment and review state
+
+Forward target types:
+
 - `web_ui`
-  - the web chat and approval flow when browser-backed validation is enabled
-- `workspace_influence`
-  - bounded analysis of repo content that may influence the assistant without executing repo code
+  - browser-backed validation of web chat and approval flow
+- deeper `workspace_influence`
+  - richer hostile repo-content probes beyond the current workspace-trust correlation
 
 ### Not just repo review
 
@@ -82,29 +87,24 @@ The feature should consume the security-settings posture produced by the paralle
 
 ## Detection Categories
 
-Phase 1 should cover:
+The deterministic baseline covers these implemented categories:
 
-- `jailbreak`
-  - attempts to override role, policy, or system instructions
-- `prompt_injection`
-  - attempts to make untrusted repo/chat content act as instructions
-- `prompt_leak`
-  - attempts to reveal system prompt, hidden policy, or internal guardrail text
-- `tool_escape`
-  - attempts to get the assistant to exceed path, domain, or authority bounds
-- `approval_bypass`
-  - attempts to perform actions that should still require approval
-- `secret_disclosure`
-  - attempts to reveal secrets, credentials, prior messages, memory, or protected config
-- `memory_boundary`
-  - attempts to poison or persist hostile memory content
+- `sandbox`
+  - degraded containment, risky fallback allowances, package-manager exposure, or manual terminal risks
+- `policy`
+  - runtime policy update surfaces that can widen path, command, domain, or tool authority
+- `browser`
+  - browser/MCP exposure and dynamic Playwright package risks
+- `mcp`
+  - third-party server startup, network, environment, and connection posture
+- `workspace`
+  - coding-workspace trust/review state and high-risk workspace findings
 - `trust_boundary`
-  - attempts to turn low-trust or quarantined content into writes, approvals, or execution
-- `workspace_influence`
-  - hostile README, prompt file, script, or toolchain cues that may steer the coding assistant
+  - untrusted workspaces or accepted-risk reviews that can affect assistant behavior
 
-Phase 2 can add:
+Future probe-backed phases can add:
 
+- `jailbreak`, `prompt_injection`, `prompt_leak`, `tool_escape`, `approval_bypass`, `secret_disclosure`, and `memory_boundary`
 - browser/webchat-specific interaction probes
 - regression scoring and attack success rate (ASR) trends
 - optional garak-compatible community probe adapters
@@ -124,7 +124,7 @@ It should sit beside:
 - `Assistant Security` (merged command center including automated security activity)
 - `Threat Intel`
 
-Recommended placement: between `Security Log` and `Threat Intel`.
+Current placement: the Security page tabs are `Overview`, `Assistant Security`, `Threat Intel`, and `Security Log`.
 
 ### Required sections
 
@@ -153,13 +153,18 @@ Operators can view and manage scan targets such as:
 
 Profiles define probe bundles and execution scope.
 
-Initial built-ins:
+Implemented built-ins:
 
-- `Quick`
-- `Standard`
-- `Release Gate`
-- `Continuous`
-- `Browser`
+- `quick`
+- `runtime-hardening`
+- `workspace-boundaries`
+
+Reserved/future profile families:
+
+- `standard`
+- `release_gate`
+- `continuous`
+- `browser`
 
 #### `Recent Runs`
 
@@ -196,20 +201,16 @@ Shows:
 
 ## Runtime Architecture
 
-Add the following runtime pieces:
+Implemented runtime pieces:
 
-- `AiSecurityTargetStore`
-  - persists configured scan targets
-- `AiSecurityProbeRegistry`
-  - resolves built-in, community, and custom probe packs
-- `AiSecurityScanService`
-  - runs probes against the chosen target
-- `AiSecurityRunStore`
-  - persists run state and per-run evidence
-- `AiSecurityFindingStore`
-  - persists normalized findings and triage status
-- `AiSecurityScheduler`
-  - runs background scans on schedule
+- `AiSecurityService`
+  - owns target discovery, built-in profiles, deterministic scan evaluation, run/finding persistence, status updates, and promotion candidates
+- `AssistantSecurityConfig`
+  - configures deployment profile, operating mode, triage provider preference, continuous monitoring, and auto-containment thresholds under `assistant.security`
+- managed scheduled task preset `assistant-security-scan`
+  - runs the configured quick profile on the schedule from `assistant.security.continuousMonitoring`
+- `security-intel-tools.ts`
+  - exposes `assistant_security_status`, `assistant_security_scan`, and `assistant_security_findings`
 
 Optional later component:
 
@@ -218,36 +219,33 @@ Optional later component:
 
 ## Execution model
 
-1. A target and profile are selected.
-2. The profile resolves into a bounded probe list.
-3. The scan service runs those probes against the target.
-4. Raw results are normalized into findings.
-5. Findings are persisted, triaged, and classified as either posture-only debt or incident-candidate evidence.
-6. Relevant incident-candidate findings that meet the promotion threshold appear in `Security Log`.
-7. Run lifecycle events appear in `Agentic Security Log` when agent-driven or scheduled.
+1. The operator, tool layer, or scheduled task selects a profile and optional targets.
+2. `AiSecurityService` resolves runtime and workspace targets.
+3. Deterministic posture checks evaluate the selected targets.
+4. Findings are persisted in `~/.guardianagent/assistant-security.json`, deduplicated by stable keys, and classified as either posture-only debt or incident-candidate evidence.
+5. High/critical incident-candidate findings are returned as promoted findings and enter `Security Log` through the unified alert lifecycle.
+6. Runs and findings are visible in `Security > Assistant Security`.
 
 ## Settings Integration
 
 Configuration should own the editable settings under the broader Security settings area being introduced by the parallel hardening work.
 
-Recommended semantic namespace:
+Implemented namespace:
 
-- `assistant.security.aiSecurity`
+- `assistant.security`
 
-If the concurrent config work nests this differently, the fields can be remapped. The semantic requirements are:
+Current fields include:
 
-- `enabled: boolean`
-- `mode: off | manual | continuous`
-- `defaultProfile: quick | standard | release_gate | continuous | browser`
-- `scheduleCron` or `intervalMinutes`
-- `promoteSeverity: high | critical` for incident-candidate findings
-- `allowCodeSessionTargets: boolean`
-- `allowWebTargets: boolean`
-- `allowExternalProbeWorkers: boolean`
-- `requireStrongSandboxForBrowserProfiles: boolean`
-- `requireStrongSandboxForContinuousProfiles: boolean`
-- `retainRunsDays: number`
-- `retainEvidenceDays: number`
+- `deploymentProfile`
+- `operatingMode`
+- `triageLlmProvider`
+- `continuousMonitoring.enabled`
+- `continuousMonitoring.profileId`
+- `continuousMonitoring.cron`
+- `autoContainment.enabled`
+- `autoContainment.minSeverity`
+- `autoContainment.minConfidence`
+- `autoContainment.categories`
 
 ### Posture-aware behavior
 
@@ -267,24 +265,26 @@ The tab should **read** this posture, not become the place where those settings 
 ### Target
 
 - `id`
-- `kind: assistant_runtime | code_session | web_ui | workspace_influence`
+- `type: runtime | workspace`
 - `label`
-- `targetRef`
-- `enabled`
-- `createdAt`
-- `updatedAt`
+- `description`
+- `riskLevel`
+- `ready`
+- `metadata`
 
 ### Run
 
 - `id`
-- `targetId`
+- `source: manual | scheduled | system`
 - `profileId`
-- `status: queued | running | succeeded | failed | cancelled`
-- `trigger: manual | scheduled | release_gate | session_attach`
+- `profileLabel`
 - `startedAt`
 - `completedAt`
-- `summary`
-- `postureSnapshot`
+- `success`
+- `message`
+- `targetCount`
+- `findingCount`
+- `highOrCriticalCount`
 
 ### Finding
 
@@ -297,10 +297,10 @@ The tab should **read** this posture, not become the place where those settings 
 - `summary`
 - `evidence`
 - `alertSemantics: posture_only | incident_candidate`
-- `status: new | triaged | accepted_risk | fixed | false_positive`
-- `promotedToSecurityLog: boolean` derived from `alertSemantics` and the active promotion threshold
-- `createdAt`
-- `updatedAt`
+- `status: new | triaged | resolved | suppressed`
+- `firstSeenAt`
+- `lastSeenAt`
+- `occurrenceCount`
 
 ## Integration With Existing Security Surfaces
 
@@ -356,27 +356,27 @@ Phase 2:
 
 ## API Surface
 
-Recommended endpoints:
+Implemented endpoints:
 
 - `GET /api/security/ai/summary`
-- `GET /api/security/ai/targets`
-- `POST /api/security/ai/targets`
-- `POST /api/security/ai/targets/delete`
 - `GET /api/security/ai/profiles`
+- `GET /api/security/ai/targets`
 - `GET /api/security/ai/runs`
 - `POST /api/security/ai/runs`
 - `GET /api/security/ai/findings`
 - `POST /api/security/ai/findings/status`
-- `GET /api/security/ai/trends`
 
 Optional later:
 
+- `GET /api/security/ai/trends`
+- `POST /api/security/ai/targets`
+- `POST /api/security/ai/targets/delete`
 - `POST /api/security/ai/profiles`
 - `POST /api/security/ai/probes/sync`
 
 ## Audit Events
 
-Add audit types for:
+Dedicated audit event names remain future work. The current baseline records Assistant Security runs/findings through the Assistant Security persistence file, Security page APIs, unified alert promotion, scheduled-task history, and tool execution/audit surfaces. Future event names should include:
 
 - `assistant_security_scan_started`
 - `assistant_security_scan_completed`
@@ -390,17 +390,17 @@ These events should support Security Log correlation and Assistant Security hist
 
 ### Phase 1
 
-- add `Security > Assistant Security` tab shell
-- add target/profile/run/finding persistence
-- ship built-in deterministic probes
-- support manual scans for `assistant_runtime` and `code_session`
-- promote only incident-candidate high/critical findings into `Security Log`
-- surface session-local results in Code checks
+- shipped `Security > Assistant Security` tab
+- added runtime/workspace target discovery and profile listing
+- added run/finding persistence
+- shipped built-in deterministic posture probes
+- supports manual and scheduled scans for `runtime` and `workspace`
+- promotes incident-candidate high/critical findings into `Security Log`
 
 ### Phase 2
 
-- add scheduling and trend tracking
-- add web UI/browser-backed targets
+- add richer trend tracking
+- add web UI/browser-backed dynamic probes
 - add posture-aware gating for higher-risk profiles
 - add regression comparisons and release-gate mode
 

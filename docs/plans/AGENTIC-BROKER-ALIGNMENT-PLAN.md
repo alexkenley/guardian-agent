@@ -1,6 +1,6 @@
 # Agentic System Broker Alignment Plan
 
-**Status:** Completed  
+**Status:** Completed
 **Last updated:** 2026-04-13
 
 ## Purpose
@@ -47,7 +47,7 @@ That alignment is now implemented.
 - `src/runtime/planner/orchestrator.ts`
 - `src/worker/worker-session.ts`
 - `src/worker/worker-session.test.ts`
-- `docs/design/AGENTIC-DAG-PLANNER-DESIGN.md`
+- `docs/design/ORCHESTRATION-DESIGN.md`
 - `docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md`
 
 ## Verification

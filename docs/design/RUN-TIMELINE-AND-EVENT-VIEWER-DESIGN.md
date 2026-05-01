@@ -1,14 +1,14 @@
 # Run Timeline And Event Viewer Design
 
-**Status:** Implemented current architecture, with durable execution graph event ingestion planned
+**Status:** Implemented current architecture, including durable execution-graph event projection
 **Date:** 2026-03-31
-**Roadmap:** [UI-TARS Uplift Roadmap](/mnt/s/Development/GuardianAgent/docs/plans/UI-TARS-UPLIFT-ROADMAP.md)
-**Primary Runtime:** [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts), [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-**Primary Web Surface:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts), [app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), [system.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/system.js), [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+**Roadmap:** [UI-TARS Uplift Roadmap](../plans/UI-TARS-UPLIFT-ROADMAP.md)
+**Primary Runtime:** [orchestrator.ts](../../src/runtime/orchestrator.ts), [run-events.ts](../../src/runtime/run-events.ts), [run-timeline.ts](../../src/runtime/run-timeline.ts), [execution-graph/](../../src/runtime/execution-graph/), [code-sessions.ts](../../src/runtime/code-sessions.ts), [index.ts](../../src/index.ts)
+**Primary Web Surface:** [web.ts](../../src/channels/web.ts), [web-types.ts](../../src/channels/web-types.ts), [app.js](../../web/public/js/app.js), [system.js](../../web/public/js/pages/system.js), [code.js](../../web/public/js/pages/code.js)
 
 ## Purpose
 
-Phase 1 of the UI-TARS uplift should make Guardian's existing execution traces readable and live.
+The UI-TARS Phase 1 timeline work has shipped. Guardian now has a bounded run-timeline projection that makes existing execution traces readable and live across assistant dispatch, deterministic workflows, coding sessions, delegated workers, provider calls, context assembly, and the durable execution graph.
 
 The goal is operator visibility, not a new execution engine. Guardian already has useful orchestration state, approval state, code-session work state, and deterministic workflow events. The missing piece is a first-class read model and UI surface that presents those events in the order the user actually cares about.
 
@@ -31,22 +31,20 @@ Current as-built deltas:
 - assistant-dispatch runs now project bounded `provider_call` nodes so operators can see final model provenance, model id, duration, and token/cache usage without exposing raw prompts
 - context-assembly nodes now carry bounded compaction diagnostics, including pre/post prompt size, applied stages, and compacted-summary preview when context had to be shortened for budget
 
-Forward target:
-- `RunTimelineStore` should ingest durable execution graph events as the primary execution view for direct reasoning, synthesis, mutation, approval, verification, and recovery nodes.
-- Intent-routing trace rows should remain diagnostic routing/provider evidence, not the authoritative record of execution.
-- Direct reasoning tool calls should appear as graph/timeline tool-call nodes rather than only as `direct_reasoning_tool_call` entries in `intent-routing-trace`.
-- The canonical implementation plan is `docs/plans/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md`.
+Current graph integration:
+- `RunTimelineStore` now accepts execution-graph lifecycle projection from `src/runtime/execution-graph/timeline-adapter.ts`.
+- Graph events cover node start/completion/failure, direct reasoning, synthesis, mutation, delegated worker work, verification, recovery, pending-action interrupts, and worker suspension/resume.
+- Intent-routing trace rows remain diagnostic routing/provider evidence; the run timeline is the operator-facing execution read model.
+- Direct reasoning and delegated-worker activity should be surfaced as graph/timeline nodes whenever the execution path has graph artifacts available.
 
 ## Problem Statement
 
-Current behavior is functional but fragmented:
+Current behavior is intentionally a projection, not a second execution engine:
 
-- `GET /api/assistant/state` exposes orchestrator summary and recent traces, but not a run-centric timeline model.
-- [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts) defines `OrchestrationRunEvent`, but those events are not a typed, operator-facing web contract.
-- The Code page refreshes `pendingApprovals`, `recentJobs`, and `verification` from the session snapshot, but those lists are not correlated into one ordered execution view.
-- SSE currently streams chat, terminal, and security events, but there is no run lifecycle event family.
-
-The result is that Guardian can tell the user that work happened, but it does not yet let the user reconstruct what happened in order, why the agent is paused, or what changed between steps.
+- `GET /api/assistant/runs` and `GET /api/assistant/runs/:runId` expose recent run summaries and per-run timeline detail.
+- [run-events.ts](../../src/runtime/run-events.ts), assistant dispatch traces, code-session work state, delegated-worker jobs, provider provenance, context-assembly diagnostics, and execution-graph events feed [run-timeline.ts](../../src/runtime/run-timeline.ts).
+- The Code page has a session-scoped Activity surface that correlates approvals, tool jobs, verification, and matching assistant timeline events.
+- SSE emits `run.timeline` updates so System and Code surfaces can stay live without polling the entire assistant state.
 
 ## Goals
 
@@ -67,22 +65,22 @@ The result is that Guardian can tell the user that work happened, but it does no
 
 ## Existing Sources Of Truth
 
-Phase 1 should reuse current runtime data instead of inventing new semantics:
+The timeline reuses current runtime data instead of inventing new semantics:
 
-- [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts)
+- [orchestrator.ts](../../src/runtime/orchestrator.ts)
   - `AssistantDispatchTrace`
   - `WorkflowTraceNode`
   - request lifecycle status and message previews
-- [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts)
+- [run-events.ts](../../src/runtime/run-events.ts)
   - deterministic workflow and resume lifecycle events
-- [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
+- [code-sessions.ts](../../src/runtime/code-sessions.ts)
   - `pendingApprovals`
   - `recentJobs`
   - `verification`
-- [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [index.ts](../../src/index.ts)
   - existing assembly of System-page assistant state
   - current code-session mutations after tool execution and approvals
-- [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
+- [web.ts](../../src/channels/web.ts)
   - existing authenticated JSON endpoints
   - existing SSE transport
 
@@ -90,13 +88,13 @@ The Phase 1 job is to project these sources into one consistent read model.
 
 Current delegation-related sources of truth also include:
 
-- [assistant-jobs.ts](/mnt/s/Development/GuardianAgent/src/runtime/assistant-jobs.ts)
+- [assistant-jobs.ts](../../src/runtime/assistant-jobs.ts)
   - mutable high-level assistant and delegated-worker job records
   - merged operator-facing recent-job state
   - derived display state for delegated origin, outcome, and follow-up labels
-- [executions.ts](/mnt/s/Development/GuardianAgent/src/runtime/executions.ts)
+- [executions.ts](../../src/runtime/executions.ts)
   - durable execution identity and root/parent lineage for request correlation
-- [worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
+- [worker-manager.ts](../../src/supervisor/worker-manager.ts)
   - delegated lineage metadata
   - effective delegated intent metadata for trace and retry decisions
   - bounded handoff summaries for brokered worker completions and failures
@@ -104,15 +102,15 @@ Current delegation-related sources of truth also include:
   - server-owned delegated follow-up policy (`inline_response`, `held_for_approval`, `status_only`, operator-held review)
   - held-result replay, keep-held, and dismiss controls for operator-held delegated completions
 
-## Proposed Architecture
+## As-Built Architecture
 
-### 1. Add A Bounded Run-Timeline Projection
+### 1. Bounded Run-Timeline Projection
 
-Add a new runtime module:
+Runtime module:
 
 - `src/runtime/run-timeline.ts`
 
-This module should be a bounded in-memory projection, not a new durable store.
+This module is a bounded in-memory projection, not a new durable store.
 
 Responsibilities:
 
@@ -145,7 +143,7 @@ If timeline projection state is lost on restart, the system should still functio
 
 ### Run Summary
 
-Add a typed web-facing run summary shape in [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts):
+Add a typed web-facing run summary shape in [web-types.ts](../../src/channels/web-types.ts):
 
 ```ts
 type DashboardRunStatus =
@@ -198,7 +196,7 @@ Notes:
 - delegated child task runs should use `kind: 'delegated_task'` and set `parentRunId` to the originating assistant-dispatch run
 - when execution lineage exists, delegated child task runs should also carry `executionId`, `parentExecutionId`, and `rootExecutionId` so the chat surface can subscribe to the useful child run instead of only the parent
 - `title` should be user-facing and built from safe preview text already available in runtime state.
-- Phase 1 should reserve `takeover_required` for a later phase, but it should not emit that state yet.
+- The current implementation reserves `takeover_required` for a later phase and should not emit that state yet.
 
 ### Timeline Item
 
@@ -310,7 +308,7 @@ Fallback buckets are acceptable for old sessions and migration gaps, but Phase 1
 
 ### 1. Orchestrator Hooks
 
-Add a small subscription surface to [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts) so trace changes can be pushed, not polled.
+Add a small subscription surface to [orchestrator.ts](../../src/runtime/orchestrator.ts) so trace changes can be pushed, not polled.
 
 Recommended shape:
 
@@ -322,13 +320,13 @@ Recommended shape:
   - trace failed
   - node added or updated
 
-This is preferable to repeatedly diffing `orchestrator.getState()` from [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts).
+This is preferable to repeatedly diffing `orchestrator.getState()` from [index.ts](../../src/index.ts).
 
 ### 2. Workflow Run Event Hooks
 
 Where Guardian currently creates or persists `OrchestrationRunEvent`, also forward the event to the timeline projector.
 
-Phase 1 should reuse current event types:
+The timeline reuses current event types:
 
 - `run_created`
 - `node_started`
@@ -354,11 +352,11 @@ When code-session work state is updated, forward only timeline-relevant deltas:
 - recent job additions and status changes
 - verification additions and status changes
 
-This is the only new coupling Phase 1 needs between [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts) and the run-timeline projection.
+This is the only new coupling Phase 1 needs between [code-sessions.ts](../../src/runtime/code-sessions.ts) and the run-timeline projection.
 
 ## Web API
 
-Phase 1 should add dedicated endpoints instead of overloading `GET /api/assistant/state`.
+Dedicated endpoints are implemented instead of overloading `GET /api/assistant/state`.
 
 ### `GET /api/assistant/runs`
 
@@ -429,7 +427,7 @@ Current operator deep-link semantics:
 
 ## SSE Contract
 
-Extend [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts) and [app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js) with a new event type:
+[web-types.ts](../../src/channels/web-types.ts) and [app.js](../../web/public/js/app.js) carry the live event type:
 
 - `run.timeline`
 
@@ -462,7 +460,7 @@ Do not send the full run payload on every event.
 
 ### System
 
-Add a recent-runs section to [system.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/system.js):
+[system.js](../../web/public/js/pages/system.js) renders a recent-runs section:
 
 - show run title, status, source kind, agent, and relative time
 - show badges for approvals pending and verification pending
@@ -473,18 +471,18 @@ The System page should remain summary-first. It does not need full code-session 
 
 ### Code Page
 
-Add a new activity panel or activity tab to [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js):
+[code.js](../../web/public/js/pages/code.js) renders a session-scoped activity panel:
 
 - filter to the active `codeSessionId`
 - group recent runs for that session
 - render approvals, tool jobs, verification, and workflow markers in one ordered list
 - keep the existing approvals and checks surfaces during the transition
 
-Phase 1 should not try to delete or fully redesign the current Code page. The timeline is an additive operator aid first.
+The timeline remains an additive operator aid; the existing approvals and checks surfaces are retained.
 
 ### Chat Surface
 
-No new dedicated chat-page run viewer is required in Phase 1.
+No dedicated chat-page run viewer is implemented.
 
 The System page and Code page are enough to validate the model before expanding it further.
 

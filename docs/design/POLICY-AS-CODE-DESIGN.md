@@ -2,8 +2,8 @@
 
 **Status:** Implemented foundation, not yet authoritative for all decision families
 **Date:** 2026-03-20
-**Proposal Origin:** [Policy as Code Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/POLICY-AS-CODE-PROPOSAL.md)
-**Related Designs:** [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md), [CONFIG-CENTER-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONFIG-CENTER-DESIGN.md)
+**Proposal Origin:** [Policy as Code Proposal](../proposals/POLICY-AS-CODE-PROPOSAL.md)
+**Related Designs:** [TOOLS-CONTROL-PLANE-DESIGN.md](./TOOLS-CONTROL-PLANE-DESIGN.md), [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](./CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md), [CONFIG-CENTER-DESIGN.md](./CONFIG-CENTER-DESIGN.md)
 
 ## Purpose
 
@@ -89,8 +89,8 @@ Returned runtime status includes:
 
 Current shipped policy files include:
 
-- [tools.json](/mnt/s/Development/GuardianAgent/policies/base/tools.json)
-- [browser.json](/mnt/s/Development/GuardianAgent/policies/base/browser.json)
+- [tools.json](../../policies/base/tools.json)
+- [browser.json](../../policies/base/browser.json)
 
 These define declarative rules for intended tool and browser behavior, including:
 
@@ -142,8 +142,8 @@ Shadow-mode statistics are also only meaningful for families that are actually w
 
 Current authoritative behavior is split:
 
-- [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md) documents the shipped tool approval and policy behavior
-- [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md) documents current trust-aware enforcement
+- [TOOLS-CONTROL-PLANE-DESIGN.md](./TOOLS-CONTROL-PLANE-DESIGN.md) documents the shipped tool approval and policy behavior
+- [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](./CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md) documents current trust-aware enforcement
 - this spec documents the declarative engine subsystem that now exists alongside them
 
 ## Files

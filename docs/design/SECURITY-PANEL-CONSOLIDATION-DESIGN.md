@@ -1,20 +1,20 @@
 # Security Panel Consolidation Design
 
-**Status:** Proposed intended implementation  
-**Date:** 2026-03-21  
-**Owner:** Security + Web UI  
-**Amends:** [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md) for the `Security` page only  
-**Related:** [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
+**Status:** Implemented current architecture
+**Date:** 2026-03-21
+**Owner:** Security + Web UI
+**Amends:** [WEBUI-DESIGN.md](./WEBUI-DESIGN.md) for the `Security` page only
+**Related:** [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](./AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
 
 ## Purpose
 
-Define the intended simplification of the Security page so operators do not have to mentally split “actionable alerts” from “historical audit” when the current product already overlaps those surfaces.
+Define the implemented simplification of the Security page so operators do not have to mentally split “actionable alerts” from “historical audit” when the current product already overlaps those surfaces.
 
-This spec recommends a **single Security Log operator surface** instead of separate `Alerts` and `Audit` tabs.
+The shipped page now uses a **single Security Log operator surface** instead of separate `Alerts` and `Audit` tabs. The implementation is in [security.js](../../web/public/js/pages/security.js), with server endpoints in [web-monitoring-routes.ts](../../src/channels/web-monitoring-routes.ts) and [web-runtime-routes.ts](../../src/channels/web-runtime-routes.ts).
 
 ## Current Problem
 
-Today the Security page has:
+Earlier Security page versions had:
 
 - `Alerts` for the active queue
 - `Audit` for the full ledger
@@ -38,7 +38,7 @@ There is much less value in forcing them to be separate **primary tabs**.
 
 ## Decision
 
-Replace the separate `Alerts` and `Audit` tabs with a single `Security Log` tab.
+Replace the separate `Alerts` and `Audit` tabs with a single `Security Log` tab. This is now the shipped WebUI behavior.
 
 The backend model stays split:
 
@@ -54,15 +54,14 @@ The operator experience becomes unified:
 
 ## Target Information Architecture
 
-The intended Security page tabs become:
+The current Security page tabs are:
 
 1. `Overview`
-2. `Security Log`
-3. `Agentic Security Log`
-4. `Threat Intel`
-5. `Assistant Security` (future)
+2. `Assistant Security`
+3. `Threat Intel`
+4. `Security Log`
 
-`Assistant Security` remains a future tab for model and coding-assistant adversarial testing. Its promoted findings should flow into `Security Log`, not create another parallel alert console.
+`Agentic Security Log` is no longer a top-level tab; Assistant Security activity is rendered inside the `Assistant Security` tab. Promoted Assistant Security findings flow into `Security Log` through the unified alert lifecycle.
 
 ## Security Log
 
@@ -140,7 +139,7 @@ Audit chain verification moves into `Security Log` as a compact integrity sectio
 
 ## API Direction
 
-Phase 1 should reuse existing endpoints:
+The current implementation reuses existing endpoints:
 
 - `GET /api/security/alerts`
 - `POST /api/security/alerts/ack`
@@ -150,7 +149,7 @@ Phase 1 should reuse existing endpoints:
 - `GET /api/audit/summary`
 - `GET /api/audit/verify`
 
-Phase 2 may add a dedicated normalized endpoint:
+No dedicated normalized endpoint exists today. A future backend normalization pass may still add:
 
 - `GET /api/security/log`
 
@@ -175,9 +174,9 @@ The implementation goal is to move normalization out of `web/public/js/pages/sec
 
 ### Phase 1
 
-- replace `Alerts` and `Audit` tabs with `Security Log`
-- keep current backend endpoints and lifecycle behavior
-- move existing alert and audit UI blocks into one consolidated tab
+- replaced `Alerts` and `Audit` tabs with `Security Log`
+- kept current backend endpoints and lifecycle behavior
+- moved existing alert and audit UI blocks into one consolidated tab
 
 ### Phase 2
 
@@ -187,7 +186,7 @@ The implementation goal is to move normalization out of `web/public/js/pages/sec
 
 ### Phase 3
 
-- route future `Assistant Security` promoted findings into the same `Security Log`
+- routed Assistant Security promoted findings into the same `Security Log`
 - add saved views or presets for `Queue`, `Forensics`, and `Policy`
 
 ## Non-Goals

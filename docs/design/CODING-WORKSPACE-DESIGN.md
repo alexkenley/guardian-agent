@@ -1,14 +1,14 @@
 # Coding Workspace Design
 
 **Status:** As Built
-**Date:** 2026-03-21  
-**Primary UI:** [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)  
-**Primary Runtime:** [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)  
-**Code Session Store:** [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)  
-**Workspace Trust Runtime:** [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)  
-**Native AV Runtime:** [code-workspace-native-protection.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.ts)  
-**Primary Web API:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)  
-**Primary Tools:** [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+**Date:** 2026-03-21
+**Primary UI:** [code.js](../../web/public/js/pages/code.js)
+**Primary Runtime:** [index.ts](../../src/index.ts)
+**Code Session Store:** [code-sessions.ts](../../src/runtime/code-sessions.ts)
+**Workspace Trust Runtime:** [code-workspace-trust.ts](../../src/runtime/code-workspace-trust.ts)
+**Native AV Runtime:** [code-workspace-native-protection.ts](../../src/runtime/code-workspace-native-protection.ts)
+**Primary Web API:** [web.ts](../../src/channels/web.ts)
+**Primary Tools:** [executor.ts](../../src/tools/executor.ts)
 
 ## Purpose
 
@@ -56,7 +56,7 @@ Core layers:
 
 ## Backend-Owned Code Sessions
 
-Code sessions are persisted in the backend by [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts).
+Code sessions are persisted in the backend by [code-sessions.ts](../../src/runtime/code-sessions.ts).
 
 Primary persisted shape:
 
@@ -166,7 +166,7 @@ Current trust-review heuristics also distinguish between strong execution indica
 
 When a user manually accepts the current findings, the session records `workspaceTrustReview` and derives an effective trust state from `workspaceTrust + workspaceTrustReview`. This is intentionally separate from the raw assessment so the UI can still show the underlying findings and why the workspace would otherwise remain `caution` or `blocked`.
 
-When `workspaceTrust` is not `trusted`, prompt assembly suppresses README-derived summary text and raw working-set snippets and instead instructs the model to treat repo content as untrusted data, not instructions. The implementation details are in [CODE-WORKSPACE-TRUST-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODE-WORKSPACE-TRUST-DESIGN.md).
+When `workspaceTrust` is not `trusted`, prompt assembly suppresses README-derived summary text and raw working-set snippets and instead instructs the model to treat repo content as untrusted data, not instructions. The implementation details are in [CODE-WORKSPACE-TRUST-DESIGN.md](./CODE-WORKSPACE-TRUST-DESIGN.md).
 
 This is the mechanism that gives the Coding Workspace durable repo grounding: not “all file contents in one prompt,” but backend repo awareness plus retrieval-backed working context.
 
@@ -192,10 +192,10 @@ The Code page is still a separate coding conversation surface in UX terms, but i
 
 Guardian supports two ways to enter a coding session:
 
-1. Explicit session targeting  
+1. Explicit session targeting
    A client targets a backend coding session by attaching its conversational surface and then using the normal message path. Other surfaces can still use `metadata.codeContext.sessionId` for explicit one-off targeting.
 
-2. Surface attachment  
+2. Surface attachment
    A chat surface is attached to a `CodeSession`, and later messages on that surface inherit it automatically.
 
 Surface attachment is tracked in `CodeSessionStore`.
@@ -687,11 +687,11 @@ Relevant checks:
 - typecheck: `npm run check`
 - focused tests: `npx vitest run src/runtime/code-workspace-structure.test.ts`
 - WebChannel route tests: `npx vitest run src/channels/channels.test.ts src/runtime/code-workspace-structure.test.ts`
-- code UI smoke: [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
-- coding workspace harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
-- contextual security harness: [test-contextual-security-uplifts.mjs](/mnt/s/Development/GuardianAgent/scripts/test-contextual-security-uplifts.mjs)
+- code UI smoke: [test-code-ui-smoke.mjs](../../scripts/test-code-ui-smoke.mjs)
+- coding workspace harness: [test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs)
+- contextual security harness: [test-contextual-security-uplifts.mjs](../../scripts/test-contextual-security-uplifts.mjs)
 - broader regression run: `npm test`
-- Windows Defender host helper: [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
+- Windows Defender host helper: [test-windows-defender-workspace-scan.ps1](../../scripts/test-windows-defender-workspace-scan.ps1)
 
 Validated during this implementation:
 

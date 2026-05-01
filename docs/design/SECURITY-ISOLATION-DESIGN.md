@@ -1,13 +1,13 @@
 # Security Isolation Design
 
-**Status:** Canonical architecture reference for current and planned isolation backends  
-**Date:** 2026-04-12  
-**Owner:** Runtime + Security  
-**Related:** [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [REMOTE-SANDBOXING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/REMOTE-SANDBOXING-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [Sandbox Egress And Secret Brokering Uplift](/mnt/s/Development/GuardianAgent/docs/proposals/SANDBOX-EGRESS-AND-SECRET-BROKERING-ROADMAP.md)
+**Status:** Canonical architecture reference for current and planned isolation backends
+**Date:** 2026-04-12
+**Owner:** Runtime + Security
+**Related:** [SECURITY.md](../../SECURITY.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](./BROKERED-AGENT-ISOLATION-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](./CODING-WORKSPACE-DESIGN.md), [REMOTE-SANDBOXING-DESIGN.md](./REMOTE-SANDBOXING-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](./TOOLS-CONTROL-PLANE-DESIGN.md), [Sandbox Egress And Secret Brokering Uplift](../proposals/SANDBOX-EGRESS-AND-SECRET-BROKERING-ROADMAP.md)
 
 This spec is the one-stop reference for how Guardian models execution isolation across brokered workers, local process sandboxes, local VM-backed isolation, and remote sandbox backends.
 
-Backend-specific docs remain the source of truth for implementation details. For provider-backed bounded coding execution, [Remote Sandboxing Spec](/mnt/s/Development/GuardianAgent/docs/design/REMOTE-SANDBOXING-DESIGN.md) is the concrete implementation reference. This document defines the shared contract and the security boundaries that must stay stable as new backends are added.
+Backend-specific docs remain the source of truth for implementation details. For provider-backed bounded coding execution, [Remote Sandboxing Spec](./REMOTE-SANDBOXING-DESIGN.md) is the concrete implementation reference. This document defines the shared contract and the security boundaries that must stay stable as new backends are added.
 
 ## Goal
 

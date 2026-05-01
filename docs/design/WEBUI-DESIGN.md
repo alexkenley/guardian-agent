@@ -1,8 +1,8 @@
 # WebUI Design
 
-**Status:** Source of truth  
-**Date:** 2026-04-05  
-**Owner:** WebUI uplift  
+**Status:** Source of truth
+**Date:** 2026-04-05
+**Owner:** WebUI uplift
 **Supersedes:** earlier WebUI panel-consolidation proposal workstreams
 
 ## Goal
@@ -320,7 +320,7 @@ It must provide:
 
 Workstation operations page for host pressure, editable workstation profiles, latency checks, and reviewed cleanup actions.
 
-Detailed runtime behavior, tool access, approval gating, and current implementation limits are defined in [PERFORMANCE-MANAGEMENT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md).
+Detailed runtime behavior, tool access, approval gating, and current implementation limits are defined in [PERFORMANCE-MANAGEMENT-DESIGN.md](./PERFORMANCE-MANAGEMENT-DESIGN.md).
 
 ### Guidance standard
 

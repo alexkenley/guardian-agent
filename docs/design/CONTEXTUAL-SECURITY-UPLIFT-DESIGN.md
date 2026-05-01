@@ -1,8 +1,8 @@
 # Contextual Security Uplift Design
 
-**Status:** Implemented  
-**Date:** 2026-03-16  
-**Proposal Origin:** [docs/implemented/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md)
+**Status:** Implemented
+**Date:** 2026-03-16
+**Proposal Origin:** [docs/implemented/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md](../implemented/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md)
 
 ## Purpose
 

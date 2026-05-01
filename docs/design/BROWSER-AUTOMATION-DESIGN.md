@@ -2,8 +2,8 @@
 
 **Status:** Implemented current Playwright browser wrapper surface
 **Date:** 2026-03-23
-**Proposal Origin:** [Browser Automation Proposal](/mnt/s/Development/GuardianAgent/docs/implemented/BROWSER-AUTOMATION-PROPOSAL.md)
-**Related Designs:** [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
+**Proposal Origin:** [Browser Automation Proposal](../implemented/BROWSER-AUTOMATION-PROPOSAL.md)
+**Related Designs:** [TOOLS-CONTROL-PLANE-DESIGN.md](./TOOLS-CONTROL-PLANE-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](./AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
 
 ## Purpose
 
@@ -113,7 +113,7 @@ Browser tools still flow through the normal Guardian control path:
 
 Shipped browser policy bundle:
 
-- [browser.json](/mnt/s/Development/GuardianAgent/policies/base/browser.json)
+- [browser.json](../../policies/base/browser.json)
 
 Current bundled rules:
 

@@ -2,11 +2,11 @@
 
 > The combined prompt/context/memory implementation sequence now lives in [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains the narrower delegation-specific reference.
 
-**Date:** 2026-03-31  
-**Status:** In progress  
-**Origin:** Long-running and delegated orchestration review  
-**Key files:** `src/agent/orchestration.ts`, `src/agent/recipes.ts`, `src/runtime/shared-state.ts`, `src/runtime/workflows.ts`, `src/worker/worker-session.ts`, `src/index.ts`  
-**Primary specs impacted:** `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md`, `docs/design/MULTI-AGENT-WORKFLOW-HARDENING-DESIGN.md`, `docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md`, `docs/design/AUDIT-PERSISTENCE-DESIGN.md`
+**Date:** 2026-03-31
+**Status:** In progress
+**Origin:** Long-running and delegated orchestration review
+**Key files:** `src/agent/orchestration.ts`, `src/agent/recipes.ts`, `src/runtime/shared-state.ts`, `src/runtime/workflows.ts`, `src/worker/worker-session.ts`, `src/index.ts`
+**Primary specs impacted:** `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md`, `docs/design/AUDIT-PERSISTENCE-DESIGN.md`
 
 ---
 

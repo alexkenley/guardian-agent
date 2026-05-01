@@ -141,14 +141,13 @@ src/google/
 
 - Current Google runtime behavior lives in `src/google/google-auth.ts` and `src/google/google-service.ts`
 - The shared `gws` tool routes directly to the native Google service when `assistant.tools.google.enabled` is configured
-- The earlier CLI-backed design is retained only as historical background in `GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`
+- The earlier CLI-backed design is archived at `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`
 
 ### Config (`src/config/types.ts`)
 
 ```typescript
 export interface GoogleConfig {
   enabled: boolean;
-  mode: 'native' | 'gws_cli';
   services: string[];
   oauthCallbackPort: number;
   credentialsPath: string;
@@ -188,11 +187,12 @@ GET    /api/google/status          — Auth state, services, token expiry
 
 ### Web UI (`web/public/js/pages/config.js`)
 
-`createGoogleWorkspacePanel()` redesigned:
-- **Native mode (default)**: credential upload, service toggles, Connect/Disconnect button, status indicator
-- **CLI mode**: existing setup guide (preserved for power users)
-- **Mode selector**: toggle between native and CLI
-- Both modes cross-reference each other: native panel mentions CLI as alternative, CLI panel mentions native as simpler path
+`createGoogleWorkspacePanel()` provides the native setup surface:
+- credential upload
+- service toggles
+- Connect/Disconnect button
+- status indicator
+- no CLI mode selector in the current config contract
 
 ### Security
 
@@ -239,7 +239,7 @@ GET    /api/google/status          — Auth state, services, token expiry
 | `src/google/google-auth.test.ts` | New — auth flow tests |
 | `src/google/google-service.test.ts` | New — API wrapper tests |
 | `src/config/types.ts` | Add `GoogleConfig`, add to `AssistantToolsConfig` |
-| `docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md` | Retain historical CLI background note |
+| `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md` | Archived historical CLI background note |
 | `src/tools/executor.ts` | Add `googleService` option, routing in `gws` handler |
 | `src/index.ts` | Bootstrap `GoogleAuth`/`GoogleService`, API routes, config hot-reload |
 | `web/public/js/pages/config.js` | Native Google connect/disconnect and status surface |

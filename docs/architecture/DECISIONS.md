@@ -391,7 +391,7 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) State is in-memory only — no persistence for long-running orchestrations
 - (-) State poisoning via crafted response content is an open challenge (InputSanitizer helps but doesn't fully solve)
 
-**Spec:** `docs/design/SHARED-STATE-DESIGN.md`
+**Spec:** `docs/design/ORCHESTRATION-DESIGN.md`
 
 ---
 
@@ -515,30 +515,29 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 
 ---
 
-## ADR-027: Google Workspace Uses Managed MCP + Native Skills
+## ADR-027: Google Workspace Uses Native Google APIs + Native Skills
 
-**Status:** Accepted (extended with native mode)
-**Implementation Status:** Both native googleapis SDK and managed `gws` CLI backends are implemented. Native mode is the default. Bundled Google skills and service-specific capability hooks apply to both modes.
+**Status:** Accepted (updated to reflect current implementation)
+**Implementation Status:** The native `googleapis` SDK backend is implemented and is the current backend. The historical managed `gws` CLI/MCP design has been archived. Bundled Google skills and service-specific capability hooks apply to the native `gws` tool facade.
 
 **Context:** Broad Google Workspace support is valuable, but building and maintaining bespoke first-party integrations for Gmail, Calendar, Drive, Docs, and Sheets would be slow and inconsistent. Giving the agent unrestricted shell access to a general-purpose Google CLI would weaken GuardianAgent's policy surface and audit story. Additionally, the CLI-based path required a 7-step setup (global npm install, Cloud Console credentials, terminal auth, manual config) that was too complex for typical users.
 
-**Decision:** Support two backends, with native mode as the default:
+**Decision:** Use native mode as the current supported backend:
 
-- **Native mode (default):** `src/google/` module calls Google APIs directly via the `googleapis` SDK. OAuth 2.0 PKCE handled within GuardianAgent with a localhost callback. 3-step setup.
-- **CLI mode (legacy):** Managed MCP provider built around `gws` CLI subprocess. Retained for power users with existing setups.
-- Both share the same `gws` tool name, Guardian policy pipeline, and curated native Google skills.
-- GuardianAgent owns policy, approvals, capabilities, audit, and sandboxing in both modes.
+- `src/google/` calls Google APIs directly via the `googleapis` SDK.
+- OAuth 2.0 PKCE is handled inside GuardianAgent with a localhost callback.
+- The operator setup is credential upload, service selection, and connect/disconnect in Configuration.
+- The stable `gws` tool name, Guardian policy pipeline, and curated native Google skills remain the model-facing contract.
+- GuardianAgent owns policy, approvals, capabilities, audit, and sandboxing for Google actions.
 
 **Consequences:**
 - (+) Native mode eliminates the external CLI dependency and reduces setup from 7 steps to 3.
 - (+) Direct SDK calls remove ~200ms subprocess overhead per API call.
 - (+) Encrypted token storage keeps credentials under GuardianAgent's control.
-- (+) CLI fallback preserves backward compatibility for existing deployments.
 - (+) Consistent control plane — both modes route through the same tool handlers and Guardian checks.
 - (-) Dynamic provider surfaces require stricter service allowlists and capability mapping.
-- (-) Two code paths to maintain (mitigated by shared tool interface and shared policy layer).
 
-**Specs:** `docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md` (native mode), `docs/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md` (CLI mode)
+**Specs:** `docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md`; historical CLI background is archived at `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`
 
 ---
 

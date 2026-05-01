@@ -1,8 +1,8 @@
 # Agentic Defensive Security Suite - As-Built Design
 
-**Status:** Implemented for the current local-defense scope; canonical current-state document  
-**Date:** 2026-04-08  
-**Proposal origin:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)  
+**Status:** Implemented for the current local-defense scope; canonical current-state document
+**Date:** 2026-04-08
+**Proposal origin:** [Agentic Defensive Security Suite](../proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)
 
 ## Purpose
 
@@ -476,7 +476,7 @@ Manual and live validation completed for this uplift:
 - `node scripts/test-coding-assistant.mjs`
 - `node scripts/test-code-ui-smoke.mjs`
 - live WSL ClamAV validation using clean and EICAR-positive fixtures through `CodeWorkspaceNativeProtectionScanner`
-- manual Windows Defender custom-path validation using [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
+- manual Windows Defender custom-path validation using [test-windows-defender-workspace-scan.ps1](../../scripts/test-windows-defender-workspace-scan.ps1)
 
 ## Deferred Work
 

@@ -1,8 +1,8 @@
 # Intelligence In Depth Design
 
-**Status:** Proposed target architecture with Layer 3/4/5 provider uplift partially implemented  
-**Date:** 2026-04-06  
-**Proposal origin:** [Offline Survival And Decision Lane Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/OFFLINE-SURVIVAL-AND-DECISION-LANE-PROPOSAL.md)
+**Status:** Current target architecture; Layer 3/4/5 provider uplift implemented, Layer 1/2 unimplemented
+**Date:** 2026-04-06
+**Proposal origin:** [Offline Survival And Decision Lane Proposal](../proposals/OFFLINE-SURVIVAL-AND-DECISION-LANE-PROPOSAL.md)
 
 ## Purpose
 
@@ -94,17 +94,13 @@ Remaining limitations worth recording honestly:
 
 ## As-Built Gap: Multimodal Managed-Cloud Routing
 
-Current external research matters here:
-
-- Ollama's chat API supports image input on message objects through an `images` field, using the same base API shape for local and cloud execution.
-- Ollama's current cloud-accessible model catalog includes multimodal models such as `gemma4:31b`, which Ollama currently presents as `Text, Image` with a 256K context window.
-- `gpt-oss:120b` remains an excellent text-first general managed-cloud default, but it is not the best future anchor for a dedicated multimodal lane because the current Ollama presentation is text-only.
+The codebase still has a text-first shared LLM message contract. Any future multimodal managed-cloud lane must verify the current provider APIs and model catalogs at implementation time rather than relying on a static design-doc model list.
 
 What this means for Guardian:
 
 - multimodal-aware provider selection is a real future Layer 4 requirement
 - the current four managed-cloud roles (`general`, `direct`, `toolLoop`, `coding`) are not enough once the app can send screenshots, photos, or other image-bearing prompts through the shared chat path
-- the first likely Layer 4 multimodal candidate is currently **Gemma 4 31B** on Ollama Cloud, not because the spec should hardcode one vendor forever, but because the current Ollama catalog and API make it the clearest practical entry point
+- provider/model selection for a multimodal lane should remain config-driven and catalog-verified, not hardcoded into this architecture doc
 
 Current architectural blocker:
 

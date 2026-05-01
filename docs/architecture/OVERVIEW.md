@@ -334,7 +334,7 @@ Google Workspace integration uses the native backend:
 - OAuth 2.0 PKCE with localhost callback, tokens encrypted at `~/.guardianagent/secrets.enc.json`
 - 3-step setup: create Cloud Console credentials → upload JSON → click Connect
 - No external CLI dependency, no subprocess overhead
-- Config: `assistant.tools.google` (enabled, mode: `native`, services, oauthCallbackPort, credentialsPath)
+- Config: `assistant.tools.google` (enabled, services, oauthCallbackPort, credentialsPath)
 
 Tool facade:
 
@@ -343,7 +343,7 @@ Tool facade:
 - workflow guidance via native Google skills
 - Google Workspace tools mapped into Gmail/Calendar/Drive/Docs/Sheets capability checks before execution
 
-See [Native Google Integration Spec](../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md) and [Google Workspace CLI Spec](../design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md).
+See [Native Google Integration Spec](../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md). The earlier CLI-backed Google design is archived at `docs/archive/design/GOOGLE-WORKSPACE-INTEGRATION-DESIGN.md`.
 
 ## Brokered Execution Boundary
 
@@ -415,8 +415,9 @@ Supports content matchers, tool trajectory validation, metadata checks, and 4 in
 - **Owned by orchestrator** — sub-agents cannot read or write
 - **Scoped to invocation** — fresh state per `onMessage()` call, no persistence
 - **Temp key convention** — `temp:` prefixed keys cleaned up via `clearTemp()`
+- **Bounded state** — default 10 MB capacity with per-key metadata for producer, validation, and taint context
 
-See [Shared State Spec](../design/SHARED-STATE-DESIGN.md).
+See [Orchestration Design](../design/ORCHESTRATION-DESIGN.md).
 
 ## Message Flow with Security
 

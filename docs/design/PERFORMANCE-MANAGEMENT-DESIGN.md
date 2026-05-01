@@ -6,19 +6,19 @@
 
 Define the as-built performance-management capability that Guardian currently ships.
 
-This document is the source of truth for the runtime service, web control-plane surface, and assistant tool access for workstation performance operations. The earlier proposal in [WINDOWS-11-PERFORMANCE-MANAGER-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented/WINDOWS-11-PERFORMANCE-MANAGER-PROPOSAL.md) is historical design context, not the current behavior contract.
+This document is the source of truth for the runtime service, web control-plane surface, and assistant tool access for workstation performance operations. The earlier proposal in [WINDOWS-11-PERFORMANCE-MANAGER-PROPOSAL.md](../implemented/WINDOWS-11-PERFORMANCE-MANAGER-PROPOSAL.md) is historical design context, not the current behavior contract.
 
 ## Scope
 
 Owned implementation surfaces:
 
-- runtime service: [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts)
-- OS adapters: [windows.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-adapters/windows.ts), [fallback.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-adapters/fallback.ts)
-- web callbacks: [performance-dashboard-callbacks.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/performance-dashboard-callbacks.ts)
-- web routes and types: [web-runtime-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts), [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- web page and client: [performance.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/performance.js), [api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)
-- assistant tools: [performance-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/performance-tools.ts)
-- config mutation path: [direct-config-update.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/direct-config-update.ts)
+- runtime service: [performance-service.ts](../../src/runtime/performance-service.ts)
+- OS adapters: [windows.ts](../../src/runtime/performance-adapters/windows.ts), [fallback.ts](../../src/runtime/performance-adapters/fallback.ts)
+- web callbacks: [performance-dashboard-callbacks.ts](../../src/runtime/control-plane/performance-dashboard-callbacks.ts)
+- web routes and types: [web-runtime-routes.ts](../../src/channels/web-runtime-routes.ts), [web-types.ts](../../src/channels/web-types.ts)
+- web page and client: [performance.js](../../web/public/js/pages/performance.js), [api.js](../../web/public/js/api.js)
+- assistant tools: [performance-tools.ts](../../src/tools/builtin/performance-tools.ts)
+- config mutation path: [direct-config-update.ts](../../src/runtime/control-plane/direct-config-update.ts)
 
 Out of scope:
 
@@ -39,11 +39,11 @@ Out of scope:
 - execute only the reviewed subset of selectable rows
 - review recent profile switches and cleanup actions
 
-The current required web information architecture is defined in [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md#L311).
+The current required web information architecture is defined in [WEBUI-DESIGN.md](./WEBUI-DESIGN.md#L311).
 
 ## Runtime Ownership
 
-The runtime constructs one shared `PerformanceService` in [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts#L4485) and wires it into the web dashboard callbacks in [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts#L1957).
+The runtime constructs one shared `PerformanceService` in [index.ts](../../src/index.ts#L4485) and wires it into the web dashboard callbacks in [index.ts](../../src/index.ts#L1957).
 
 The service owns:
 
@@ -60,7 +60,7 @@ The service does not own layout, direct browser shell execution, or ad hoc confi
 
 ## Configuration Contract
 
-Performance configuration lives under `assistant.performance` in [types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts#L676).
+Performance configuration lives under `assistant.performance` in [types.ts](../../src/config/types.ts#L676).
 
 Current top-level fields:
 
@@ -81,15 +81,15 @@ Profile fields:
 - `processRules.protect`
 - `latencyTargets`
 
-The default shipped profile lives in [types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts#L1759) and is currently `coding-focus`.
+The default shipped profile lives in [types.ts](../../src/config/types.ts#L1759) and is currently `coding-focus`.
 
-Config writes from the web UI are normalized through [direct-config-update.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/direct-config-update.ts#L427). The browser does not write raw YAML directly.
+Config writes from the web UI are normalized through [direct-config-update.ts](../../src/runtime/control-plane/direct-config-update.ts#L427). The browser does not write raw YAML directly.
 
 ## Platform Capabilities
 
 ### Windows
 
-Windows uses [WindowsPerformanceAdapter](/mnt/s/Development/GuardianAgent/src/runtime/performance-adapters/windows.ts#L107).
+Windows uses [WindowsPerformanceAdapter](../../src/runtime/performance-adapters/windows.ts#L107).
 
 Current as-built behavior:
 
@@ -108,7 +108,7 @@ Current limitations:
 
 ### Linux/macOS Fallback
 
-Fallback uses [FallbackPerformanceAdapter](/mnt/s/Development/GuardianAgent/src/runtime/performance-adapters/fallback.ts#L97).
+Fallback uses [FallbackPerformanceAdapter](../../src/runtime/performance-adapters/fallback.ts#L97).
 
 Current as-built behavior:
 
@@ -125,7 +125,7 @@ Current limitations:
 
 ## Process Protection Model
 
-Protection is assembled in [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L330) from:
+Protection is assembled in [performance-service.ts](../../src/runtime/performance-service.ts#L330) from:
 
 - global `assistant.performance.protectedProcesses.names`
 - the active profile `processRules.protect`
@@ -141,7 +141,7 @@ Important behavior:
 
 ## Cleanup Preview Model
 
-The only supported reviewed action id today is `cleanup`, enforced in [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L615).
+The only supported reviewed action id today is `cleanup`, enforced in [performance-service.ts](../../src/runtime/performance-service.ts#L615).
 
 As built, `cleanup` is primarily a reviewed process-selection workflow:
 
@@ -150,7 +150,7 @@ As built, `cleanup` is primarily a reviewed process-selection workflow:
 - heuristic recommendations suppress common development, system, and browser processes
 - heuristic recommendations favor known background apps and notably heavy CPU or memory usage
 
-Current heuristic families are defined in [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L29) and scored in [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L244).
+Current heuristic families are defined in [performance-service.ts](../../src/runtime/performance-service.ts#L29) and scored in [performance-service.ts](../../src/runtime/performance-service.ts#L244).
 
 Preview behavior:
 
@@ -162,7 +162,7 @@ Preview behavior:
 
 ## Action Execution Model
 
-Reviewed actions run through [runAction()](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L644).
+Reviewed actions run through [runAction()](../../src/runtime/performance-service.ts#L644).
 
 Current behavior:
 
@@ -186,7 +186,7 @@ Latency targets are profile-scoped. The service resolves them from either:
 - `target`
 - `targetRef`
 
-and caches probe results for `sampleIntervalSec`, implemented in [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L521).
+and caches probe results for `sampleIntervalSec`, implemented in [performance-service.ts](../../src/runtime/performance-service.ts#L521).
 
 Current target kinds:
 
@@ -205,7 +205,7 @@ Current performance routes:
 - `POST /api/performance/action/preview`
 - `POST /api/performance/action/run`
 
-See [web-runtime-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts#L721).
+See [web-runtime-routes.ts](../../src/channels/web-runtime-routes.ts#L721).
 
 Privilege model:
 
@@ -214,11 +214,11 @@ Privilege model:
 - `action/run` requires a privileged ticket for `performance.manage`
 - `action/preview` is read-only and does not require a privileged ticket
 
-The browser client mints privileged tickets through [api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js#L108) before calling the mutating routes.
+The browser client mints privileged tickets through [api.js](../../web/public/js/api.js#L108) before calling the mutating routes.
 
 ## Web UI Surface
 
-The operator-facing page is [performance.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/performance.js#L65).
+The operator-facing page is [performance.js](../../web/public/js/pages/performance.js#L65).
 
 Current required tabs:
 
@@ -246,7 +246,7 @@ Assistant access is provided through deferred built-in tools:
 - `performance_action_preview`
 - `performance_action_run`
 
-See [performance-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/performance-tools.ts#L42) and the deferred-tool inventory note in [tool-context.ts](/mnt/s/Development/GuardianAgent/src/tools/tool-context.ts#L177).
+See [performance-tools.ts](../../src/tools/builtin/performance-tools.ts#L42) and the deferred-tool inventory note in [tool-context.ts](../../src/tools/tool-context.ts#L177).
 
 These tools are:
 
@@ -261,14 +261,14 @@ These tools are:
 
 ## Approval and Audit
 
-Mutating tool calls participate in the shared approval model. Approval copy is specialized in [pending-approval-copy.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-approval-copy.ts#L575).
+Mutating tool calls participate in the shared approval model. Approval copy is specialized in [pending-approval-copy.ts](../../src/runtime/pending-approval-copy.ts#L575).
 
 Durable audit event families:
 
 - `performance.profile_applied`
 - `performance.action_run`
 
-See [performance-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.ts#L27).
+See [performance-service.ts](../../src/runtime/performance-service.ts#L27).
 
 ## Current Gaps and Non-Goals
 
@@ -289,10 +289,10 @@ This capability should not be documented as if those features already exist.
 
 Relevant coverage currently lives in:
 
-- [performance-service.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/performance-service.test.ts)
-- [performance-tools.test.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/performance-tools.test.ts)
-- [performance-dashboard-callbacks.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/performance-dashboard-callbacks.test.ts)
-- [channels.test.ts](/mnt/s/Development/GuardianAgent/src/channels/channels.test.ts)
+- [performance-service.test.ts](../../src/runtime/performance-service.test.ts)
+- [performance-tools.test.ts](../../src/tools/builtin/performance-tools.test.ts)
+- [performance-dashboard-callbacks.test.ts](../../src/runtime/control-plane/performance-dashboard-callbacks.test.ts)
+- [channels.test.ts](../../src/channels/channels.test.ts)
 
 When changing this capability, the minimum verification bar should include:
 

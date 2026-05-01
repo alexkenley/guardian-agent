@@ -1,9 +1,9 @@
 # Code Workspace Trust Design
 
-**Status:** As Built  
-**Date:** 2026-03-20  
-**Primary Runtime:** [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)  
-**Related Specs:** [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md)
+**Status:** As Built
+**Date:** 2026-03-20
+**Primary Runtime:** [code-workspace-trust.ts](../../src/runtime/code-workspace-trust.ts)
+**Related Specs:** [Coding Workspace Spec](./CODING-WORKSPACE-DESIGN.md), [Contextual Security Uplift Spec](./CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md)
 
 ## Purpose
 
@@ -197,29 +197,29 @@ The shipped version does **not** yet provide:
 
 ## Primary Files
 
-- [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)
-- [code-workspace-native-protection.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.ts)
-- [code-workspace-trust-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust-service.ts)
-- [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [code-workspace-trust.ts](../../src/runtime/code-workspace-trust.ts)
+- [code-workspace-native-protection.ts](../../src/runtime/code-workspace-native-protection.ts)
+- [code-workspace-trust-service.ts](../../src/runtime/code-workspace-trust-service.ts)
+- [code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [index.ts](../../src/index.ts)
+- [executor.ts](../../src/tools/executor.ts)
+- [code.js](../../web/public/js/pages/code.js)
 
 ## Verification
 
 Current regression coverage includes:
 
-- [code-workspace-trust.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.test.ts)
-- [code-workspace-native-protection.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.test.ts)
-- [code-workspace-trust-service.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust-service.test.ts)
-- [code-sessions.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.test.ts)
-- [executor.test.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.test.ts)
-- [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
-- [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
+- [code-workspace-trust.test.ts](../../src/runtime/code-workspace-trust.test.ts)
+- [code-workspace-native-protection.test.ts](../../src/runtime/code-workspace-native-protection.test.ts)
+- [code-workspace-trust-service.test.ts](../../src/runtime/code-workspace-trust-service.test.ts)
+- [code-sessions.test.ts](../../src/runtime/code-sessions.test.ts)
+- [executor.test.ts](../../src/tools/executor.test.ts)
+- [test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs)
+- [test-code-ui-smoke.mjs](../../scripts/test-code-ui-smoke.mjs)
 
 Manual Windows-host validation helper:
 
-- [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
+- [test-windows-defender-workspace-scan.ps1](../../scripts/test-windows-defender-workspace-scan.ps1)
 
 Validated during this implementation:
 
@@ -227,4 +227,4 @@ Validated during this implementation:
 - `node scripts/test-coding-assistant.mjs`
 - `node scripts/test-code-ui-smoke.mjs`
 - live WSL ClamAV validation using clean and EICAR-positive fixtures through `CodeWorkspaceNativeProtectionScanner`
-- manual Windows Defender custom-path scan validation using [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
+- manual Windows Defender custom-path scan validation using [test-windows-defender-workspace-scan.ps1](../../scripts/test-windows-defender-workspace-scan.ps1)

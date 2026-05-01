@@ -1,9 +1,9 @@
 # Remote Sandboxing Design
 
-**Status:** As built  
-**Date:** 2026-04-13  
-**Owner:** Runtime + Code Workspace + WebUI  
-**Related:** [SECURITY-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SECURITY-ISOLATION-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [CLOUD-HOSTING-INTEGRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md)
+**Status:** As built
+**Date:** 2026-04-13
+**Owner:** Runtime + Code Workspace + WebUI
+**Related:** [SECURITY-ISOLATION-DESIGN.md](./SECURITY-ISOLATION-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](./CODING-WORKSPACE-DESIGN.md), [WEBUI-DESIGN.md](./WEBUI-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](./TOOLS-CONTROL-PLANE-DESIGN.md), [CLOUD-HOSTING-INTEGRATION-DESIGN.md](./CLOUD-HOSTING-INTEGRATION-DESIGN.md)
 
 ## Goals
 

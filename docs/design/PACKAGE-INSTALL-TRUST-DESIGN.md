@@ -1,14 +1,14 @@
 # Package Install Trust Design
 
-**Status:** As Built  
-**Date:** 2026-03-26  
-**Primary Tool:** [executor.ts](/mnt/s/development/guardianagent/src/tools/executor.ts)  
-**Trust Parser And Assessment:** [package-install-trust.ts](/mnt/s/development/guardianagent/src/runtime/package-install-trust.ts)  
-**Native AV Scanner:** [package-install-native-protection.ts](/mnt/s/development/guardianagent/src/runtime/package-install-native-protection.ts)  
-**Persistence And Orchestration:** [package-install-trust-service.ts](/mnt/s/development/guardianagent/src/runtime/package-install-trust-service.ts)  
-**Unified Alerts:** [security-alerts.ts](/mnt/s/development/guardianagent/src/runtime/security-alerts.ts)  
-**Posture Integration:** [security-posture.ts](/mnt/s/development/guardianagent/src/runtime/security-posture.ts)  
-**Startup Wiring:** [index.ts](/mnt/s/development/guardianagent/src/index.ts)
+**Status:** As Built
+**Date:** 2026-03-26
+**Primary Tool:** [executor.ts](../../src/tools/executor.ts)
+**Trust Parser And Assessment:** [package-install-trust.ts](../../src/runtime/package-install-trust.ts)
+**Native AV Scanner:** [package-install-native-protection.ts](../../src/runtime/package-install-native-protection.ts)
+**Persistence And Orchestration:** [package-install-trust-service.ts](../../src/runtime/package-install-trust-service.ts)
+**Unified Alerts:** [security-alerts.ts](../../src/runtime/security-alerts.ts)
+**Posture Integration:** [security-posture.ts](../../src/runtime/security-posture.ts)
+**Startup Wiring:** [index.ts](../../src/index.ts)
 
 ## Purpose
 
@@ -28,7 +28,7 @@ It is not the Coding Assistant workspace trust system. When invoked from a code 
 
 ## Primary Surface
 
-The primary surface is the `package_install` tool in [executor.ts](/mnt/s/development/guardianagent/src/tools/executor.ts).
+The primary surface is the `package_install` tool in [executor.ts](../../src/tools/executor.ts).
 
 Behavior:
 
