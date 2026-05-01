@@ -1,6 +1,6 @@
 # Memory System Uplift Plan
 
-> Superseded as the primary implementation sequence by [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains as narrower historical planning context.
+> Superseded as the primary implementation sequence by [Context, Memory, and Orchestration Uplift Plan](CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains as narrower historical planning context.
 
 **Date:** 2026-03-20
 **Status:** Draft (revised after implementation review)

@@ -43,6 +43,6 @@ This run validates degraded-host behavior. It does not constitute proof of a `st
 
 ## Primary Artifacts
 
-- [SECURITY-CLAIM-MATRIX.md](/mnt/s/Development/GuardianAgent/docs/security-testing-results/SECURITY-CLAIM-MATRIX.md)
-- [RELATED-TEST-SCRIPTS.md](/mnt/s/Development/GuardianAgent/docs/security-testing-results/RELATED-TEST-SCRIPTS.md)
-- [test-security-verification.mjs](/mnt/s/Development/GuardianAgent/scripts/test-security-verification.mjs)
+- [SECURITY-CLAIM-MATRIX.md](SECURITY-CLAIM-MATRIX.md)
+- [RELATED-TEST-SCRIPTS.md](RELATED-TEST-SCRIPTS.md)
+- [test-security-verification.mjs](../../scripts/test-security-verification.mjs)

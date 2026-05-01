@@ -1,13 +1,13 @@
 # Proposal: Vercel-First Hosted Agent Platform
 
-**Status:** Draft  
-**Date:** 2026-03-31  
+**Status:** Draft
+**Date:** 2026-03-31
 **Related:**
-- [GuardianAgent Multi-Tenant SaaS Platform - Detailed Design](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-TENANT-SAAS-AGENT-PLATFORM-DETAILED-DESIGN.md)
-- [Private-By-Default Cloud Deployment Model for GuardianAgent](/mnt/s/Development/GuardianAgent/docs/proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
-- [Multi-User Server + Client Agent Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
-- [Identity & Memory Spec](/mnt/s/Development/GuardianAgent/docs/design/IDENTITY-MEMORY-DESIGN.md)
-- [Web Auth Configuration Spec](/mnt/s/Development/GuardianAgent/docs/design/WEB-AUTH-CONFIG-DESIGN.md)
+- [GuardianAgent Multi-Tenant SaaS Platform - Detailed Design](MULTI-TENANT-SAAS-AGENT-PLATFORM-DETAILED-DESIGN.md)
+- [Private-By-Default Cloud Deployment Model for GuardianAgent](PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
+- [Multi-User Server + Client Agent Proposal](MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
+- [Identity & Memory Spec](../design/IDENTITY-MEMORY-DESIGN.md)
+- [Web Auth Configuration Spec](../design/WEB-AUTH-CONFIG-DESIGN.md)
 
 ## Executive Summary
 

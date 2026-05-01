@@ -1,19 +1,19 @@
 # vLLM Linux Local Provider Proposal
 
-**Status:** Proposed  
+**Status:** Proposed
 **Date:** 2026-04-14
 
 **Informed by:**
-- [Intelligence In Depth Specification](/mnt/s/development/guardianagent/docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md)
-- [Configuration Center Spec](/mnt/s/development/guardianagent/docs/design/CONFIG-CENTER-DESIGN.md)
-- [WebUI Design Spec](/mnt/s/development/guardianagent/docs/design/WEBUI-DESIGN.md)
-- [Integration Test Harness Guide](/mnt/s/development/guardianagent/docs/guides/INTEGRATION-TEST-HARNESS.md)
-- [Provider Registry](/mnt/s/development/guardianagent/src/llm/provider-registry.ts)
-- [Provider Metadata](/mnt/s/development/guardianagent/src/llm/provider-metadata.ts)
-- [OpenAI Provider](/mnt/s/development/guardianagent/src/llm/openai.ts)
-- [Config Loader](/mnt/s/development/guardianagent/src/config/loader.ts)
-- [Provider Dashboard Callbacks](/mnt/s/development/guardianagent/src/runtime/control-plane/provider-dashboard-callbacks.ts)
-- [Config Page](/mnt/s/development/guardianagent/web/public/js/pages/config.js)
+- [Intelligence In Depth Specification](../design/INTELLIGENCE-IN-DEPTH-DESIGN.md)
+- [Configuration Center Spec](../design/CONFIG-CENTER-DESIGN.md)
+- [WebUI Design Spec](../design/WEBUI-DESIGN.md)
+- [Integration Test Harness Guide](../guides/INTEGRATION-TEST-HARNESS.md)
+- [Provider Registry](../../src/llm/provider-registry.ts)
+- [Provider Metadata](../../src/llm/provider-metadata.ts)
+- [OpenAI Provider](../../src/llm/openai.ts)
+- [Config Loader](../../src/config/loader.ts)
+- [Provider Dashboard Callbacks](../../src/runtime/control-plane/provider-dashboard-callbacks.ts)
+- [Config Page](../../web/public/js/pages/config.js)
 - <https://github.com/vllm-project/vllm>
 - <https://docs.vllm.ai/en/latest/getting_started/installation/gpu/>
 - <https://docs.vllm.ai/en/latest/serving/openai_compatible_server/>
@@ -48,13 +48,13 @@ Everything else is modeled as hosted or frontier-facing API access, even though 
 
 That creates three practical problems for `vLLM`:
 
-1. **Wrong locality if configured as `openai + baseUrl`**  
+1. **Wrong locality if configured as `openai + baseUrl`**
    The transport works, but Guardian treats the profile as `frontier` instead of `local`.
 
-2. **Wrong operator model**  
+2. **Wrong operator model**
    Config Center, runtime provider badges, and routing semantics communicate "hosted API" rather than "local inference server on Linux".
 
-3. **Architecture drift risk**  
+3. **Architecture drift risk**
    If we treat `vLLM` as just a hidden `openai` trick forever, we reinforce exactly the ambiguity the repo has already called out: Guardian should not assume all local OpenAI-compatible endpoints are interchangeable.
 
 ---
@@ -206,10 +206,10 @@ Guardian already has:
 
 This proposal intentionally avoids two bad designs:
 
-1. **Do not bypass the provider model**  
+1. **Do not bypass the provider model**
    We should not leave `vLLM` as an undocumented custom `baseUrl` trick.
 
-2. **Do not over-specialize the transport layer**  
+2. **Do not over-specialize the transport layer**
    We should not create `vllm.ts` with a near-copy of `openai.ts` unless `vLLM`-specific request semantics later make that necessary.
 
 The owning layer for this change is the provider family / control-plane layer:
@@ -334,8 +334,8 @@ Make `vLLM` a real local provider family in Guardian without changing the shared
 
 ### Deliver
 
-- add `vllm` metadata in [src/llm/provider-metadata.ts](/mnt/s/development/guardianagent/src/llm/provider-metadata.ts)
-- register `vllm` in [src/llm/provider-registry.ts](/mnt/s/development/guardianagent/src/llm/provider-registry.ts) via `OpenAIProvider`
+- add `vllm` metadata in [src/llm/provider-metadata.ts](../../src/llm/provider-metadata.ts)
+- register `vllm` in [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts) via `OpenAIProvider`
 - allow `vllm` in config validation through the registry-driven provider list
 - add `vllm` provider defaults in control-plane helpers
 - expose `vllm` in provider-type APIs and Config Center fallback lists
@@ -344,14 +344,14 @@ Make `vLLM` a real local provider family in Guardian without changing the shared
 
 ### Likely implementation areas
 
-- [src/llm/provider-metadata.ts](/mnt/s/development/guardianagent/src/llm/provider-metadata.ts)
-- [src/llm/provider-registry.ts](/mnt/s/development/guardianagent/src/llm/provider-registry.ts)
-- [src/llm/provider-registry.test.ts](/mnt/s/development/guardianagent/src/llm/provider-registry.test.ts)
-- [src/runtime/control-plane/provider-config-helpers.ts](/mnt/s/development/guardianagent/src/runtime/control-plane/provider-config-helpers.ts)
-- [src/runtime/control-plane/provider-dashboard-callbacks.test.ts](/mnt/s/development/guardianagent/src/runtime/control-plane/provider-dashboard-callbacks.test.ts)
-- [src/channels/cli.ts](/mnt/s/development/guardianagent/src/channels/cli.ts)
-- [src/channels/cli-command-guide.ts](/mnt/s/development/guardianagent/src/channels/cli-command-guide.ts)
-- [web/public/js/pages/config.js](/mnt/s/development/guardianagent/web/public/js/pages/config.js)
+- [src/llm/provider-metadata.ts](../../src/llm/provider-metadata.ts)
+- [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts)
+- [src/llm/provider-registry.test.ts](../../src/llm/provider-registry.test.ts)
+- [src/runtime/control-plane/provider-config-helpers.ts](../../src/runtime/control-plane/provider-config-helpers.ts)
+- [src/runtime/control-plane/provider-dashboard-callbacks.test.ts](../../src/runtime/control-plane/provider-dashboard-callbacks.test.ts)
+- [src/channels/cli.ts](../../src/channels/cli.ts)
+- [src/channels/cli-command-guide.ts](../../src/channels/cli-command-guide.ts)
+- [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
 
 ### Exit criteria
 

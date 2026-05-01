@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Date:** 2026-03-16
-**Associated designs:** [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [AUTOMATION-FRAMEWORK-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/AUTOMATION-FRAMEWORK-DESIGN.md)
+**Associated designs:** [ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md), [AUTOMATION-FRAMEWORK-DESIGN.md](../design/AUTOMATION-FRAMEWORK-DESIGN.md)
 **Informed by:**
 - GuardianAgent automation, orchestration, scheduling, and control-plane runtime
 - internal orchestration research across public agent and workflow frameworks

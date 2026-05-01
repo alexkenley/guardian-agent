@@ -1,8 +1,8 @@
 # Skills Quality and Discipline Uplift Plan
 
-**Status:** Draft  
-**Date:** 2026-04-04  
-**Origin:** Follow-on plan from `docs/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`  
+**Status:** Draft
+**Date:** 2026-04-04
+**Origin:** Follow-on plan from `docs/archive/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
 **Primary specs impacted:** `docs/design/SKILLS-DESIGN.md`
 
 ---

@@ -1,8 +1,8 @@
 # Remote Sandbox Orchestration Plan
 
-**Date:** 2026-04-13  
-**Status:** Delivered initial slice. See [Remote Sandboxing Spec](../design/REMOTE-SANDBOXING-DESIGN.md) for the canonical as-built behavior.  
-**Primary references:** [Cloud Hosting Integration Spec](../design/CLOUD-HOSTING-INTEGRATION-DESIGN.md), [Coding Workspace Spec](../design/CODING-WORKSPACE-DESIGN.md), [WebUI Design Spec](../design/WEBUI-DESIGN.md)  
+**Date:** 2026-04-13
+**Status:** Delivered initial slice. See [Remote Sandboxing Spec](../../design/REMOTE-SANDBOXING-DESIGN.md) for the canonical as-built behavior.
+**Primary references:** [Cloud Hosting Integration Spec](../../design/CLOUD-HOSTING-INTEGRATION-DESIGN.md), [Coding Workspace Spec](../../design/CODING-WORKSPACE-DESIGN.md), [WebUI Design Spec](../../design/WEBUI-DESIGN.md)
 **External references:** [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox/), [Vercel Sandbox Managing](https://vercel.com/docs/vercel-sandbox/managing), [Daytona Documentation](https://www.daytona.io/docs/)
 
 ---

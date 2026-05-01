@@ -1,9 +1,9 @@
 # Context, Memory, and Orchestration Uplift Plan
 
-**Status:** Published  
-**Date:** 2026-04-03  
-**Origin:** Guardian repo architecture review plus comparative analysis of external agent-runtime patterns for prompt weight, memory hygiene, and orchestration structure  
-**Companion designs:** [CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md), [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md), [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+**Status:** Published
+**Date:** 2026-04-03
+**Origin:** Guardian repo architecture review plus comparative analysis of external agent-runtime patterns for prompt weight, memory hygiene, and orchestration structure
+**Companion designs:** [CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md), [MEMORY-SYSTEM-DESIGN.md](../design/MEMORY-SYSTEM-DESIGN.md), [ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ## Objective
 
@@ -333,8 +333,8 @@ Make the new compact behavior measurable and safe to roll out.
 
 This plan consolidates the active implementation direction from:
 
-- [Context Assembly Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-ASSEMBLY-UPLIFT-PLAN.md)
-- [Memory System Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md)
-- [Background Delegation Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
+- [Context Assembly Design](../design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [Memory System Uplift Plan](MEMORY-SYSTEM-UPLIFT-PLAN.md)
+- [Background Delegation Uplift Plan](BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
 
 Those documents remain useful history and narrower references. This document is the authoritative phased plan for the combined uplift.

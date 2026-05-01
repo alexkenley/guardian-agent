@@ -2,12 +2,12 @@
 
 **Status:** Draft
 **Date:** 2026-03-27
-**Primary Guardian files:** [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts), [src/runtime/runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts), [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts), [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts), [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts), [src/broker/broker-server.ts](/mnt/s/Development/GuardianAgent/src/broker/broker-server.ts), [src/worker/worker-llm-loop.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-llm-loop.ts), [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js), [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js), [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js), [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-**Related docs:** [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md), [RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md), [EVENTBUS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/EVENTBUS-DESIGN.md), [UI-TARS-UPLIFT-ROADMAP.md](/mnt/s/Development/GuardianAgent/docs/plans/UI-TARS-UPLIFT-ROADMAP.md)
+**Primary Guardian files:** [src/index.ts](../../src/index.ts), [src/runtime/runtime.ts](../../src/runtime/runtime.ts), [src/runtime/message-router.ts](../../src/runtime/message-router.ts), [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts), [src/channels/web.ts](../../src/channels/web.ts), [src/channels/cli.ts](../../src/channels/cli.ts), [src/broker/broker-server.ts](../../src/broker/broker-server.ts), [src/worker/worker-llm-loop.ts](../../src/worker/worker-llm-loop.ts), [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js), [web/public/js/pages/code.js](../../web/public/js/pages/code.js), [web/public/js/pages/automations.js](../../web/public/js/pages/automations.js), [web/public/css/style.css](../../web/public/css/style.css)
+**Related docs:** [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](../design/BROKERED-AGENT-ISOLATION-DESIGN.md), [RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](../design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md), [EVENTBUS-DESIGN.md](../design/EVENTBUS-DESIGN.md), [UI-TARS-UPLIFT-ROADMAP.md](../plans/UI-TARS-UPLIFT-ROADMAP.md)
 
 ## Current Note
 
-For the current direction around general chat as the canonical coding surface, Code as a workbench, and optional Claude Code/Codex orchestration, use [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md).
+For the current direction around general chat as the canonical coding surface, Code as a workbench, and optional Claude Code/Codex orchestration, use [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md](GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md).
 
 ## Goal
 
@@ -50,7 +50,7 @@ This means:
 
 Important foundations are already in place or partially landed:
 
-- curated first-party process skills already exist under [skills/](/mnt/s/Development/GuardianAgent/skills)
+- curated first-party process skills already exist under [skills/](../../skills)
 - `run.timeline` already exists and is streamed into web chat and Code activity
 - web chat, Code UI, and CLI now have live structural progress rather than only dead pending states
 - mode selection and response-source badging now reflect the actual answering side more reliably
@@ -121,13 +121,13 @@ Strengthen the existing first-party coding skills and make repo-specific plannin
 
 ### Files to update
 
-- [skills/writing-plans/SKILL.md](/mnt/s/Development/GuardianAgent/skills/writing-plans/SKILL.md)
-- [skills/writing-plans/templates/implementation-plan.md](/mnt/s/Development/GuardianAgent/skills/writing-plans/templates/implementation-plan.md)
-- [skills/test-driven-development/SKILL.md](/mnt/s/Development/GuardianAgent/skills/test-driven-development/SKILL.md)
-- [skills/verification-before-completion/SKILL.md](/mnt/s/Development/GuardianAgent/skills/verification-before-completion/SKILL.md)
-- [skills/code-review/SKILL.md](/mnt/s/Development/GuardianAgent/skills/code-review/SKILL.md)
-- [skills/coding-workspace/SKILL.md](/mnt/s/Development/GuardianAgent/skills/coding-workspace/SKILL.md)
-- [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- [skills/writing-plans/SKILL.md](../../skills/writing-plans/SKILL.md)
+- [skills/writing-plans/templates/implementation-plan.md](../../skills/writing-plans/templates/implementation-plan.md)
+- [skills/test-driven-development/SKILL.md](../../skills/test-driven-development/SKILL.md)
+- [skills/verification-before-completion/SKILL.md](../../skills/verification-before-completion/SKILL.md)
+- [skills/code-review/SKILL.md](../../skills/code-review/SKILL.md)
+- [skills/coding-workspace/SKILL.md](../../skills/coding-workspace/SKILL.md)
+- [scripts/test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs)
 
 ### Core changes
 
@@ -174,7 +174,7 @@ Keep the current live-feedback work structural and readable rather than making t
 
 ### Core changes
 
-- Continue using [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts) as the shared progress backbone.
+- Continue using [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts) as the shared progress backbone.
 - Drive coding visibility from backend-owned session/task state rather than surface-local heuristics.
 - Keep general Guardian chat feedback thin and structural.
 - Keep Code feedback richer, but still concise and task-oriented.
@@ -266,8 +266,8 @@ This uplift does not include:
 
 ### Harness and test updates
 
-- extend [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs) with grounded-planning and routing cases
-- extend [scripts/test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs) for live activity and source/fallback visibility
+- extend [scripts/test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs) with grounded-planning and routing cases
+- extend [scripts/test-code-ui-smoke.mjs](../../scripts/test-code-ui-smoke.mjs) for live activity and source/fallback visibility
 - extend focused routing/runtime tests for:
   - forced lane preservation
   - `Auto` external preference on planning/review turns

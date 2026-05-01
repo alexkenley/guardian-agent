@@ -1,5 +1,8 @@
 # Proposal: Backend-Owned Coding Sessions for Channel-Agnostic Agentic Work
 
+**Status:** Implemented; retained as historical proposal
+**Current source of truth:** [Coding Workspace Design](../design/CODING-WORKSPACE-DESIGN.md)
+
 ## Summary
 
 GuardianAgent's current Coding Assistant is effective as a web workspace, but its session model is still browser-owned. The `Code` page stores sessions in browser `localStorage` and sends `metadata.codeContext` on each request so the backend can scope tool execution. That is sufficient for a web-first coding UI, but it is the wrong architecture if Guardian should be able to continue coding work through the main assistant, Telegram, CLI, or future remote surfaces.
@@ -26,8 +29,8 @@ Today, the shipped Coding Assistant spec says:
 
 That model is documented in:
 
-- [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
-- [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md)
+- [code.js](../../web/public/js/pages/code.js)
 
 This creates four architectural problems:
 
@@ -543,9 +546,9 @@ In effect:
 
 ## Related Guardian Documents
 
-- [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
-- [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md)
-- [DISCORD-CHANNEL-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/DISCORD-CHANNEL-PROPOSAL.md)
+- [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md)
+- [MEMORY-SYSTEM-DESIGN.md](../design/MEMORY-SYSTEM-DESIGN.md)
+- [DISCORD-CHANNEL-PROPOSAL.md](../proposals/DISCORD-CHANNEL-PROPOSAL.md)
 
 ## External References
 

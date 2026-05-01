@@ -1,8 +1,8 @@
 # WebUI Theme System And React Islands Implementation Plan
 
-**Status:** Draft  
-**Date:** 2026-04-07  
-**Primary references:** [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md), `/mnt/s/Development/awesome-design-md`
+**Status:** Draft
+**Date:** 2026-04-07
+**Primary references:** [WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md), [FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md](../proposals/CONTEXT-CYPHER-INTEGRATION-PROPOSAL.md), `/mnt/s/Development/awesome-design-md`
 
 ## Objective
 
@@ -153,8 +153,8 @@ Changes needed:
 
 Primary spec targets:
 
-- [WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md)
-- any derived appearance copy in [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md)
+- any derived appearance copy in [src/reference-guide.ts](../../src/reference-guide.ts)
 
 ## Delivery Phases
 
@@ -181,10 +181,10 @@ Define the governed appearance surface before implementation starts.
 
 ### Likely implementation areas
 
-- [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md)
-- [web/public/js/theme.js](/mnt/s/Development/GuardianAgent/web/public/js/theme.js)
-- [web/public/js/monaco-themes.js](/mnt/s/Development/GuardianAgent/web/public/js/monaco-themes.js)
-- [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
+- [docs/design/WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md)
+- [web/public/js/theme.js](../../web/public/js/theme.js)
+- [web/public/js/monaco-themes.js](../../web/public/js/monaco-themes.js)
+- [web/public/css/style.css](../../web/public/css/style.css)
 
 ### Exit criteria
 
@@ -212,9 +212,9 @@ Replace the flat theme manager with a layered appearance registry and resolver.
 
 ### Likely implementation areas
 
-- [web/public/js/theme.js](/mnt/s/Development/GuardianAgent/web/public/js/theme.js)
+- [web/public/js/theme.js](../../web/public/js/theme.js)
 - new appearance registry modules under `web/public/js/`
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
 
 ### Exit criteria
 
@@ -247,9 +247,9 @@ Move the core component chrome from hardcoded values to token-driven styling.
 
 ### Likely implementation areas
 
-- [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- shared components under [web/public/js/components/](/mnt/s/Development/GuardianAgent/web/public/js/components)
+- [web/public/css/style.css](../../web/public/css/style.css)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- shared components under [web/public/js/components/](../../web/public/js/components)
 
 ### Exit criteria
 
@@ -266,12 +266,12 @@ Tokenize the page-level styling surface without changing the shell layout.
 ### Deliver
 
 - remove or sharply reduce inline `style=""` strings and ad hoc `.style` assignments from:
-  - [web/public/js/pages/config.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/config.js)
-  - [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js)
-  - [web/public/js/pages/cloud.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/cloud.js)
-  - [web/public/js/pages/network.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/network.js)
-  - [web/public/js/pages/system.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/system.js)
-  - [web/public/js/pages/second-brain.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/second-brain.js)
+  - [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
+  - [web/public/js/pages/automations.js](../../web/public/js/pages/automations.js)
+  - [web/public/js/pages/cloud.js](../../web/public/js/pages/cloud.js)
+  - [web/public/js/pages/network.js](../../web/public/js/pages/network.js)
+  - [web/public/js/pages/system.js](../../web/public/js/pages/system.js)
+  - [web/public/js/pages/second-brain.js](../../web/public/js/pages/second-brain.js)
 - replace hardcoded visual literals with shared component classes or CSS variables
 - keep structural page rendering logic intact while reducing presentation duplication
 
@@ -300,8 +300,8 @@ Make the code surfaces part of the same appearance system instead of a parallel 
 
 ### Likely implementation areas
 
-- [web/public/js/monaco-themes.js](/mnt/s/Development/GuardianAgent/web/public/js/monaco-themes.js)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [web/public/js/monaco-themes.js](../../web/public/js/monaco-themes.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
 
 ### Exit criteria
 
@@ -330,9 +330,9 @@ Turn the Appearance tab into a real control plane for the richer appearance syst
 
 ### Likely implementation areas
 
-- [web/public/js/pages/config.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/config.js)
-- [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
+- [web/public/css/style.css](../../web/public/css/style.css)
+- [src/reference-guide.ts](../../src/reference-guide.ts)
 
 ### Exit criteria
 
@@ -363,11 +363,11 @@ Enable route-scoped React pages inside the existing shell without yet requiring 
 
 ### Likely implementation areas
 
-- [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js)
-- [web/public/index.html](/mnt/s/Development/GuardianAgent/web/public/index.html)
-- root [package.json](/mnt/s/Development/GuardianAgent/package.json)
+- [web/public/js/app.js](../../web/public/js/app.js)
+- [web/public/index.html](../../web/public/index.html)
+- root [package.json](../../package.json)
 - new React app directory under `web/`
-- [docs/architecture/FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)
+- [docs/architecture/FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md)
 
 ### Exit criteria
 

@@ -1,8 +1,8 @@
 # AWS Bedrock Provider — Implementation Plan
 
-**Status:** Draft  
-**Date:** 2026-03-27  
-**Primary context:** [Private-By-Default Cloud Deployment Model for GuardianAgent](/mnt/s/Development/GuardianAgent/docs/proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
+**Status:** Draft
+**Date:** 2026-03-27
+**Primary context:** [Private-By-Default Cloud Deployment Model for GuardianAgent](../proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
 
 ## Objective
 
@@ -212,12 +212,12 @@ Make the provider model expressive enough for Bedrock without rewriting routing.
 
 ### Likely implementation areas
 
-- [src/llm/provider-registry.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.ts)
-- [src/llm/provider-registry.test.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.test.ts)
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [web/public/js/pages/config.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/config.js)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts)
+- [src/llm/provider-registry.test.ts](../../src/llm/provider-registry.test.ts)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
+- [src/index.ts](../../src/index.ts)
+- [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
 
 ### Exit criteria
 
@@ -284,12 +284,12 @@ Best for:
 
 ### Likely implementation areas
 
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
-- [src/config/loader.ts](/mnt/s/Development/GuardianAgent/src/config/loader.ts)
-- [src/config/loader.test.ts](/mnt/s/Development/GuardianAgent/src/config/loader.test.ts)
-- [src/runtime/credentials.ts](/mnt/s/Development/GuardianAgent/src/runtime/credentials.ts)
-- [src/runtime/credentials.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/credentials.test.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [src/config/types.ts](../../src/config/types.ts)
+- [src/config/loader.ts](../../src/config/loader.ts)
+- [src/config/loader.test.ts](../../src/config/loader.test.ts)
+- [src/runtime/credentials.ts](../../src/runtime/credentials.ts)
+- [src/runtime/credentials.test.ts](../../src/runtime/credentials.test.ts)
+- [src/index.ts](../../src/index.ts)
 
 ### Exit criteria
 
@@ -311,7 +311,7 @@ Add a first-party Bedrock implementation of the `LLMProvider` interface.
   - `@aws-sdk/client-bedrock-runtime`
   - `@aws-sdk/credential-providers`
 - add new provider implementation:
-  - [src/llm/bedrock.ts](/mnt/s/Development/GuardianAgent/src/llm/bedrock.ts)
+  - [src/llm/bedrock.ts](../../src/llm/bedrock.ts)
 - implement:
   - `chat()` via `Converse`
   - `stream()` via `ConverseStream`
@@ -349,12 +349,12 @@ For v1, manual model entry is acceptable as long as test/save surfaces a clear e
 
 ### Likely implementation areas
 
-- [src/llm/bedrock.ts](/mnt/s/Development/GuardianAgent/src/llm/bedrock.ts)
-- [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts)
-- [src/llm/provider-registry.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.ts)
-- [src/llm/provider.ts](/mnt/s/Development/GuardianAgent/src/llm/provider.ts)
-- [src/llm/provider-registry.test.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.test.ts)
-- new tests under [src/llm/](/mnt/s/Development/GuardianAgent/src/llm)
+- [src/llm/bedrock.ts](../../src/llm/bedrock.ts)
+- [src/llm/types.ts](../../src/llm/types.ts)
+- [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts)
+- [src/llm/provider.ts](../../src/llm/provider.ts)
+- [src/llm/provider-registry.test.ts](../../src/llm/provider-registry.test.ts)
+- new tests under [src/llm/](../../src/llm)
 
 ### Exit criteria
 
@@ -395,11 +395,11 @@ Make Bedrock operable from the existing setup and configuration surfaces.
 
 ### Likely implementation areas
 
-- [web/public/js/pages/config.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/config.js)
-- [web/public/js/api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
+- [web/public/js/api.js](../../web/public/js/api.js)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
+- [src/index.ts](../../src/index.ts)
+- [src/reference-guide.ts](../../src/reference-guide.ts)
 
 ### Exit criteria
 
@@ -440,12 +440,12 @@ Bedrock must fit the current routing contract rather than forcing a cross-cuttin
 
 ### Likely implementation areas
 
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts)
-- [src/runtime/sentinel.ts](/mnt/s/Development/GuardianAgent/src/runtime/sentinel.ts)
-- [src/guardian/output-guardian.ts](/mnt/s/Development/GuardianAgent/src/guardian/output-guardian.ts)
-- [src/worker/worker-session.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-session.ts)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [src/index.ts](../../src/index.ts)
+- [src/runtime/message-router.ts](../../src/runtime/message-router.ts)
+- [src/runtime/sentinel.ts](../../src/runtime/sentinel.ts)
+- [src/guardian/output-guardian.ts](../../src/guardian/output-guardian.ts)
+- [src/worker/worker-session.ts](../../src/worker/worker-session.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
 
 ### Exit criteria
 
@@ -502,37 +502,37 @@ Real Bedrock smoke runs should remain opt-in because they incur cost and require
 
 ### Core runtime
 
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
-- [src/config/loader.ts](/mnt/s/Development/GuardianAgent/src/config/loader.ts)
-- [src/runtime/credentials.ts](/mnt/s/Development/GuardianAgent/src/runtime/credentials.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [src/config/types.ts](../../src/config/types.ts)
+- [src/config/loader.ts](../../src/config/loader.ts)
+- [src/runtime/credentials.ts](../../src/runtime/credentials.ts)
+- [src/index.ts](../../src/index.ts)
 
 ### LLM provider layer
 
-- [src/llm/provider-registry.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.ts)
-- [src/llm/provider.ts](/mnt/s/Development/GuardianAgent/src/llm/provider.ts)
-- [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts)
-- [src/llm/bedrock.ts](/mnt/s/Development/GuardianAgent/src/llm/bedrock.ts)
+- [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts)
+- [src/llm/provider.ts](../../src/llm/provider.ts)
+- [src/llm/types.ts](../../src/llm/types.ts)
+- [src/llm/bedrock.ts](../../src/llm/bedrock.ts)
 
 ### Web and config surfaces
 
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- [web/public/js/pages/config.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/config.js)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
+- [web/public/js/pages/config.js](../../web/public/js/pages/config.js)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
 
 ### Tests
 
-- [src/llm/provider-registry.test.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.test.ts)
-- [src/config/loader.test.ts](/mnt/s/Development/GuardianAgent/src/config/loader.test.ts)
-- [src/runtime/credentials.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/credentials.test.ts)
-- new tests under [src/llm/](/mnt/s/Development/GuardianAgent/src/llm)
+- [src/llm/provider-registry.test.ts](../../src/llm/provider-registry.test.ts)
+- [src/config/loader.test.ts](../../src/config/loader.test.ts)
+- [src/runtime/credentials.test.ts](../../src/runtime/credentials.test.ts)
+- new tests under [src/llm/](../../src/llm)
 
 ### Docs
 
-- [README.md](/mnt/s/Development/GuardianAgent/README.md)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
-- [docs/proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
+- [README.md](../../README.md)
+- [src/reference-guide.ts](../../src/reference-guide.ts)
+- [docs/proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md](../proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
 
 ## Deferred Items
 

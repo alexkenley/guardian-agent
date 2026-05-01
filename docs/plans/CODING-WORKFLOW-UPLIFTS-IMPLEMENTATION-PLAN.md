@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-12  
 **Status:** Draft  
-**Primary references:** [Coding Workspace Spec](../design/CODING-WORKSPACE-DESIGN.md), [Coding Assistant Curated Uplifts Implementation Plan](./CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md), [Agent Orchestration Recipes Spec](../design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md)
+**Primary references:** [Coding Workspace Spec](../design/CODING-WORKSPACE-DESIGN.md), [Coding Assistant Curated Uplifts Implementation Plan](./CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md), [Agent Orchestration Recipes Spec](../archive/design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md)
 
 ---
 

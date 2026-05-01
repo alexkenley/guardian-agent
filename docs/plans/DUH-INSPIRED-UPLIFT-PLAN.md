@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Date:** 2026-04-16
-**Source Research:** [duh-research/](/mnt/s/Development/GuardianAgent/duh-research), [multica-research/](/mnt/s/Development/GuardianAgent/multica-research)
+**Source Research:** [duh-research/](../../duh-research), [multica-research/](../../multica-research)
 
 ## Executive Summary
 

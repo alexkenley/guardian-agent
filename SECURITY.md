@@ -36,7 +36,7 @@ For the shipped local defensive overlay on top of the runtime security model, se
 - [Contextual Security Uplift Spec](docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md)
 - [Security Isolation Spec](docs/design/SECURITY-ISOLATION-DESIGN.md)
 
-The as-built spec is the canonical current-state document for the defensive suite. The earlier implementation plan has been retired.
+The as-built spec is the canonical current-state document for the defensive suite. The earlier proposal and implementation-plan material has been moved into implemented/archive documentation.
 
 ### Threats Addressed
 

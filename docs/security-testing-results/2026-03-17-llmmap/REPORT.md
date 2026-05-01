@@ -35,13 +35,13 @@ The discovered injection point is the expected user-controlled chat prompt field
 
 ## Hardening Applied
 
-- fixed a runtime wiring bug in [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts) that caused `/api/message` failures during the first harness run
-- tightened [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts) so `/api/message` and `/api/message/stream` only accept non-empty string `content`
-- added regression coverage in [channels.test.ts](/mnt/s/Development/GuardianAgent/src/channels/channels.test.ts)
+- fixed a runtime wiring bug in [src/index.ts](../../../src/index.ts) that caused `/api/message` failures during the first harness run
+- tightened [web.ts](../../../src/channels/web.ts) so `/api/message` and `/api/message/stream` only accept non-empty string `content`
+- added regression coverage in [channels.test.ts](../../../src/channels/channels.test.ts)
 - verified the web-channel test file passed: `108/108`
 
 ## Primary Artifacts
 
-- [test-llmmap-security.mjs](/mnt/s/Development/GuardianAgent/scripts/test-llmmap-security.mjs)
+- [test-llmmap-security.mjs](../../../scripts/test-llmmap-security.mjs)
 
 Raw request captures, bridge configs, and host-local run artifacts were intentionally excluded from the checked-in docs tree. This repo keeps the sanitized result summary and rerun script, not the full local harness exhaust.

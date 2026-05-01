@@ -1,6 +1,6 @@
 # Multi-User Server + Client Agent Proposal
 
-**Related:** [Browser Privacy Shield, Tor Routing, and Guarded Dark Web OSINT](/mnt/s/Development/GuardianAgent/docs/proposals/BROWSER-PRIVACY-SHIELD-PROPOSAL.md)
+**Related:** [Browser Privacy Shield, Tor Routing, and Guarded Dark Web OSINT](BROWSER-PRIVACY-SHIELD-PROPOSAL.md)
 
 ## Goal
 

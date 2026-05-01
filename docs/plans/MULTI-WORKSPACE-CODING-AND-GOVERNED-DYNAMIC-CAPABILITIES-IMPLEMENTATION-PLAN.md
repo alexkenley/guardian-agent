@@ -1,9 +1,9 @@
 # Multi-Workspace Coding And Governed Dynamic Capabilities — Implementation Plan
 
-**Status:** Active; Phase 0A through Phase 0D foundation implemented on 2026-04-06  
-**Date:** 2026-04-06  
-**Primary source proposal:** [MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md)  
-**Related plans:** [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md), [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md), [SKILLS-QUALITY-DISCIPLINE-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/SKILLS-QUALITY-DISCIPLINE-UPLIFT-PLAN.md), [CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md)  
+**Status:** Active; Phase 0A through Phase 0D foundation implemented on 2026-04-06
+**Date:** 2026-04-06
+**Primary source proposal:** [MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md](../proposals/MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md)
+**Related plans:** [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md), [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](BACKGROUND-DELEGATION-UPLIFT-PLAN.md), [SKILLS-QUALITY-DISCIPLINE-UPLIFT-PLAN.md](SKILLS-QUALITY-DISCIPLINE-UPLIFT-PLAN.md), [CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md](CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md)
 
 ## Objective
 
@@ -37,9 +37,9 @@ One important prerequisite foundation is already landed in the worker transport 
 
 The `worker message dispatch timed out` failure mode was not an `IntentGateway` classification problem. It was a worker-transport and lane-isolation problem in:
 
-- [src/supervisor/worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
-- [src/worker/worker-session.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-session.ts)
-- [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts)
+- [src/supervisor/worker-manager.ts](../../src/supervisor/worker-manager.ts)
+- [src/worker/worker-session.ts](../../src/worker/worker-session.ts)
+- [src/chat-agent.ts](../../src/chat-agent.ts)
 
 The landed fix established these invariants:
 
@@ -104,7 +104,7 @@ This is how Guardian breaks out of the old "one meaningful coding workspace" lim
 
 ### General chat canonical coding sessions
 
-This plan builds on the session-focus cleanup from [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md).
+This plan builds on the session-focus cleanup from [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md).
 
 That plan establishes:
 
@@ -120,7 +120,7 @@ This plan extends that model with:
 
 ### Background delegation uplift
 
-This plan should reuse, not replace, the delegated lineage and follow-up model from [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md).
+This plan should reuse, not replace, the delegated lineage and follow-up model from [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](BACKGROUND-DELEGATION-UPLIFT-PLAN.md).
 
 Child coding lanes should appear as another bounded producer of shared delegation state rather than a second delegation subsystem.
 
@@ -312,7 +312,7 @@ Treat this as the first mandatory foundation slice. The rest of the routing upli
 
 ### Deliver
 
-- update [INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md) so the gateway contract explicitly covers:
+- update [INTENT-GATEWAY-ROUTING-DESIGN.md](../design/INTENT-GATEWAY-ROUTING-DESIGN.md) so the gateway contract explicitly covers:
   - route classification
   - tier preference
   - execution/workload metadata
@@ -333,12 +333,12 @@ Treat this as the first mandatory foundation slice. The rest of the routing upli
 
 ### Likely implementation areas
 
-- [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md)
-- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts)
-- [src/runtime/direct-intent-routing.ts](/mnt/s/Development/GuardianAgent/src/runtime/direct-intent-routing.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](../design/INTENT-GATEWAY-ROUTING-DESIGN.md)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/runtime/message-router.ts](../../src/runtime/message-router.ts)
+- [src/runtime/direct-intent-routing.ts](../../src/runtime/direct-intent-routing.ts)
+- [src/index.ts](../../src/index.ts)
 
 ### Exit criteria
 
@@ -383,12 +383,12 @@ Smaller local or managed-cloud models should not be responsible for deciding whi
 
 ### Likely implementation areas
 
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts)
-- [src/llm/provider-metadata.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-metadata.ts)
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [src/index.ts](../../src/index.ts)
+- [src/runtime/message-router.ts](../../src/runtime/message-router.ts)
+- [src/llm/provider-metadata.ts](../../src/llm/provider-metadata.ts)
+- [src/config/types.ts](../../src/config/types.ts)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
 
 ### Exit criteria
 
@@ -420,11 +420,11 @@ Prevent smaller or cheaper profiles from failing simply because Guardian handed 
 
 ### Likely implementation areas
 
-- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
-- [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts)
-- [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts)
-- [src/chat-agent-helpers.ts](/mnt/s/Development/GuardianAgent/src/chat-agent-helpers.ts)
-- [src/worker/worker-llm-loop.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-llm-loop.ts)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [src/runtime/context-assembly.ts](../../src/runtime/context-assembly.ts)
+- [src/chat-agent.ts](../../src/chat-agent.ts)
+- [src/chat-agent-helpers.ts](../../src/chat-agent-helpers.ts)
+- [src/worker/worker-llm-loop.ts](../../src/worker/worker-llm-loop.ts)
 
 ### Exit criteria
 
@@ -447,10 +447,10 @@ Tracks R, A, and B should not start landing new runtime behavior above the routi
 ### Deliver
 
 - align this plan with:
-  - [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md)
-  - [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
-  - [SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md)
-  - [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+  - [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md)
+  - [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
+  - [SKILLS-DESIGN.md](../design/SKILLS-DESIGN.md)
+  - [TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 - define draft types for:
   - `CodeSessionLink`
   - `CodeSessionPortfolio`
@@ -492,14 +492,14 @@ Tracks R, A, and B should not start landing new runtime behavior above the routi
 
 ### Likely implementation areas
 
-- [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
-- [docs/design/SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md)
-- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
-- [src/supervisor/worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
-- [src/worker/worker-session.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-session.ts)
-- [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts)
+- [docs/design/ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md)
+- [docs/design/SKILLS-DESIGN.md](../design/SKILLS-DESIGN.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/config/types.ts](../../src/config/types.ts)
+- [src/supervisor/worker-manager.ts](../../src/supervisor/worker-manager.ts)
+- [src/worker/worker-session.ts](../../src/worker/worker-session.ts)
+- [src/chat-agent.ts](../../src/chat-agent.ts)
 
 ### Exit criteria
 
@@ -549,10 +549,10 @@ Remaining work in this phase still includes typed cross-session links, richer po
 
 ### Likely implementation areas
 
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/tools/builtin/coding-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/coding-tools.ts)
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- [src/channels/web-runtime-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/tools/builtin/coding-tools.ts](../../src/tools/builtin/coding-tools.ts)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
+- [src/channels/web-runtime-routes.ts](../../src/channels/web-runtime-routes.ts)
 
 ### Data model direction
 
@@ -603,11 +603,11 @@ Make cross-session work an explicit routed capability rather than a prompt conve
 
 ### Likely implementation areas
 
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/tools/builtin/coding-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/coding-tools.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/index.ts](../../src/index.ts)
+- [src/tools/builtin/coding-tools.ts](../../src/tools/builtin/coding-tools.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/reference-guide.ts](../../src/reference-guide.ts)
 
 ### Exit criteria
 
@@ -637,10 +637,10 @@ Teach Guardian how to reason about several coding sessions without confusing the
 
 ### Likely implementation areas
 
-- [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts)
-- [src/tools/tool-context.ts](/mnt/s/Development/GuardianAgent/src/tools/tool-context.ts)
-- [src/prompts/code-session-core.ts](/mnt/s/Development/GuardianAgent/src/prompts/code-session-core.ts)
-- [src/prompts/guardian-core.ts](/mnt/s/Development/GuardianAgent/src/prompts/guardian-core.ts)
+- [src/runtime/context-assembly.ts](../../src/runtime/context-assembly.ts)
+- [src/tools/tool-context.ts](../../src/tools/tool-context.ts)
+- [src/prompts/code-session-core.ts](../../src/prompts/code-session-core.ts)
+- [src/prompts/guardian-core.ts](../../src/prompts/guardian-core.ts)
 
 ### Exit criteria
 
@@ -682,12 +682,12 @@ Turn background coding work in another workspace into a first-class child lane r
 
 ### Likely implementation areas
 
-- [src/runtime/coding-backend-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/coding-backend-service.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [src/runtime/assistant-jobs.ts](/mnt/s/Development/GuardianAgent/src/runtime/assistant-jobs.ts)
-- [src/supervisor/worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
+- [src/runtime/coding-backend-service.ts](../../src/runtime/coding-backend-service.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
+- [src/runtime/assistant-jobs.ts](../../src/runtime/assistant-jobs.ts)
+- [src/supervisor/worker-manager.ts](../../src/supervisor/worker-manager.ts)
+- [src/config/types.ts](../../src/config/types.ts)
 
 ### Exit criteria
 
@@ -732,10 +732,10 @@ Create the runtime-owned artifact model for bespoke capability authoring without
 - new `src/runtime/capability-candidates.ts`
 - new `src/runtime/capability-candidate-store.ts`
 - new dedicated capability-authoring runtime or agent entrypoint
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts)
-- [src/agent/](/mnt/s/Development/GuardianAgent/src/agent)
+- [src/config/types.ts](../../src/config/types.ts)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts)
+- [src/agent/](../../src/agent)
 
 ### User workflow contract
 
@@ -781,10 +781,10 @@ Make Guardian itself the admission gate for generated capabilities.
 
 - new `src/runtime/capability-candidate-scanner.ts`
 - new `src/runtime/capability-candidate-harness.ts`
-- [src/guardian/](/mnt/s/Development/GuardianAgent/src/guardian)
-- [src/sandbox/](/mnt/s/Development/GuardianAgent/src/sandbox)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [scripts/](/mnt/s/Development/GuardianAgent/scripts)
+- [src/guardian/](../../src/guardian)
+- [src/sandbox/](../../src/sandbox)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [scripts/](../../scripts)
 
 ### Security stance
 
@@ -828,10 +828,10 @@ Allow approved candidates to be used temporarily without making them permanent.
 
 ### Likely implementation areas
 
-- [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- [src/tools/registry.ts](../../src/tools/registry.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
 - new activation support under `src/runtime/capability-candidates.ts`
-- control-plane routes in [src/channels/web-runtime-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts)
+- control-plane routes in [src/channels/web-runtime-routes.ts](../../src/channels/web-runtime-routes.ts)
 
 ### Hard rules
 
@@ -867,10 +867,10 @@ Turn successful candidates into curated first-class capabilities only through an
 
 ### Likely implementation areas
 
-- [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](/mnt/s/Development/GuardianAgent/docs/guides/CAPABILITY-AUTHORING-GUIDE.md)
-- [src/skills/](/mnt/s/Development/GuardianAgent/src/skills)
-- [src/tools/](/mnt/s/Development/GuardianAgent/src/tools)
-- control-plane callbacks in [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](../guides/CAPABILITY-AUTHORING-GUIDE.md)
+- [src/skills/](../../src/skills)
+- [src/tools/](../../src/tools)
+- control-plane callbacks in [src/index.ts](../../src/index.ts)
 
 ### Exit criteria
 
@@ -908,11 +908,11 @@ Make both uplifts operable and inspectable from the existing Guardian surfaces.
 
 ### Likely implementation areas
 
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- [src/channels/web-runtime-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts)
-- [web/public/](/mnt/s/Development/GuardianAgent/web/public)
-- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
+- [src/channels/web-runtime-routes.ts](../../src/channels/web-runtime-routes.ts)
+- [web/public/](../../web/public)
+- [src/channels/cli.ts](../../src/channels/cli.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
 
 ### Exit criteria
 
@@ -972,14 +972,14 @@ The plan must explicitly protect against regressions where:
 
 ## Documentation Updates Required
 
-- [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md)
-- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
-- [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
-- [docs/design/SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md)
-- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
-- [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
-- [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](../design/INTENT-GATEWAY-ROUTING-DESIGN.md)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [docs/design/ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md)
+- [docs/design/SKILLS-DESIGN.md](../design/SKILLS-DESIGN.md)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [docs/design/CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md)
+- [docs/design/WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md)
+- [src/reference-guide.ts](../../src/reference-guide.ts)
 
 ## Recommended Delivery Order
 

@@ -1,8 +1,8 @@
 # Assistant Capability Uplift Status
 
-**Date:** 2026-03-31  
-**Status:** Active tracker  
-**Companion roadmap:** [ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md](/mnt/s/Development/GuardianAgent/docs/plans/ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md)
+**Date:** 2026-03-31
+**Status:** Active tracker
+**Companion roadmap:** [ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md](ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md)
 
 ---
 

@@ -1,8 +1,8 @@
 # GuardianAgent SaaS Pricing and Unit Economics Plan
 
-**Status:** Draft  
-**Date:** 2026-03-28  
-**Primary context:** [GuardianAgent Multi-Tenant SaaS Platform - Detailed Design](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-TENANT-SAAS-AGENT-PLATFORM-DETAILED-DESIGN.md)
+**Status:** Draft
+**Date:** 2026-03-28
+**Primary context:** [GuardianAgent Multi-Tenant SaaS Platform - Detailed Design](../proposals/MULTI-TENANT-SAAS-AGENT-PLATFORM-DETAILED-DESIGN.md)
 
 ## Objective
 
@@ -404,7 +404,7 @@ These usually get underestimated:
 
 ## Sources
 
-- GuardianAgent Multi-Tenant SaaS Platform - Detailed Design: [local design doc](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-TENANT-SAAS-AGENT-PLATFORM-DETAILED-DESIGN.md)
+- GuardianAgent Multi-Tenant SaaS Platform - Detailed Design: [local design doc](../proposals/MULTI-TENANT-SAAS-AGENT-PLATFORM-DETAILED-DESIGN.md)
 - Amazon Bedrock pricing: <https://aws.amazon.com/bedrock/pricing/>
 - Amazon Cognito pricing: <https://aws.amazon.com/cognito/pricing/>
 - AWS Fargate pricing: <https://aws.amazon.com/fargate/pricing/>

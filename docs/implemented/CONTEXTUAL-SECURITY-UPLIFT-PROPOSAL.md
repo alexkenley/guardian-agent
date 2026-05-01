@@ -4,7 +4,7 @@
 **Status:** Superseded by implemented spec
 **Author:** Comparison against "51 attacks and 60 defenses from 128 papers: the AI agent security map" and GuardianAgent runtime
 
-This proposal has been carried forward into the shipped runtime spec at [`docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md). It remains here as design rationale and historical context.
+This proposal has been carried forward into the shipped runtime spec at [`docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md`](../design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md). It remains here as design rationale and historical context.
 
 ---
 

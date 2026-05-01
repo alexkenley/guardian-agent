@@ -1,9 +1,9 @@
 # Pi-Mono Inspired Architecture Uplift Plan
 
-**Date:** 2026-04-08  
-**Status:** Draft  
-**Source review:** `badlogic/pi-mono` at `main@f10cce94`  
-**Primary Guardian inputs:** [docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md), [docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md), [docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
+**Date:** 2026-04-08
+**Status:** Draft
+**Source review:** `badlogic/pi-mono` at `main@f10cce94`
+**Primary Guardian inputs:** [docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md](../proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md), [docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md](MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md), [docs/plans/CORE-ARCHITECTURE-MODULARIZATION-PLAN.md](CORE-ARCHITECTURE-MODULARIZATION-PLAN.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/design/CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md), [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md)
 
 ---
 
@@ -28,13 +28,13 @@ This is a packaging and runtime-discipline plan, not a product-parity plan.
 The `pi-mono` review confirmed three things:
 
 1. Guardian is already ahead on security, approvals, trust boundaries, shared orchestration, and backend-owned session state.
-2. Guardian is still carrying too much runtime weight in a few large files, especially [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts) and [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts).
+2. Guardian is still carrying too much runtime weight in a few large files, especially [src/chat-agent.ts](../../src/chat-agent.ts) and [src/tools/executor.ts](../../src/tools/executor.ts).
 3. Pi’s strongest ideas are not its UX rituals. They are its narrower runtime seams, clearer event/session contracts, and cleaner packaging boundaries.
 
 Current pressure points:
 
-- [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts) is 10k+ lines
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts) is 6k+ lines even after registrar extraction
+- [src/chat-agent.ts](../../src/chat-agent.ts) is 10k+ lines
+- [src/tools/executor.ts](../../src/tools/executor.ts) is 6k+ lines even after registrar extraction
 - prompt/context budgeting is improving, but still needs more explicit source contracts
 - sandbox, MCP, and backend state are not always surfaced as clearly as their operational importance warrants
 
@@ -150,7 +150,7 @@ Do not adopt the following from `pi-mono`:
 
 ### Goal
 
-Move reusable turn mechanics out of [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts) and away from surface-specific orchestration paths.
+Move reusable turn mechanics out of [src/chat-agent.ts](../../src/chat-agent.ts) and away from surface-specific orchestration paths.
 
 ### Scope
 
@@ -170,11 +170,11 @@ Move reusable turn mechanics out of [src/chat-agent.ts](/mnt/s/Development/Guard
 
 ### Likely implementation areas
 
-- [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts)
-- [src/chat-agent-helpers.ts](/mnt/s/Development/GuardianAgent/src/chat-agent-helpers.ts)
+- [src/chat-agent.ts](../../src/chat-agent.ts)
+- [src/chat-agent-helpers.ts](../../src/chat-agent-helpers.ts)
 - new `src/runtime/assistant-turn/` module family
-- [src/worker/worker-llm-loop.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-llm-loop.ts)
-- [src/runtime/dashboard-dispatch.ts](/mnt/s/Development/GuardianAgent/src/runtime/dashboard-dispatch.ts)
+- [src/worker/worker-llm-loop.ts](../../src/worker/worker-llm-loop.ts)
+- [src/runtime/dashboard-dispatch.ts](../../src/runtime/dashboard-dispatch.ts)
 
 ### Architecture benefit
 
@@ -194,7 +194,7 @@ Move reusable turn mechanics out of [src/chat-agent.ts](/mnt/s/Development/Guard
 
 - the assistant-turn loop exists as a dedicated runtime unit
 - web, CLI, and worker paths consume the same turn-runtime contract
-- [src/chat-agent.ts](/mnt/s/Development/GuardianAgent/src/chat-agent.ts) shrinks materially and loses turn-loop ownership rather than just delegating helper calls
+- [src/chat-agent.ts](../../src/chat-agent.ts) shrinks materially and loses turn-loop ownership rather than just delegating helper calls
 
 ---
 
@@ -219,12 +219,12 @@ Make progress, pending, and completion state backend-authored and transport-neut
 
 ### Likely implementation areas
 
-- [src/runtime/run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts)
+- [src/runtime/run-events.ts](../../src/runtime/run-events.ts)
 - new `src/runtime/assistant-run-events.ts` or equivalent
-- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md)
+- [src/channels/cli.ts](../../src/channels/cli.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
+- [docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](../design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md)
 
 ### Architecture benefit
 
@@ -275,11 +275,11 @@ For operator-visible controls:
 
 ### Likely implementation areas
 
-- [src/tools/types.ts](/mnt/s/Development/GuardianAgent/src/tools/types.ts)
-- [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/channels/cli-command-guide.ts](/mnt/s/Development/GuardianAgent/src/channels/cli-command-guide.ts)
-- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [src/tools/types.ts](../../src/tools/types.ts)
+- [src/tools/registry.ts](../../src/tools/registry.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/channels/cli-command-guide.ts](../../src/channels/cli-command-guide.ts)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ### Architecture benefit
 
@@ -318,11 +318,11 @@ Make runtime availability truthful, inspectable, and safe to reason about.
 
 ### Likely implementation areas
 
-- [src/tools/mcp-client.ts](/mnt/s/Development/GuardianAgent/src/tools/mcp-client.ts)
-- [src/sandbox/types.ts](/mnt/s/Development/GuardianAgent/src/sandbox/types.ts)
-- [src/sandbox/security-controls.ts](/mnt/s/Development/GuardianAgent/src/sandbox/security-controls.ts)
-- external coding backend startup modules under [src/runtime/](/mnt/s/Development/GuardianAgent/src/runtime)
-- control-plane callbacks under [src/runtime/control-plane/](/mnt/s/Development/GuardianAgent/src/runtime/control-plane)
+- [src/tools/mcp-client.ts](../../src/tools/mcp-client.ts)
+- [src/sandbox/types.ts](../../src/sandbox/types.ts)
+- [src/sandbox/security-controls.ts](../../src/sandbox/security-controls.ts)
+- external coding backend startup modules under [src/runtime/](../../src/runtime)
+- control-plane callbacks under [src/runtime/control-plane/](../../src/runtime/control-plane)
 
 ### Architecture benefit
 
@@ -372,12 +372,12 @@ Turn context assembly and compaction into stable runtime contracts instead of pr
 
 ### Likely implementation areas
 
-- [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts)
-- [src/util/context-budget.ts](/mnt/s/Development/GuardianAgent/src/util/context-budget.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/agent-memory-store.ts](/mnt/s/Development/GuardianAgent/src/runtime/agent-memory-store.ts)
-- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md)
-- [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
+- [src/runtime/context-assembly.ts](../../src/runtime/context-assembly.ts)
+- [src/util/context-budget.ts](../../src/util/context-budget.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/agent-memory-store.ts](../../src/runtime/agent-memory-store.ts)
+- [docs/design/CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md)
+- [docs/design/CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md)
 
 ### Architecture benefit
 
@@ -417,11 +417,11 @@ Prevent same-path races and reduce non-deterministic repo mutations.
 
 ### Likely implementation areas
 
-- [src/tools/builtin/filesystem-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/filesystem-tools.ts)
-- [src/tools/builtin/coding-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/coding-tools.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- [src/tools/builtin/filesystem-tools.ts](../../src/tools/builtin/filesystem-tools.ts)
+- [src/tools/builtin/coding-tools.ts](../../src/tools/builtin/coding-tools.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
 - shared helper such as new `src/tools/file-mutation-queue.ts`
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts) for surfaced recent-job semantics
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts) for surfaced recent-job semantics
 
 ### Architecture benefit
 
@@ -491,11 +491,11 @@ Not allowed:
 
 ### Likely implementation areas
 
-- [src/tools/approvals.ts](/mnt/s/Development/GuardianAgent/src/tools/approvals.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/runtime/approval-continuations.ts](/mnt/s/Development/GuardianAgent/src/runtime/approval-continuations.ts)
-- [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts)
-- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [src/tools/approvals.ts](../../src/tools/approvals.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/runtime/approval-continuations.ts](../../src/runtime/approval-continuations.ts)
+- [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts)
+- [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ### Architecture benefit
 

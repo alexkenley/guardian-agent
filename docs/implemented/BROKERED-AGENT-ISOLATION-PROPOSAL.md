@@ -1,7 +1,7 @@
 # Brokered Agent Isolation Proposal
 
-**Status:** Historical proposal. The current implementation status lives in [BROKERED-AGENT-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md).  
-**Date:** 2026-03-08  
+**Status:** Historical proposal. The current implementation status lives in [BROKERED-AGENT-ISOLATION-DESIGN.md](../design/BROKERED-AGENT-ISOLATION-DESIGN.md).
+**Date:** 2026-03-08
 **Informed by:** `https://mrinal.com/articles/agent-sandboxes/`
 
 ## Objective
@@ -28,13 +28,13 @@ GuardianAgent is already materially ahead of many agent systems:
 
 Current strengths live in these areas:
 
-- runtime mediation: [runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts)
-- tool governance and approvals: [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- subprocess sandboxing: [index.ts](/mnt/s/Development/GuardianAgent/src/sandbox/index.ts), [profiles.ts](/mnt/s/Development/GuardianAgent/src/sandbox/profiles.ts)
+- runtime mediation: [runtime.ts](../../src/runtime/runtime.ts)
+- tool governance and approvals: [executor.ts](../../src/tools/executor.ts)
+- subprocess sandboxing: [index.ts](../../src/sandbox/index.ts), [profiles.ts](../../src/sandbox/profiles.ts)
 
 Current architectural limitation:
 
-- agent code and the model/planning loop still run in the main process, which is explicitly acknowledged in [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md#L18)
+- agent code and the model/planning loop still run in the main process, which is explicitly acknowledged in [SECURITY.md](../../SECURITY.md#L18)
 
 That means GuardianAgent currently enforces:
 
@@ -282,9 +282,9 @@ Work:
 
 Likely touch points:
 
-- [runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts)
-- [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [runtime.ts](../../src/runtime/runtime.ts)
+- [executor.ts](../../src/tools/executor.ts)
+- [index.ts](../../src/index.ts)
 
 ### Phase 1: Broker Process
 

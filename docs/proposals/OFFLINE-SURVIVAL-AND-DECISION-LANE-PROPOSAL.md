@@ -1,8 +1,8 @@
 # Offline Survival And Decision Lane Proposal
 
-**Status:** Proposed  
-**Date:** 2026-03-29  
-**Detailed design target:** [Intelligence In Depth Specification](/mnt/s/Development/GuardianAgent/docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md)  
+**Status:** Proposed
+**Date:** 2026-03-29
+**Detailed design target:** [Intelligence In Depth Specification](../design/INTELLIGENCE-IN-DEPTH-DESIGN.md)
 **Supersedes:**
 - `BitNet CPU Decision Lane Proposal` (removed)
 - `Built-in BitNet Model Proposal` (removed)
@@ -90,13 +90,13 @@ The current architecture also has a second problem: it still treats `ollama` as 
 
 That creates three risks:
 
-1. **Availability risk**  
+1. **Availability risk**
    If the network is down and Ollama is unavailable, Guardian loses LLM-dependent behavior.
 
-2. **Independence risk**  
+2. **Independence risk**
    If the backup lane depends on the same Ollama process, model store, or HTTP path as the main local lane, it is not a real backup.
 
-3. **Routing risk**  
+3. **Routing risk**
    Guardian does not yet model provider capabilities precisely enough to distinguish:
    - tool-calling assistant providers
    - structured-output local classifiers
@@ -204,16 +204,16 @@ It is tempting to say "just use whatever model Ollama already has." That is the 
 
 Reasons:
 
-1. **Shared failure domain**  
+1. **Shared failure domain**
    If Ollama is down, misconfigured, corrupted, blocked, or attacked, the backup lane goes down too.
 
-2. **Shared trust boundary**  
+2. **Shared trust boundary**
    A true fallback should not depend on the same process, store, or API surface as the primary local assistant runtime.
 
-3. **Runtime mismatch**  
+3. **Runtime mismatch**
    BitNet is not a generic acceleration layer for arbitrary Ollama models. It is a specialized runtime for specific model families and low-bit workflows.
 
-4. **Operator clarity**  
+4. **Operator clarity**
    The product should expose three distinct concepts:
    - bundled survival model
    - optional local decision engine

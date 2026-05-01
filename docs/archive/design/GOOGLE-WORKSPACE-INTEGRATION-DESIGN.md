@@ -1,6 +1,6 @@
 # Google Workspace CLI Legacy Design
 
-**Status:** Historical legacy design. The current implementation is the native Google integration documented in [`NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md`](./NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md).
+**Status:** Historical legacy design. The current implementation is the native Google integration documented in [`NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md`](../../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md).
 **Depends on:** Native Skills, ToolExecutor policy model, Guardian capabilities
 **Historical Runtime:** Google Workspace CLI (`gws`) via subprocess execution
 

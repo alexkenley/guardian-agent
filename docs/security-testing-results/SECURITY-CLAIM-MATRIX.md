@@ -1,6 +1,6 @@
 # Security Claim Verification Matrix
 
-This matrix tracks the highest-value security claims from [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md) against:
+This matrix tracks the highest-value security claims from [SECURITY.md](../../SECURITY.md) against:
 
 - implementation files
 - existing unit/integration tests

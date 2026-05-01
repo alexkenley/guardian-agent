@@ -1,11 +1,11 @@
 # Second Brain Implementation Plan
 
-**Date:** 2026-04-04  
-**Status:** Draft  
-**Origin:** Follow-up implementation plan for the `Second Brain` proposal and subsequent design decisions on budgeting, scheduler execution, and intent boundaries  
-**Primary proposal:** [Second Brain Proposal](../proposals/SECOND-BRAIN-PROPOSAL.md)  
-**Key files:** `src/runtime/intent-gateway.ts`, `src/runtime/direct-intent-routing.ts`, `src/chat-agent.ts`, `src/index.ts`, `src/runtime/scheduled-tasks.ts`, `src/runtime/scheduler.ts`, `src/runtime/budget.ts`, `src/runtime/continuity-threads.ts`, `src/runtime/analytics.ts`, `src/google/google-service.ts`, `src/microsoft/microsoft-service.ts`, `src/search/search-service.ts`, `src/tools/executor.ts`, `src/tools/builtin/contacts-email-tools.ts`, `src/tools/marketing-store.ts`, `src/skills/prompt.ts`, `src/skills/resolver.ts`, `src/channels/web-types.ts`, `src/channels/web-runtime-routes.ts`, `web/public/index.html`, `web/public/js/app.js`, `web/public/js/pages/dashboard.js`  
-**Primary specs impacted:** `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`, `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`, `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`, `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`, `docs/design/IDENTITY-MEMORY-DESIGN.md`, `docs/design/SKILLS-DESIGN.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`, `docs/design/WEBUI-DESIGN.md`, `docs/design/TRUST-PRESETS-DESIGN.md`, `docs/plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md`, `docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`, `docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
+**Date:** 2026-04-04
+**Status:** Draft
+**Origin:** Follow-up implementation plan for the `Second Brain` proposal and subsequent design decisions on budgeting, scheduler execution, and intent boundaries
+**Primary proposal:** [Second Brain Proposal](../implemented/SECOND-BRAIN-PROPOSAL.md)
+**Key files:** `src/runtime/intent-gateway.ts`, `src/runtime/direct-intent-routing.ts`, `src/chat-agent.ts`, `src/index.ts`, `src/runtime/scheduled-tasks.ts`, `src/runtime/scheduler.ts`, `src/runtime/budget.ts`, `src/runtime/continuity-threads.ts`, `src/runtime/analytics.ts`, `src/google/google-service.ts`, `src/microsoft/microsoft-service.ts`, `src/search/search-service.ts`, `src/tools/executor.ts`, `src/tools/builtin/contacts-email-tools.ts`, `src/tools/marketing-store.ts`, `src/skills/prompt.ts`, `src/skills/resolver.ts`, `src/channels/web-types.ts`, `src/channels/web-runtime-routes.ts`, `web/public/index.html`, `web/public/js/app.js`, `web/public/js/pages/dashboard.js`
+**Primary specs impacted:** `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`, `docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md`, `docs/design/ORCHESTRATION-DESIGN.md`, `docs/design/PENDING-ACTION-ORCHESTRATION-DESIGN.md`, `docs/design/CONTEXT-ASSEMBLY-DESIGN.md`, `docs/design/INTELLIGENCE-IN-DEPTH-DESIGN.md`, `docs/design/IDENTITY-MEMORY-DESIGN.md`, `docs/design/SKILLS-DESIGN.md`, `docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`, `docs/design/WEBUI-DESIGN.md`, `docs/design/TRUST-PRESETS-DESIGN.md`, `docs/plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md`, `docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`, `docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md`, `docs/plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`, `docs/archive/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
 
 ---
 
@@ -626,7 +626,7 @@ Deliver:
 - updates to `CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md`
 - updates to `MEMORY-SYSTEM-UPLIFT-PLAN.md`
 - updates to `MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md`
-- updates to `SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
+- updates to `docs/archive/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md`
 - updates to `src/reference-guide.ts`
 
 Explicit documentation goals:

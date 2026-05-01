@@ -1,9 +1,9 @@
 # Runtime Intelligence Uplifts Proposal
 
-**Status:** Draft  
-**Date:** 2026-03-29  
-**Primary Guardian files:** [src/llm/provider-registry.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.ts), [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts), [src/llm/openai.ts](/mnt/s/Development/GuardianAgent/src/llm/openai.ts), [src/runtime/model-routing-ux.ts](/mnt/s/Development/GuardianAgent/src/runtime/model-routing-ux.ts), [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts), [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts), [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts), [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [src/runtime/sentinel.ts](/mnt/s/Development/GuardianAgent/src/runtime/sentinel.ts), [src/runtime/security-triage-agent.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-triage-agent.ts)  
-**Related docs:** [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [BITNET-CPU-DECISION-LANE-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BITNET-CPU-DECISION-LANE-PROPOSAL.md)
+**Status:** Draft
+**Date:** 2026-03-29
+**Primary Guardian files:** [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts), [src/llm/types.ts](../../src/llm/types.ts), [src/llm/openai.ts](../../src/llm/openai.ts), [src/runtime/model-routing-ux.ts](../../src/runtime/model-routing-ux.ts), [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts), [src/index.ts](../../src/index.ts), [src/tools/registry.ts](../../src/tools/registry.ts), [src/tools/executor.ts](../../src/tools/executor.ts), [src/runtime/sentinel.ts](../../src/runtime/sentinel.ts), [src/runtime/security-triage-agent.ts](../../src/runtime/security-triage-agent.ts)
+**Related docs:** [ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), BitNet CPU decision-lane proposal direction
 
 ---
 
@@ -159,11 +159,11 @@ That is too brittle for:
 
 ### Primary files
 
-- [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts)
-- [src/llm/openai.ts](/mnt/s/Development/GuardianAgent/src/llm/openai.ts)
-- [src/llm/provider-registry.ts](/mnt/s/Development/GuardianAgent/src/llm/provider-registry.ts)
-- [src/runtime/model-routing-ux.ts](/mnt/s/Development/GuardianAgent/src/runtime/model-routing-ux.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [src/llm/types.ts](../../src/llm/types.ts)
+- [src/llm/openai.ts](../../src/llm/openai.ts)
+- [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts)
+- [src/runtime/model-routing-ux.ts](../../src/runtime/model-routing-ux.ts)
+- [src/index.ts](../../src/index.ts)
 
 ### Why first
 
@@ -200,9 +200,9 @@ Guardian already has some fallback behavior, but much of it is narrow and specia
 
 ### Primary files
 
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/runtime/sentinel.ts](/mnt/s/Development/GuardianAgent/src/runtime/sentinel.ts)
+- [src/index.ts](../../src/index.ts)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/runtime/sentinel.ts](../../src/runtime/sentinel.ts)
 - new runtime helper module for structured-output recovery
 
 ### Why second
@@ -242,10 +242,10 @@ What it lacks is a dedicated research-shaped execution lane with explicit steps 
 
 ### Primary files
 
-- [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
-- [src/agent/orchestration.ts](/mnt/s/Development/GuardianAgent/src/agent/orchestration.ts)
-- [src/agent/recipes.ts](/mnt/s/Development/GuardianAgent/src/agent/recipes.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [docs/design/ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md)
+- [src/agent/orchestration.ts](../../src/agent/orchestration.ts)
+- [src/agent/recipes.ts](../../src/agent/recipes.ts)
+- [src/index.ts](../../src/index.ts)
 - new research orchestration prompt/runtime files
 
 ### Why third
@@ -285,8 +285,8 @@ The missing piece is semantic consolidation before execution.
 
 ### Primary files
 
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- [src/index.ts](../../src/index.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
 - new tool-batching helper module
 
 ### Why fourth
@@ -325,10 +325,10 @@ Guardian has strong runtime controls, but some of the most important intelligenc
 
 ### Primary files
 
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/runtime/sentinel.ts](/mnt/s/Development/GuardianAgent/src/runtime/sentinel.ts)
-- [src/runtime/security-triage-agent.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-triage-agent.ts)
-- [scripts/](/mnt/s/Development/GuardianAgent/scripts)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/runtime/sentinel.ts](../../src/runtime/sentinel.ts)
+- [src/runtime/security-triage-agent.ts](../../src/runtime/security-triage-agent.ts)
+- [scripts/](../../scripts)
 - new runtime metrics modules and evaluation assets
 
 ### Why fifth
@@ -356,8 +356,8 @@ It should not become a plugin free-for-all.
 
 ### Primary files
 
-- [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- [src/tools/registry.ts](../../src/tools/registry.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
 - future tool-manifest and availability modules
 
 ---

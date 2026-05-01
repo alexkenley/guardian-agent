@@ -1,9 +1,9 @@
 # Memory Artifact and Operator Wiki Uplift Plan
 
-**Status:** Proposed  
-**Date:** 2026-04-04  
-**Origin:** Post-uplift review of Guardian memory architecture compared against inspectable markdown-wiki knowledge-base patterns, with emphasis on preserving Guardian security layers and operator control  
-**Companion docs:** [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md), [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md), [ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [FORWARD-ARCHITECTURE](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)
+**Status:** Proposed
+**Date:** 2026-04-04
+**Origin:** Post-uplift review of Guardian memory architecture compared against inspectable markdown-wiki knowledge-base patterns, with emphasis on preserving Guardian security layers and operator control
+**Companion docs:** [MEMORY-SYSTEM-DESIGN.md](../design/MEMORY-SYSTEM-DESIGN.md), [Context, Memory, and Orchestration Uplift Plan](CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md), [ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [FORWARD-ARCHITECTURE](../architecture/FORWARD-ARCHITECTURE.md)
 
 ## Objective
 
@@ -552,8 +552,8 @@ This plan builds on, rather than replaces, the current memory uplift direction.
 
 It should be treated as the artifact-layer and operator-curation companion to:
 
-- [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md)
-- [Memory System Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md)
-- [Background Delegation Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
+- [Context, Memory, and Orchestration Uplift Plan](CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md)
+- [Memory System Uplift Plan](MEMORY-SYSTEM-UPLIFT-PLAN.md)
+- [Background Delegation Uplift Plan](BACKGROUND-DELEGATION-UPLIFT-PLAN.md)
 
 Those plans define the underlying memory/runtime direction. This document adds the missing operator-facing, inspectable, persistent knowledge-artifact and curated-wiki layer while preserving Guardian's security model.

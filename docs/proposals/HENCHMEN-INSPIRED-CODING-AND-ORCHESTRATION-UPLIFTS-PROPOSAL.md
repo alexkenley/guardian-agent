@@ -1,10 +1,10 @@
 # Henchmen-Inspired Coding And Orchestration Uplifts Proposal
 
-**Status:** Draft  
-**Date:** 2026-04-11  
-**Basis:** Comparative review of GuardianAgent against the cloned `henchmen` repository. This proposal is inspired by that repo's strongest execution and verification patterns, not a recommendation to copy its product shape or runtime split.  
-**Primary Guardian files:** [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [src/runtime/code-workspace-map.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-map.ts), [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts), [src/runtime/incoming-dispatch.ts](/mnt/s/Development/GuardianAgent/src/runtime/incoming-dispatch.ts), [src/runtime/orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts), [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts), [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)  
-**Related docs:** [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [docs/architecture/FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [docs/architecture/OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/proposals/ORCHESTRATION-AND-DELEGATION-CAPABILITY-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/ORCHESTRATION-AND-DELEGATION-CAPABILITY-UPLIFTS-PROPOSAL.md), [docs/proposals/MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md)
+**Status:** Draft
+**Date:** 2026-04-11
+**Basis:** Comparative review of GuardianAgent against the cloned `henchmen` repository. This proposal is inspired by that repo's strongest execution and verification patterns, not a recommendation to copy its product shape or runtime split.
+**Primary Guardian files:** [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts), [src/runtime/code-workspace-map.ts](../../src/runtime/code-workspace-map.ts), [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts), [src/runtime/incoming-dispatch.ts](../../src/runtime/incoming-dispatch.ts), [src/runtime/orchestrator.ts](../../src/runtime/orchestrator.ts), [src/tools/executor.ts](../../src/tools/executor.ts), [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts), [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts), [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
+**Related docs:** [docs/design/CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md), [docs/architecture/FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [docs/architecture/OVERVIEW.md](../architecture/OVERVIEW.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/proposals/ORCHESTRATION-AND-DELEGATION-CAPABILITY-UPLIFTS-PROPOSAL.md](ORCHESTRATION-AND-DELEGATION-CAPABILITY-UPLIFTS-PROPOSAL.md), [docs/proposals/MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md](MULTI-WORKSPACE-CODING-AND-GOVERNED-DYNAMIC-CAPABILITIES-PROPOSAL.md)
 
 ## Goal
 
@@ -124,12 +124,12 @@ This is the most immediate gap for Codex, Claude Code, Gemini CLI, and similar b
 
 Guardian already has the rendering side of the system:
 
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts) defines structured run items
-- [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts) streams SSE events
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js) subscribes to `run.timeline`
-- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts) already renders live progress from `run.timeline`
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts) defines structured run items
+- [src/channels/web.ts](../../src/channels/web.ts) streams SSE events
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js) subscribes to `run.timeline`
+- [src/channels/cli.ts](../../src/channels/cli.ts) already renders live progress from `run.timeline`
 
-But [src/runtime/coding-backend-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/coding-backend-service.ts) still mostly:
+But [src/runtime/coding-backend-service.ts](../../src/runtime/coding-backend-service.ts) still mostly:
 
 - opens a PTY
 - buffers terminal output
@@ -211,11 +211,11 @@ This should extend existing shared runtime surfaces, not invent a parallel one:
 
 ### Primary files
 
-- [src/runtime/coding-backend-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/coding-backend-service.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
-- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [src/runtime/coding-backend-service.ts](../../src/runtime/coding-backend-service.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
+- [src/channels/web.ts](../../src/channels/web.ts)
+- [src/channels/cli.ts](../../src/channels/cli.ts)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
 
 ## 2. Add Typed Execution Briefs For Coding Lanes
 
@@ -282,11 +282,11 @@ This fits the current architecture because it does not replace routing or tools.
 
 ### Primary files
 
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/incoming-dispatch.ts](/mnt/s/Development/GuardianAgent/src/runtime/incoming-dispatch.ts)
-- [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/incoming-dispatch.ts](../../src/runtime/incoming-dispatch.ts)
+- [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
 
 ## 3. Add Guardian-Native Context Packs Above `workspaceMap` And `workingSet`
 
@@ -317,7 +317,7 @@ Suggested sections:
 - external evidence where configured: related PRs, related issues, CI failure summaries, connector-backed notes
 - provenance and omissions: why each source was loaded, skipped, truncated, or suppressed by trust policy
 
-This should remain compatible with [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md): `workspaceProfile`, `workspaceMap`, and `workingSet` remain canonical; the context pack is a run-scoped projection, not a second indexing system.
+This should remain compatible with [docs/design/CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md): `workspaceProfile`, `workspaceMap`, and `workingSet` remain canonical; the context pack is a run-scoped projection, not a second indexing system.
 
 ### Quick borrowings worth copying almost directly
 
@@ -327,10 +327,10 @@ This should remain compatible with [docs/design/CODING-WORKSPACE-DESIGN.md](/mnt
 
 ### Primary files
 
-- [src/runtime/code-workspace-map.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-map.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
+- [src/runtime/code-workspace-map.ts](../../src/runtime/code-workspace-map.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
 - `src/runtime/context-assembly.ts`
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
 
 ## 4. Add Fail-Closed Verification Contracts And Repair Loops
 
@@ -401,11 +401,11 @@ This should feed:
 
 ### Primary files
 
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
+- [scripts/test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs)
 
 ## 5. Add Durable Lane Checkpoints For Long Coding And Delegated Work
 
@@ -459,10 +459,10 @@ This must extend shared orchestration and `CodeSession` state. It must not becom
 
 ### Primary files
 
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts)
-- [src/runtime/orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts)
+- [src/runtime/orchestrator.ts](../../src/runtime/orchestrator.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
 
 ## 6. Add A Repo-Fixture Coding Eval Harness
 
@@ -507,7 +507,7 @@ This should sit beside the current `scripts/` harnesses, not replace them.
 
 - `scripts/`
 - `evals/` or `tmp/fixtures/` depending on repo preference
-- [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- [scripts/test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs)
 
 ## 7. Add An Optional Clean-Room Verification Lane
 
@@ -540,9 +540,9 @@ This aligns with Guardian's existing direction around child lanes and brokered i
 ### Primary files
 
 - `src/supervisor/worker-manager.ts`
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
 
 ## Small Borrowings Worth Doing Early
 

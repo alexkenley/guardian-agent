@@ -62,7 +62,7 @@ Guarded computer-use operator work should stay behind those foundations unless a
 
 ## Phase 1: Run Timeline And Event Viewer
 
-**Detailed spec:** [RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md)
+**Detailed spec:** [RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md](../design/RUN-TIMELINE-AND-EVENT-VIEWER-DESIGN.md)
 
 ### Goal
 
@@ -362,8 +362,8 @@ These ideas may be worth exploring later, but they should not lead the roadmap:
 ## Source References
 
 - UI-TARS monorepo: <https://github.com/bytedance/UI-TARS-desktop>
-- Guardian architecture overview: [/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
-- Guardian browser containment: [/mnt/s/Development/GuardianAgent/src/runtime/browser-session-broker.ts](/mnt/s/Development/GuardianAgent/src/runtime/browser-session-broker.ts)
-- Guardian orchestration and run events: [/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [/mnt/s/Development/GuardianAgent/src/runtime/orchestration-tracing.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestration-tracing.ts), [/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts)
-- Guardian code-session state: [/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- Guardian workspace context layers: [/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-profile.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-profile.ts), [/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-map.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-map.ts)
+- Guardian architecture overview: [OVERVIEW.md](../architecture/OVERVIEW.md)
+- Guardian browser containment: [browser-session-broker.ts](../../src/runtime/browser-session-broker.ts)
+- Guardian orchestration and run events: [orchestrator.ts](../../src/runtime/orchestrator.ts), [orchestration-tracing.ts](../../src/runtime/orchestration-tracing.ts), [run-events.ts](../../src/runtime/run-events.ts)
+- Guardian code-session state: [code-sessions.ts](../../src/runtime/code-sessions.ts)
+- Guardian workspace context layers: [code-workspace-profile.ts](../../src/runtime/code-workspace-profile.ts), [code-workspace-map.ts](../../src/runtime/code-workspace-map.ts)

@@ -1,10 +1,10 @@
 # Claude Managed Agents Hosted Runtime Proposal
 
-**Status:** Draft  
-**Date:** 2026-04-09  
-**Primary runtime files:** [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts), [src/llm/anthropic.ts](/mnt/s/Development/GuardianAgent/src/llm/anthropic.ts), [src/runtime/execution-profiles.ts](/mnt/s/Development/GuardianAgent/src/runtime/execution-profiles.ts), [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts), [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts), [src/runtime/continuity-threads.ts](/mnt/s/Development/GuardianAgent/src/runtime/continuity-threads.ts), [src/runtime/coding-backend-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/coding-backend-service.ts), [src/tools/builtin/coding-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/coding-tools.ts), [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)  
-**Primary control-plane files:** [src/runtime/control-plane/provider-dashboard-callbacks.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/provider-dashboard-callbacks.ts), [src/runtime/control-plane/setup-config-dashboard-callbacks.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/setup-config-dashboard-callbacks.ts), [src/channels/web-provider-admin-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-provider-admin-routes.ts), [src/channels/web-code-session-routes.ts](/mnt/s/Development/GuardianAgent/src/channels/web-code-session-routes.ts)  
-**Related docs:** [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/architecture/FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md), [docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md)  
+**Status:** Draft
+**Date:** 2026-04-09
+**Primary runtime files:** [src/llm/types.ts](../../src/llm/types.ts), [src/llm/anthropic.ts](../../src/llm/anthropic.ts), [src/runtime/execution-profiles.ts](../../src/runtime/execution-profiles.ts), [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts), [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts), [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts), [src/runtime/continuity-threads.ts](../../src/runtime/continuity-threads.ts), [src/runtime/coding-backend-service.ts](../../src/runtime/coding-backend-service.ts), [src/tools/builtin/coding-tools.ts](../../src/tools/builtin/coding-tools.ts), [src/tools/executor.ts](../../src/tools/executor.ts)
+**Primary control-plane files:** [src/runtime/control-plane/provider-dashboard-callbacks.ts](../../src/runtime/control-plane/provider-dashboard-callbacks.ts), [src/runtime/control-plane/setup-config-dashboard-callbacks.ts](../../src/runtime/control-plane/setup-config-dashboard-callbacks.ts), [src/channels/web-provider-admin-routes.ts](../../src/channels/web-provider-admin-routes.ts), [src/channels/web-code-session-routes.ts](../../src/channels/web-code-session-routes.ts)
+**Related docs:** [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/architecture/FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md](GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md), [docs/proposals/REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md](REFERENCE-CODING-RUNTIME-UPLIFT-PROPOSAL.md)
 **Official sources:** [Claude Managed Agents overview](https://platform.claude.com/docs/en/managed-agents/overview), [Managed Agents quickstart](https://platform.claude.com/docs/en/managed-agents/quickstart), [Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)
 
 ## Executive Summary
@@ -43,13 +43,13 @@ That means:
 
 ## Why This Is Not A Normal Provider
 
-Guardian's current LLM provider interface in [src/llm/types.ts](/mnt/s/Development/GuardianAgent/src/llm/types.ts) is intentionally narrow:
+Guardian's current LLM provider interface in [src/llm/types.ts](../../src/llm/types.ts) is intentionally narrow:
 
 - `chat(...)`
 - `stream(...)`
 - `listModels()`
 
-The current Anthropic implementation in [src/llm/anthropic.ts](/mnt/s/Development/GuardianAgent/src/llm/anthropic.ts) correctly wraps Messages API behavior, prompt caching, and tool calls. That is still the right implementation for normal Anthropic model use.
+The current Anthropic implementation in [src/llm/anthropic.ts](../../src/llm/anthropic.ts) correctly wraps Messages API behavior, prompt caching, and tool calls. That is still the right implementation for normal Anthropic model use.
 
 Claude Managed Agents does not fit that contract well because the hosted runtime owns:
 
@@ -66,11 +66,11 @@ If we squeeze Managed Agents into `LLMProvider`, we lose clarity in exactly the 
 
 Guardian already has the right extension points for a hosted runtime:
 
-- `managed_cloud` routing tier and workload-shaped selection in [src/runtime/execution-profiles.ts](/mnt/s/Development/GuardianAgent/src/runtime/execution-profiles.ts)
-- backend-owned code sessions in [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- shared approvals and continuation blocking in [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts)
-- cross-surface continuity in [src/runtime/continuity-threads.ts](/mnt/s/Development/GuardianAgent/src/runtime/continuity-threads.ts)
-- explicit external coding backend delegation in [src/runtime/coding-backend-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/coding-backend-service.ts) and [src/tools/builtin/coding-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/coding-tools.ts)
+- `managed_cloud` routing tier and workload-shaped selection in [src/runtime/execution-profiles.ts](../../src/runtime/execution-profiles.ts)
+- backend-owned code sessions in [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- shared approvals and continuation blocking in [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts)
+- cross-surface continuity in [src/runtime/continuity-threads.ts](../../src/runtime/continuity-threads.ts)
+- explicit external coding backend delegation in [src/runtime/coding-backend-service.ts](../../src/runtime/coding-backend-service.ts) and [src/tools/builtin/coding-tools.ts](../../src/tools/builtin/coding-tools.ts)
 
 This proposal therefore recommends a new hosted-runtime service that plugs into those seams instead of changing the base conversation/provider model first.
 
@@ -208,7 +208,7 @@ Responsibilities:
 
 ### Why a direct REST adapter first
 
-The current repo pins `@anthropic-ai/sdk` `^0.78.0` in [package.json](/mnt/s/Development/GuardianAgent/package.json), and the installed SDK surface currently exposes beta `models`, `messages`, `files`, and `skills`, but not managed-agent resources in [node_modules/@anthropic-ai/sdk/src/resources/beta/beta.ts](/mnt/s/Development/GuardianAgent/node_modules/@anthropic-ai/sdk/src/resources/beta/beta.ts).
+The current repo pins `@anthropic-ai/sdk` `^0.78.0` in [package.json](../../package.json), and the installed SDK surface currently exposes beta `models`, `messages`, `files`, and `skills`, but not managed-agent resources in [node_modules/@anthropic-ai/sdk/src/resources/beta/beta.ts](../../node_modules/@anthropic-ai/sdk/src/resources/beta/beta.ts).
 
 That makes the least risky first implementation:
 
@@ -376,7 +376,7 @@ This keeps Guardian's local policy/approval system authoritative.
 
 ### Code sessions
 
-Extend [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts) to track hosted-run metadata.
+Extend [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts) to track hosted-run metadata.
 
 Recommended additions:
 
@@ -397,7 +397,7 @@ The second option is cleaner if hosted runs become first-class.
 
 ### Pending actions
 
-Use [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts) for:
+Use [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts) for:
 
 - approval to start hosted run
 - approval to use write-capable hosted profile
@@ -409,7 +409,7 @@ This is important: hosted-run approvals should use the shared pending-action mod
 
 ### Continuity threads
 
-Extend [src/runtime/continuity-threads.ts](/mnt/s/Development/GuardianAgent/src/runtime/continuity-threads.ts) execution refs to include hosted runs, for example:
+Extend [src/runtime/continuity-threads.ts](../../src/runtime/continuity-threads.ts) execution refs to include hosted runs, for example:
 
 - `hosted_agent_run`
 
@@ -505,7 +505,7 @@ Two safe first integration paths:
 
 ### Future routing
 
-If Guardian later supports natural-language explicit selection like "run this in Claude Managed Agents," then the change should go through [src/runtime/intent-gateway.ts](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts) and the existing direct-routing machinery.
+If Guardian later supports natural-language explicit selection like "run this in Claude Managed Agents," then the change should go through [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts) and the existing direct-routing machinery.
 
 It should not be implemented as pre-gateway keyword interception.
 
@@ -633,15 +633,15 @@ Success criteria:
 
 ### Existing files likely to change
 
-- [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/pending-actions.ts](/mnt/s/Development/GuardianAgent/src/runtime/pending-actions.ts)
-- [src/runtime/continuity-threads.ts](/mnt/s/Development/GuardianAgent/src/runtime/continuity-threads.ts)
-- [src/runtime/coding-backend-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/coding-backend-service.ts)
-- [src/tools/builtin/coding-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/coding-tools.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/runtime/control-plane/provider-dashboard-callbacks.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/provider-dashboard-callbacks.ts)
-- [src/runtime/control-plane/setup-config-dashboard-callbacks.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/setup-config-dashboard-callbacks.ts)
+- [src/config/types.ts](../../src/config/types.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/pending-actions.ts](../../src/runtime/pending-actions.ts)
+- [src/runtime/continuity-threads.ts](../../src/runtime/continuity-threads.ts)
+- [src/runtime/coding-backend-service.ts](../../src/runtime/coding-backend-service.ts)
+- [src/tools/builtin/coding-tools.ts](../../src/tools/builtin/coding-tools.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/runtime/control-plane/provider-dashboard-callbacks.ts](../../src/runtime/control-plane/provider-dashboard-callbacks.ts)
+- [src/runtime/control-plane/setup-config-dashboard-callbacks.ts](../../src/runtime/control-plane/setup-config-dashboard-callbacks.ts)
 
 ## Testing Strategy
 

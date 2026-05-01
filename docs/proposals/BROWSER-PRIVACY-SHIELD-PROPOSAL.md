@@ -3,7 +3,7 @@
 **Date:** 2026-03-20
 **Status:** Draft
 **Merged scope:** Browser privacy, Tor-routed anonymous access, and guarded dark web OSINT
-**Cross-references:** [Browser Automation Spec](/mnt/s/Development/GuardianAgent/docs/design/BROWSER-AUTOMATION-DESIGN.md), [Agentic Defensive Security Suite Spec](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [Browser Session Defense Skill](/mnt/s/Development/GuardianAgent/skills/browser-session-defense/SKILL.md)
+**Cross-references:** [Browser Automation Spec](../design/BROWSER-AUTOMATION-DESIGN.md), [Agentic Defensive Security Suite Spec](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [Browser Session Defense Skill](../../skills/browser-session-defense/SKILL.md)
 
 ---
 

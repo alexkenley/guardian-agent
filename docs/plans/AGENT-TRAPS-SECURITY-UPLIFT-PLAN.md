@@ -1,9 +1,9 @@
 # Agent Traps Security Uplift Plan
 
-**Status:** Published  
-**Date:** 2026-04-03  
-**Origins:** implementation review against *AI Agent Traps* (Franklin et al.), [Stream B Security Uplift](/mnt/s/Development/GuardianAgent/docs/implemented/STREAM-B-SECURITY-UPLIFT.md), [Security Policy](/mnt/s/Development/GuardianAgent/SECURITY.md), and the current shipped runtime/spec set  
-**Companion specs:** [Security Policy](/mnt/s/Development/GuardianAgent/SECURITY.md), [Architecture Overview](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md), [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
+**Status:** Published
+**Date:** 2026-04-03
+**Origins:** implementation review against *AI Agent Traps* (Franklin et al.), [Stream B Security Uplift](../implemented/STREAM-B-SECURITY-UPLIFT.md), [Security Policy](../../SECURITY.md), and the current shipped runtime/spec set
+**Companion specs:** [Security Policy](../../SECURITY.md), [Architecture Overview](../architecture/OVERVIEW.md), [Contextual Security Uplift Spec](../design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md), [Agentic Defensive Security Suite - As-Built Spec](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [Tools Control Plane Spec](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 
 ## Objective
 

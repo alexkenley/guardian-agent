@@ -1,16 +1,16 @@
 # GuardianAgent Multi-Tenant SaaS Platform - Detailed Design
 
-**Status:** Draft  
-**Date:** 2026-03-28  
+**Status:** Draft
+**Date:** 2026-03-28
 **Related:**
-- [Private-By-Default Cloud Deployment Model for GuardianAgent](/mnt/s/Development/GuardianAgent/docs/proposals/PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
-- [Vercel-First Hosted Agent Platform](/mnt/s/Development/GuardianAgent/docs/proposals/VERCEL-FIRST-HOSTED-AGENT-PLATFORM-PROPOSAL.md)
-- [SaaS Pricing and Unit Economics Plan](/mnt/s/Development/GuardianAgent/docs/plans/SAAS-PRICING-AND-UNIT-ECONOMICS-PLAN.md)
-- [AWS Bedrock Provider - Implementation Plan](/mnt/s/Development/GuardianAgent/docs/plans/AWS-BEDROCK-PROVIDER-IMPLEMENTATION-PLAN.md)
-- [Multi-User Server + Client Agent Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
-- [ZeroTrustAgent-Inspired Uplifts for GuardianAgent](/mnt/s/Development/GuardianAgent/docs/proposals/ZEROTRUSTAGENT-UPLIFTS-PROPOSAL.md)
-- [Identity & Memory Spec](/mnt/s/Development/GuardianAgent/docs/design/IDENTITY-MEMORY-DESIGN.md)
-- [Web Auth Configuration Spec](/mnt/s/Development/GuardianAgent/docs/design/WEB-AUTH-CONFIG-DESIGN.md)
+- [Private-By-Default Cloud Deployment Model for GuardianAgent](PRIVATE-CLOUD-DEPLOYMENT-PROPOSAL.md)
+- [Vercel-First Hosted Agent Platform](VERCEL-FIRST-HOSTED-AGENT-PLATFORM-PROPOSAL.md)
+- [SaaS Pricing and Unit Economics Plan](../plans/SAAS-PRICING-AND-UNIT-ECONOMICS-PLAN.md)
+- [AWS Bedrock Provider - Implementation Plan](../plans/AWS-BEDROCK-PROVIDER-IMPLEMENTATION-PLAN.md)
+- [Multi-User Server + Client Agent Proposal](MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
+- ZeroTrustAgent-inspired uplifts for GuardianAgent
+- [Identity & Memory Spec](../design/IDENTITY-MEMORY-DESIGN.md)
+- [Web Auth Configuration Spec](../design/WEB-AUTH-CONFIG-DESIGN.md)
 
 ## Executive Summary
 

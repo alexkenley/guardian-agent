@@ -2,8 +2,8 @@
 
 **Date:** 2026-03-04
 **Status:** Draft
-**Depends on:** [Multi-User Server + Client Agent Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
-**Related:** [Security Detection And Threat Sharing Uplift Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Agentic Defensive Security Suite Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)
+**Depends on:** [Multi-User Server + Client Agent Proposal](./MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
+**Related:** [Security Detection And Threat Sharing Uplift Proposal](./SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Agentic Defensive Security Suite Proposal](../implemented/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)
 
 This document is a downstream feature proposal for Guardian Hub and shared threat intelligence. It is not the primary platform architecture document for multi-user control plane, client-agent trust boundaries, or federation transport.
 
@@ -414,7 +414,7 @@ assistant:
 
 ## Integration: NDR Detection Subsystem
 
-> **Cross-reference:** [`docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md`](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md) — outlines the local detection, evidence, automation, and hub-integration uplift plan.
+> **Cross-reference:** [`docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md`](SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md) — outlines the local detection, evidence, automation, and hub-integration uplift plan.
 
 The proposed Network Detection and Response (NDR) subsystem produces structured, enriched, evidence-backed findings from local network, host, audit, and shared-intel monitoring. That is exactly the kind of high-quality local detection the Hub requires as input, and the two systems are designed to reinforce one another.
 

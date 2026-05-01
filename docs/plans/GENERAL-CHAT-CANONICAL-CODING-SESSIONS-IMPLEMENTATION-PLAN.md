@@ -1,9 +1,9 @@
 # General Chat Canonical Coding Sessions — Implementation And Cleanup Plan
 
-**Status:** Draft  
-**Date:** 2026-03-27  
-**Primary source proposal:** [General Chat As Canonical Coding Surface Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md)  
-**Related docs:** [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md)
+**Status:** Draft
+**Date:** 2026-03-27
+**Primary source proposal:** [General Chat As Canonical Coding Surface Proposal](../proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md)
+**Related docs:** [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md), [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](../implemented/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md](./CODING-ASSISTANT-CURATED-UPLIFTS-IMPLEMENTATION-PLAN.md)
 
 ## Objective
 
@@ -66,7 +66,7 @@ The current codebase is already close, but not clean enough for the target model
 
 - normal web chat does not expose code-session attach/detach/focus as first-class UI
 - the Code page still contains a duplicate chat surface
-- web code-session attachment currently defaults to blank `surfaceId` values through [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), which effectively collapses attachment state to a user/channel scope unless more explicit surface ids are used
+- web code-session attachment currently defaults to blank `surfaceId` values through [src/channels/web.ts](../../src/channels/web.ts), which effectively collapses attachment state to a user/channel scope unless more explicit surface ids are used
 - runtime and tool-side surface-id logic are not fully aligned
 - code-session APIs still assume the Code page itself is a conversational endpoint
 - external coding backends do not exist yet
@@ -86,9 +86,9 @@ Make session attachment and focus semantics explicit and consistent before chang
   - CLI
   - Telegram
 - standardize surface-id resolution in:
-  - [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-  - [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-  - [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
+  - [src/index.ts](../../src/index.ts)
+  - [src/tools/executor.ts](../../src/tools/executor.ts)
+  - [src/channels/web.ts](../../src/channels/web.ts)
 - formalize:
   - known sessions
   - focused session per surface
@@ -97,11 +97,11 @@ Make session attachment and focus semantics explicit and consistent before chang
 
 ### Likely implementation areas
 
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
+- [src/index.ts](../../src/index.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/channels/web.ts](../../src/channels/web.ts)
+- [src/channels/web-types.ts](../../src/channels/web-types.ts)
 
 ### Exit criteria
 
@@ -132,10 +132,10 @@ Turn normal Guardian chat into the canonical coding chat.
 
 ### Likely implementation areas
 
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)
-- [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/api.js](../../web/public/js/api.js)
+- [src/channels/web.ts](../../src/channels/web.ts)
+- [src/reference-guide.ts](../../src/reference-guide.ts)
 
 ### Exit criteria
 
@@ -170,10 +170,10 @@ Remove the duplicate Code chat and keep only the capabilities that are uniquely 
 
 ### Likely implementation areas
 
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js)
-- [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
+- [web/public/css/style.css](../../web/public/css/style.css)
+- [web/public/js/app.js](../../web/public/js/app.js)
+- [src/channels/web.ts](../../src/channels/web.ts)
 
 ### Cleanup target
 
@@ -212,10 +212,10 @@ Let one chat surface supervise many sessions without implicitly merging all repo
 
 ### Likely implementation areas
 
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [src/tools/executor.ts](../../src/tools/executor.ts)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/index.ts](../../src/index.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
 
 ### Exit criteria
 
@@ -264,11 +264,11 @@ The contract should return structured results, not raw terminal dumps:
 ### Likely implementation areas
 
 - new `src/runtime/external-coding/` module family
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts)
+- [src/runtime/run-timeline.ts](../../src/runtime/run-timeline.ts)
+- [src/index.ts](../../src/index.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
 
 ### Safety rules
 

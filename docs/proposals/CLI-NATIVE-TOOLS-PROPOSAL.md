@@ -3,7 +3,7 @@
 **Date:** 2026-03-09
 **Status:** Proposal
 **Scope:** Tool architecture direction, GitHub CLI integration, MCP positioning
-**Current as-built references:** [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md)
+**Current as-built references:** [TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md](../design/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-DESIGN.md)
 
 This proposal is still forward-looking. Guardian already ships some direct CLI/native tool patterns, but the proposal's main GitHub CLI adapter direction is not implemented as a dedicated built-in tool surface yet.
 

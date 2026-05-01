@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-19
 **Status:** Draft
-**Cross-references:** [Threat Sharing Hub Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/THREAT-SHARING-HUB-PROPOSAL.md), [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md), [NotificationService](/mnt/s/Development/GuardianAgent/src/runtime/notifications.ts)
+**Cross-references:** [Threat Sharing Hub Proposal](./THREAT-SHARING-HUB-PROPOSAL.md), [Agentic Defensive Security Suite](../implemented/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md), [NotificationService](../../src/runtime/notifications.ts)
 
 ---
 

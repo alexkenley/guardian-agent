@@ -39,11 +39,11 @@ Never add regex, keyword matching, `includes()`, or other ad hoc request classif
 
 If the capability needs a new direct route:
 
-- update `IntentGatewayRoute` and the tool schema in [`src/runtime/intent/types.ts`](/mnt/s/Development/GuardianAgent/src/runtime/intent/types.ts)
+- update `IntentGatewayRoute` and the tool schema in [`src/runtime/intent/types.ts`](../../src/runtime/intent/types.ts)
 - update `route-classifier.ts` and `normalization.ts` in the `src/runtime/intent/` directory
 - update workload hints in `src/runtime/intent/workload-derivation.ts`
-- update preferred capability selection in [`src/runtime/intent/capability-resolver.ts`](/mnt/s/Development/GuardianAgent/src/runtime/intent/capability-resolver.ts)
-- add the handler to the direct-candidate dispatch loop in [`src/index.ts`](/mnt/s/Development/GuardianAgent/src/index.ts)
+- update preferred capability selection in [`src/runtime/intent/capability-resolver.ts`](../../src/runtime/intent/capability-resolver.ts)
+- add the handler to the direct-candidate dispatch loop in [`src/index.ts`](../../src/index.ts)
 
 The only allowed pre-gateway interception is slash-command parsing in channel adapters and continuation/approval detection.
 
@@ -74,8 +74,8 @@ Use the control-plane path:
 
 - config types and normalization in `src/config/`
 - control-plane callback/services in `src/runtime/control-plane/`
-- dashboard route wiring in [`src/channels/web-runtime-routes.ts`](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts)
-- dashboard type contracts in [`src/channels/web-types.ts`](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
+- dashboard route wiring in [`src/channels/web-runtime-routes.ts`](../../src/channels/web-runtime-routes.ts)
+- dashboard type contracts in [`src/channels/web-types.ts`](../../src/channels/web-types.ts)
 
 If a web mutation is privileged, require the appropriate privileged ticket.
 
@@ -87,13 +87,13 @@ When adding a tool:
 
 - default to deferred unless there is a strong architectural reason to make it always-loaded
 - do not promote tools to always-loaded just because a model failed to discover them
-- update [`docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md) if you intentionally change the model
+- update [`docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`](../design/TOOLS-CONTROL-PLANE-DESIGN.md) if you intentionally change the model
 
 ### 5. Durable memory writes must use the shared memory mutation path
 
 Do not add new append-only durable writes directly against `AgentMemoryStore` for product behavior.
 
-Use [`src/runtime/memory-mutation-service.ts`](/mnt/s/Development/GuardianAgent/src/runtime/memory-mutation-service.ts) so writes get:
+Use [`src/runtime/memory-mutation-service.ts`](../../src/runtime/memory-mutation-service.ts) so writes get:
 
 - duplicate suppression
 - profile/wiki upsert behavior
@@ -104,7 +104,7 @@ Use [`src/runtime/memory-mutation-service.ts`](/mnt/s/Development/GuardianAgent/
 
 If the capability changes user-visible workflow, behavior, navigation, controls, output, or operational guidance, update:
 
-- [`src/reference-guide.ts`](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
+- [`src/reference-guide.ts`](../../src/reference-guide.ts)
 
 This applies even if the main implementation lives elsewhere.
 
@@ -135,7 +135,7 @@ Required changes:
 - update decision normalization
 - update preferred candidate selection in `direct-intent-routing.ts`
 - add the route to workload derivation in `workload-derivation.ts`
-- add a candidate handler in [`src/index.ts`](/mnt/s/Development/GuardianAgent/src/index.ts)
+- add a candidate handler in [`src/index.ts`](../../src/index.ts)
 - add tests for both positive routing and non-routing confusion cases
 
 Also consider:
@@ -154,7 +154,7 @@ Built-in tools are runtime capabilities callable by the model.
 Primary path:
 
 - define or extend the builtin tool registrar in `src/tools/builtin/`
-- register the tool from [`src/tools/executor.ts`](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- register the tool from [`src/tools/executor.ts`](../../src/tools/executor.ts)
 - choose the correct `risk`, `category`, and parameter schema
 
 Checklist:
@@ -190,7 +190,7 @@ Checklist:
 ### Tests
 
 - unit tests in the tool registrar or executor layer
-- approval/policy coverage in [`src/tools/executor.test.ts`](/mnt/s/Development/GuardianAgent/src/tools/executor.test.ts) when relevant
+- approval/policy coverage in [`src/tools/executor.test.ts`](../../src/tools/executor.test.ts) when relevant
 - integration harnesses if the tool changes user-facing behavior
 
 ## Adding A Skill
@@ -278,7 +278,7 @@ Checklist:
 - set `networkAccess`, `inheritEnv`, `allowedEnvKeys`, and rate limits deliberately
 - ensure tool naming/namespacing is predictable
 - do not bypass Guardian or tool policy just because the capability lives behind MCP
-- follow [`docs/guides/MCP-TESTING-GUIDE.md`](/mnt/s/Development/GuardianAgent/docs/guides/MCP-TESTING-GUIDE.md) for validation
+- follow [`docs/guides/MCP-TESTING-GUIDE.md`](MCP-TESTING-GUIDE.md) for validation
 
 If an MCP-backed integration should feel first-party, document the operational boundaries explicitly rather than hiding the trust model.
 
@@ -288,9 +288,9 @@ If operators need to inspect or control the capability from the web UI:
 
 Checklist:
 
-- add/update shared types in [`src/channels/web-types.ts`](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
-- add/update HTTP handlers in [`src/channels/web-runtime-routes.ts`](/mnt/s/Development/GuardianAgent/src/channels/web-runtime-routes.ts)
-- add/update the runtime callback implementation in [`src/index.ts`](/mnt/s/Development/GuardianAgent/src/index.ts) or an extracted control-plane callback module
+- add/update shared types in [`src/channels/web-types.ts`](../../src/channels/web-types.ts)
+- add/update HTTP handlers in [`src/channels/web-runtime-routes.ts`](../../src/channels/web-runtime-routes.ts)
+- add/update the runtime callback implementation in [`src/index.ts`](../../src/index.ts) or an extracted control-plane callback module
 - add/update the frontend in `web/public/`
 - emit UI invalidation events for mutated state when needed
 - protect privileged mutations with tickets
@@ -309,7 +309,7 @@ Use explicit runtime-owned maintenance when the work is:
 
 Checklist:
 
-- read [`docs/design/AUTOMATED-MAINTENANCE-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/AUTOMATED-MAINTENANCE-DESIGN.md) before adding a new server-owned maintenance lane
+- read [`docs/design/AUTOMATED-MAINTENANCE-DESIGN.md`](../design/AUTOMATED-MAINTENANCE-DESIGN.md) before adding a new server-owned maintenance lane
 - use `AssistantJobTracker`
 - surface maintenance metadata so the job view can explain it
 - record audit events if the work mutates durable state
@@ -341,8 +341,8 @@ Every new capability must be reviewed against these systems:
 
 If the capability touches a trust boundary, read:
 
-- [`SECURITY.md`](/mnt/s/Development/GuardianAgent/SECURITY.md)
-- [`docs/architecture/OVERVIEW.md`](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
+- [`SECURITY.md`](../../SECURITY.md)
+- [`docs/architecture/OVERVIEW.md`](../architecture/OVERVIEW.md)
 
 ## Cross-Cutting Memory, Analytics, And Audit Checklist
 
@@ -360,15 +360,15 @@ At minimum, consider all of these:
 
 - this guide, if the capability introduces a new general authoring rule
 - subsystem spec or guide, if one exists
-- [`src/reference-guide.ts`](/mnt/s/Development/GuardianAgent/src/reference-guide.ts) for user-facing changes
+- [`src/reference-guide.ts`](../../src/reference-guide.ts) for user-facing changes
 - architecture docs, if ownership or layering changed
 
 Key companion docs:
 
-- [`docs/architecture/FORWARD-ARCHITECTURE.md`](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)
-- [`docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md)
-- [`docs/design/MEMORY-SYSTEM-DESIGN.md`](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md)
-- [`docs/guides/INTEGRATION-TEST-HARNESS.md`](/mnt/s/Development/GuardianAgent/docs/guides/INTEGRATION-TEST-HARNESS.md)
+- [`docs/architecture/FORWARD-ARCHITECTURE.md`](../architecture/FORWARD-ARCHITECTURE.md)
+- [`docs/design/TOOLS-CONTROL-PLANE-DESIGN.md`](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
+- [`docs/design/MEMORY-SYSTEM-DESIGN.md`](../design/MEMORY-SYSTEM-DESIGN.md)
+- [`docs/guides/INTEGRATION-TEST-HARNESS.md`](INTEGRATION-TEST-HARNESS.md)
 
 ## Verification Checklist
 
@@ -387,7 +387,7 @@ Run the relevant harnesses automatically based on what changed:
 | Coding assistant / routing / approval / shared orchestration | `node scripts/test-coding-assistant.mjs` |
 | Security / guardrails / prompt hardening | `node scripts/test-contextual-security-uplifts.mjs` |
 | Memory UI or memory lifecycle changes | `node scripts/test-memory-surface.mjs` |
-| MCP behavior | follow [`docs/guides/MCP-TESTING-GUIDE.md`](/mnt/s/Development/GuardianAgent/docs/guides/MCP-TESTING-GUIDE.md) |
+| MCP behavior | follow [`docs/guides/MCP-TESTING-GUIDE.md`](MCP-TESTING-GUIDE.md) |
 
 If a harness cannot run because of sandbox or environment constraints, say so explicitly.
 

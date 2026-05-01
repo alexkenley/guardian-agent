@@ -1,7 +1,8 @@
 # Proposal: Second Brain
 
-**Status:** Draft  
-**Date:** 2026-04-04  
+**Status:** Implemented current product scope; retained as historical proposal
+**Date:** 2026-04-04
+**Current source of truth:** [Second Brain As-Built Design](../design/SECOND-BRAIN-AS-BUILT.md)
 **Related:**
 - [Capability Authoring Guide](../guides/CAPABILITY-AUTHORING-GUIDE.md)
 - [Intent Gateway And Smart Routing Specification](../design/INTENT-GATEWAY-ROUTING-DESIGN.md)

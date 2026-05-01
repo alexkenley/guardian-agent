@@ -27,7 +27,7 @@ GuardianAgent's current runtime has several important deployment implications:
 - The code surface launches local PTYs with `node-pty`, which requires a traditional host runtime. See [src/channels/web.ts](../../src/channels/web.ts).
 - Conversation state, analytics, and code sessions use SQLite-backed persistence. See [src/runtime/conversation.ts](../../src/runtime/conversation.ts), [src/runtime/analytics.ts](../../src/runtime/analytics.ts), and [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts).
 - The built-in provider registry supports Ollama and several external providers today, but not AWS Bedrock as a first-party provider. See [src/llm/provider-registry.ts](../../src/llm/provider-registry.ts).
-- The runtime already recognizes that bearer-only web auth is not the final enterprise story; provider-backed identity is proposed future work. See [docs/proposals/ZEROTRUSTAGENT-UPLIFTS-PROPOSAL.md](./ZEROTRUSTAGENT-UPLIFTS-PROPOSAL.md).
+- The runtime already recognizes that bearer-only web auth is not the final enterprise story; provider-backed identity is proposed future work. This aligns with the ZeroTrustAgent-inspired uplift direction.
 
 These facts make the immediate deployment conclusion straightforward:
 

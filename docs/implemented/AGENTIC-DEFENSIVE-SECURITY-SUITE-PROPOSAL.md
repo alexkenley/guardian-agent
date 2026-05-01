@@ -1,8 +1,9 @@
 # Proposal: Agentic Defensive Security Suite
 
 **Date:** 2026-03-19
-**Status:** Draft
-**Cross-references:** [Security Detection And Threat Sharing Uplift Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/THREAT-SHARING-HUB-PROPOSAL.md), [As-Built Spec](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [Architecture Overview](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
+**Status:** Implemented for the current local-defense scope; retained as historical proposal
+**Current source of truth:** [Agentic Defensive Security Suite As-Built](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md)
+**Cross-references:** [Security Detection And Threat Sharing Uplift Proposal](../proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Proposal](../proposals/THREAT-SHARING-HUB-PROPOSAL.md), [Architecture Overview](../architecture/OVERVIEW.md)
 
 ---
 

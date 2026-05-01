@@ -1,7 +1,7 @@
 # Proposal: Browser Automation
 
-**Status:** Historical proposal. The current as-built behavior lives in [BROWSER-AUTOMATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROWSER-AUTOMATION-DESIGN.md).
-**Associated design:** [BROWSER-AUTOMATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROWSER-AUTOMATION-DESIGN.md)
+**Status:** Historical proposal. The current as-built behavior lives in [BROWSER-AUTOMATION-DESIGN.md](../design/BROWSER-AUTOMATION-DESIGN.md).
+**Associated design:** [BROWSER-AUTOMATION-DESIGN.md](../design/BROWSER-AUTOMATION-DESIGN.md)
 **Supersedes:** `agent-browser` integration (`src/tools/browser-session.ts`, browser tools in `src/tools/executor.ts`)
 **Depends on:** MCP Client (`src/tools/mcp-client.ts`), Guardian admission pipeline, Policy-as-Code engine, sandbox subsystem
 **Input proposals:** `docs/proposals/PLAYWRIGHT-MCP-BROWSER-PROPOSAL.md`, `docs/proposals/LIGHTPANDA-BROWSER-PROPOSAL.md`

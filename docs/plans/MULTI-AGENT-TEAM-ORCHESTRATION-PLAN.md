@@ -2,8 +2,8 @@
 
 **Status:** Draft
 **Date:** 2026-04-17
-**Source Research:** [multica-research/](/mnt/s/Development/GuardianAgent/multica-research)
-**Primary references:** [SECURITY.md](SECURITY.md), [Orchestration Specification](../design/ORCHESTRATION-DESIGN.md), [Brokered Agent Isolation Spec](../design/BROKERED-AGENT-ISOLATION-DESIGN.md), [Second Brain As-Built Specification](../design/SECOND-BRAIN-AS-BUILT.md), [Agent Platform Uplift Implementation Plan](./AGENT-PLATFORM-UPLIFT-IMPLEMENTATION-PLAN.md)
+**Source Research:** [multica-research/](../../multica-research)
+**Primary references:** [SECURITY.md](../../SECURITY.md), [Orchestration Specification](../design/ORCHESTRATION-DESIGN.md), [Brokered Agent Isolation Spec](../design/BROKERED-AGENT-ISOLATION-DESIGN.md), [Second Brain As-Built Specification](../design/SECOND-BRAIN-AS-BUILT.md), [Agent Platform Uplift Implementation Plan](./AGENT-PLATFORM-UPLIFT-IMPLEMENTATION-PLAN.md)
 
 ## Executive Summary
 
@@ -19,7 +19,7 @@ The correct target model is:
 
 This plan therefore favors shared runtime integration over new bespoke stores, bespoke event wakeups, or many persistent specialist personas.
 
-Phase 1 of this plan depends on the routing and delegated-execution convergence now targeted by [DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md](./DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md), because delegated specialist work must bind to shared execution identity, graph state, artifacts, and blocker state rather than transcript heuristics or ad hoc recovery flows.
+Phase 1 of this plan depends on the routing and delegated-execution convergence targeted by the archived [DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md](./archive/DURABLE-EXECUTION-GRAPH-UPLIFT-PLAN.md), because delegated specialist work must bind to shared execution identity, graph state, artifacts, and blocker state rather than transcript heuristics or ad hoc recovery flows.
 
 ## 1. Interaction Model: One Lead, Bounded Specialists
 

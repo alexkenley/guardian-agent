@@ -1,9 +1,9 @@
 # Execution Surface Supply Chain Security Uplift Plan
 
-**Status:** Draft; dependency/SDK governance pass prioritized first  
-**Date:** 2026-04-19  
-**Origins:** implementation review against the current GuardianAgent runtime after agent-era supply-chain threat modeling of hidden runtime installs, dynamic launcher resolution, credential inheritance paths, and generated-artifact dependency drift  
-**Companion specs:** [Security Policy](/mnt/s/Development/GuardianAgent/SECURITY.md), [Architecture Overview](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [Forward Architecture](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [MCP Client Spec](/mnt/s/Development/GuardianAgent/docs/specs/MCP-CLIENT-SPEC.md), [Package Install Trust Spec](/mnt/s/Development/GuardianAgent/docs/specs/PACKAGE-INSTALL-TRUST-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+**Status:** Draft; dependency/SDK governance pass prioritized first
+**Date:** 2026-04-19
+**Origins:** implementation review against the current GuardianAgent runtime after agent-era supply-chain threat modeling of hidden runtime installs, dynamic launcher resolution, credential inheritance paths, and generated-artifact dependency drift
+**Companion specs:** [Security Policy](../../SECURITY.md), [Architecture Overview](../architecture/OVERVIEW.md), [Forward Architecture](../architecture/FORWARD-ARCHITECTURE.md), [MCP Client Spec](../specs/MCP-CLIENT-SPEC.md), [Package Install Trust Spec](../specs/PACKAGE-INSTALL-TRUST-SPEC.md), [Tools Control Plane Spec](../specs/TOOLS-CONTROL-PLANE-SPEC.md)
 
 ## Objective
 

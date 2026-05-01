@@ -1,10 +1,10 @@
 # Intent Gateway And Capability Plane Uplift Plan
 
-**Status:** Draft  
-**Date:** 2026-04-14  
-**Primary external references:** [IntentKit](https://github.com/crestalnetwork/intentkit), [IntentKit docs](https://docs.intentkit.io/), [Composio](https://github.com/ComposioHQ/composio), [Composio docs](https://docs.composio.dev/docs/toolkits/custom-tools-and-toolkits)  
-**Secondary external references:** Open Agents snapshot-backed sandbox startup research at commit `45f687b5`, Daytona TypeScript SDK docs, Vercel sandbox docs  
-**Related Guardian docs:** [INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/BROKERED-AGENT-ISOLATION-DESIGN.md), [SECURITY-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SECURITY-ISOLATION-DESIGN.md), [CONTEXT-ASSEMBLY-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXT-ASSEMBLY-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [REMOTE-SANDBOXING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/REMOTE-SANDBOXING-DESIGN.md), [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md), [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md)
+**Status:** Draft
+**Date:** 2026-04-14
+**Primary external references:** [IntentKit](https://github.com/crestalnetwork/intentkit), [IntentKit docs](https://docs.intentkit.io/), [Composio](https://github.com/ComposioHQ/composio), [Composio docs](https://docs.composio.dev/docs/toolkits/custom-tools-and-toolkits)
+**Secondary external references:** Open Agents snapshot-backed sandbox startup research at commit `45f687b5`, Daytona TypeScript SDK docs, Vercel sandbox docs
+**Related Guardian docs:** [INTENT-GATEWAY-ROUTING-DESIGN.md](../design/INTENT-GATEWAY-ROUTING-DESIGN.md), [TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [BROKERED-AGENT-ISOLATION-DESIGN.md](../design/BROKERED-AGENT-ISOLATION-DESIGN.md), [SECURITY-ISOLATION-DESIGN.md](../design/SECURITY-ISOLATION-DESIGN.md), [CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md), [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md), [REMOTE-SANDBOXING-DESIGN.md](../design/REMOTE-SANDBOXING-DESIGN.md), [FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [OVERVIEW.md](../architecture/OVERVIEW.md), [SECURITY.md](../../SECURITY.md)
 
 ## Objective
 
@@ -301,7 +301,7 @@ The uplift must not do any of the following:
 
 ## Security Compliance Check
 
-This uplift remains compliant with [SECURITY-ISOLATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SECURITY-ISOLATION-DESIGN.md) only if these constraints stay true throughout implementation:
+This uplift remains compliant with [SECURITY-ISOLATION-DESIGN.md](../design/SECURITY-ISOLATION-DESIGN.md) only if these constraints stay true throughout implementation:
 
 - Guardian keeps control-plane ownership of routing, approvals, pending actions, audit, policy, memory, secret resolution, and final output scanning.
 - Extra LLM turns for route extraction or clarification stay in Guardian-owned or broker-proxied provider paths. They do not give workers or sandboxes direct provider authority.
@@ -537,7 +537,7 @@ Apply the reusable sandbox and snapshot-backed patterns in the correct layer.
 - `docs/design/CODING-WORKSPACE-DESIGN.md`
 - `docs/design/SECURITY-ISOLATION-DESIGN.md`
 - `docs/design/WEBUI-DESIGN.md`
-- `docs/plans/VERCEL-REMOTE-SANDBOX-CONNECTOR-IMPLEMENTATION-PLAN.md` if it remains the historical implementation record
+- `docs/archive/plans/VERCEL-REMOTE-SANDBOX-CONNECTOR-IMPLEMENTATION-PLAN.md` as the historical implementation record
 
 ### Exit criteria
 
@@ -651,7 +651,7 @@ These are the documentation surfaces that must be treated as part of the uplift,
 - `docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md`
 - `docs/design/WEBUI-DESIGN.md`
 - `src/reference-guide.ts`
-- `docs/plans/VERCEL-REMOTE-SANDBOX-CONNECTOR-IMPLEMENTATION-PLAN.md`
+- `docs/archive/plans/VERCEL-REMOTE-SANDBOX-CONNECTOR-IMPLEMENTATION-PLAN.md`
 
 ## Tech Debt Prevention Checklist
 

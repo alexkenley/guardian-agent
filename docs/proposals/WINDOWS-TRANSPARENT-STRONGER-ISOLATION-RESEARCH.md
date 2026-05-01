@@ -18,7 +18,7 @@ Today Guardian already has:
 - a native Windows helper slot in `assistant.tools.sandbox.windowsHelper`
 - a Rust Windows helper that currently uses AppContainer plus Job Objects
 
-Current helper behavior in [main.rs](/mnt/s/Development/GuardianAgent/native/windows-helper/src/main.rs):
+Current helper behavior in [main.rs](../../native/windows-helper/src/main.rs):
 
 - creates an AppContainer process
 - assigns the process to a Job Object

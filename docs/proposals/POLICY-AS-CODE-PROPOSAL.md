@@ -1,7 +1,7 @@
 # Proposal: Policy as Code
 
 **Status:** Draft
-**As-Built Spec:** [Policy as Code Spec](/mnt/s/Development/GuardianAgent/docs/design/POLICY-AS-CODE-DESIGN.md)
+**As-Built Spec:** [Policy as Code Spec](../design/POLICY-AS-CODE-DESIGN.md)
 
 ## Current Runtime Note
 

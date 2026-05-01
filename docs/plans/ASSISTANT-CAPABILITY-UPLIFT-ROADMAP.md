@@ -1,10 +1,10 @@
 # Assistant Capability Uplift Roadmap
 
-**Date:** 2026-03-31  
-**Status:** Active roadmap  
-**Scope:** Sequencing and dependency guide for the current uplift workstreams  
-**Live status tracker:** [ASSISTANT-CAPABILITY-UPLIFT-STATUS.md](/mnt/s/Development/GuardianAgent/docs/plans/ASSISTANT-CAPABILITY-UPLIFT-STATUS.md)  
-**Companion plans:** [CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md), [MEMORY-SYSTEM-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md), [CONTEXT-ASSEMBLY-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-ASSEMBLY-UPLIFT-PLAN.md), [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/BACKGROUND-DELEGATION-UPLIFT-PLAN.md), [MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md)
+**Date:** 2026-03-31
+**Status:** Active roadmap
+**Scope:** Sequencing and dependency guide for the current uplift workstreams
+**Live status tracker:** [ASSISTANT-CAPABILITY-UPLIFT-STATUS.md](ASSISTANT-CAPABILITY-UPLIFT-STATUS.md)
+**Companion plans/specs:** [CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md](CROSS-SURFACE-CONTINUITY-UPLIFT-PLAN.md), [MEMORY-SYSTEM-UPLIFT-PLAN.md](MEMORY-SYSTEM-UPLIFT-PLAN.md), [CONTEXT-ASSEMBLY-DESIGN.md](../design/CONTEXT-ASSEMBLY-DESIGN.md), [BACKGROUND-DELEGATION-UPLIFT-PLAN.md](BACKGROUND-DELEGATION-UPLIFT-PLAN.md), [MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md](MINIMAL-EMBEDDABLE-AGENT-KERNEL-UPLIFT-PLAN.md)
 
 ---
 

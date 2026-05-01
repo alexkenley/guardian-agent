@@ -1,14 +1,14 @@
 # Coding Assistant Curated Uplifts — Implementation Plan
 
-**Status:** Draft  
-**Date:** 2026-03-27  
-**Primary source proposal:** [Coding Assistant Curated Uplifts Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)  
+**Status:** Draft
+**Date:** 2026-03-27
+**Primary source proposal:** [Coding Assistant Curated Uplifts Proposal](../proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)
 
 **Current implementation scope:** phases 1 through 5 only. Broader autonomous-operation follow-on work remains deferred unless explicitly pulled into a later plan.
 
 ## Current Note
 
-For the current implementation direction around general chat as the canonical coding surface, Code as a workbench, and external coding backends, use [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md).
+For the current implementation direction around general chat as the canonical coding surface, Code as a workbench, and external coding backends, use [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md).
 
 ## Objective
 
@@ -24,7 +24,7 @@ Deliver the near-term Coding Assistant uplift as a narrower program that:
 
 ### Source of truth
 
-Use [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md) as the implementation authority for scope, sequencing, and product shape.
+Use [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](../proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md) as the implementation authority for scope, sequencing, and product shape.
 
 ### What to carry forward from the broader OpenDev proposal
 
@@ -115,12 +115,12 @@ Finish the process-discipline uplift and make repo-grounded planning non-optiona
 ### Deliver
 
 - updated first-party process skills:
-  - [skills/writing-plans/SKILL.md](/mnt/s/Development/GuardianAgent/skills/writing-plans/SKILL.md)
-  - [skills/writing-plans/templates/implementation-plan.md](/mnt/s/Development/GuardianAgent/skills/writing-plans/templates/implementation-plan.md)
-  - [skills/test-driven-development/SKILL.md](/mnt/s/Development/GuardianAgent/skills/test-driven-development/SKILL.md)
-  - [skills/verification-before-completion/SKILL.md](/mnt/s/Development/GuardianAgent/skills/verification-before-completion/SKILL.md)
-  - [skills/code-review/SKILL.md](/mnt/s/Development/GuardianAgent/skills/code-review/SKILL.md)
-  - [skills/coding-workspace/SKILL.md](/mnt/s/Development/GuardianAgent/skills/coding-workspace/SKILL.md)
+  - [skills/writing-plans/SKILL.md](../../skills/writing-plans/SKILL.md)
+  - [skills/writing-plans/templates/implementation-plan.md](../../skills/writing-plans/templates/implementation-plan.md)
+  - [skills/test-driven-development/SKILL.md](../../skills/test-driven-development/SKILL.md)
+  - [skills/verification-before-completion/SKILL.md](../../skills/verification-before-completion/SKILL.md)
+  - [skills/code-review/SKILL.md](../../skills/code-review/SKILL.md)
+  - [skills/coding-workspace/SKILL.md](../../skills/coding-workspace/SKILL.md)
 - updated implementation-plan template for:
   - explicit acceptance gates
   - existing checks to reuse
@@ -130,7 +130,7 @@ Finish the process-discipline uplift and make repo-grounded planning non-optiona
   - inspect first when needed
   - do not invent files, endpoints, tables, or subsystems
   - say what remains unknown instead of guessing
-- harness additions in [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs) for:
+- harness additions in [scripts/test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs) for:
   - acceptance-gate preservation
   - existing-check reuse
   - full legitimate green
@@ -144,9 +144,9 @@ Finish the process-discipline uplift and make repo-grounded planning non-optiona
 - `skills/verification-before-completion/SKILL.md`
 - `skills/code-review/SKILL.md`
 - `skills/coding-workspace/SKILL.md`
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/worker/worker-llm-loop.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-llm-loop.ts)
-- [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- [src/index.ts](../../src/index.ts)
+- [src/worker/worker-llm-loop.ts](../../src/worker/worker-llm-loop.ts)
+- [scripts/test-coding-assistant.mjs](../../scripts/test-coding-assistant.mjs)
 
 ### Exit criteria
 
@@ -173,13 +173,13 @@ Make model selection better match the actual difficulty and failure modes of cod
 
 ### Likely implementation areas
 
-- [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/runtime/runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts)
-- provider clients under [src/llm/](/mnt/s/Development/GuardianAgent/src/llm)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+- [src/runtime/message-router.ts](../../src/runtime/message-router.ts)
+- [src/index.ts](../../src/index.ts)
+- [src/runtime/runtime.ts](../../src/runtime/runtime.ts)
+- provider clients under [src/llm/](../../src/llm)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
 
 ### Exit criteria
 
@@ -206,9 +206,9 @@ Keep the live-feedback work useful and readable while the routing and grounding 
 
 The current web shell and coding layout mean panel-width changes must stay route-aware:
 
-- the main app shell currently uses route-sensitive width tokens in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- the code shell already carries its own panel clamps in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- table-heavy pages such as Automations still depend on the center-column width from [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js)
+- the main app shell currently uses route-sensitive width tokens in [web/public/css/style.css](../../web/public/css/style.css)
+- the code shell already carries its own panel clamps in [web/public/css/style.css](../../web/public/css/style.css)
+- table-heavy pages such as Automations still depend on the center-column width from [web/public/js/pages/automations.js](../../web/public/js/pages/automations.js)
 
 Implementation rule:
 
@@ -218,12 +218,12 @@ Implementation rule:
 
 ### Likely implementation areas
 
-- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js)
-- [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
+- [src/channels/cli.ts](../../src/channels/cli.ts)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js)
+- [web/public/js/pages/code.js](../../web/public/js/pages/code.js)
+- [web/public/js/app.js](../../web/public/js/app.js)
+- [web/public/css/style.css](../../web/public/css/style.css)
 
 ### Exit criteria
 
@@ -272,7 +272,7 @@ Run focused checks during each phase, then broader coverage before completion.
 - `node scripts/test-coding-assistant.mjs`
 - `node scripts/test-code-ui-smoke.mjs`
 - `node scripts/test-contextual-security-uplifts.mjs` when changes touch approval/security behavior
-- real-model lanes from [INTEGRATION-TEST-HARNESS.md](/mnt/s/Development/GuardianAgent/docs/guides/INTEGRATION-TEST-HARNESS.md):
+- real-model lanes from [INTEGRATION-TEST-HARNESS.md](../guides/INTEGRATION-TEST-HARNESS.md):
   - real Ollama lane for bounded local behavior
   - configured external-provider lane for routing/fallback validation
 

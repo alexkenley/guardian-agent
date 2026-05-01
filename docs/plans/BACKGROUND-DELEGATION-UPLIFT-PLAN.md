@@ -1,6 +1,6 @@
 # Background Delegation Uplift Plan
 
-> The combined prompt/context/memory implementation sequence now lives in [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains the narrower delegation-specific reference.
+> The combined prompt/context/memory implementation sequence now lives in [Context, Memory, and Orchestration Uplift Plan](CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains the narrower delegation-specific reference.
 
 **Date:** 2026-03-31
 **Status:** In progress

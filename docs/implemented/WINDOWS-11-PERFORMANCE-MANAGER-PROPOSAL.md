@@ -1,10 +1,10 @@
 # Windows 11 Performance Manager Proposal
 
-**Status:** Historical proposal. The current as-built behavior is defined in [PERFORMANCE-MANAGEMENT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md).
-**Associated design:** [PERFORMANCE-MANAGEMENT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md)
+**Status:** Historical proposal. The current as-built behavior is defined in [PERFORMANCE-MANAGEMENT-DESIGN.md](../design/PERFORMANCE-MANAGEMENT-DESIGN.md).
+**Associated design:** [PERFORMANCE-MANAGEMENT-DESIGN.md](../design/PERFORMANCE-MANAGEMENT-DESIGN.md)
 **Date:** 2026-04-05
-**Primary Guardian files:** [web/public/index.html](/mnt/s/Development/GuardianAgent/web/public/index.html), [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), [web/public/js/api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js), [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts), [src/runtime/control-plane/operations-dashboard-callbacks.ts](/mnt/s/Development/GuardianAgent/src/runtime/control-plane/operations-dashboard-callbacks.ts), [src/runtime/host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts), [src/tools/builtin/network-system-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/network-system-tools.ts), [src/tools/types.ts](/mnt/s/Development/GuardianAgent/src/tools/types.ts), [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts), [native/windows-helper/src/main.rs](/mnt/s/Development/GuardianAgent/native/windows-helper/src/main.rs), [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
-**Related docs:** [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md), [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](/mnt/s/Development/GuardianAgent/docs/guides/CAPABILITY-AUTHORING-GUIDE.md), [docs/architecture/FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/design/ORCHESTRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/ORCHESTRATION-DESIGN.md)
+**Primary Guardian files:** [web/public/index.html](../../web/public/index.html), [web/public/js/app.js](../../web/public/js/app.js), [web/public/js/api.js](../../web/public/js/api.js), [src/channels/web-types.ts](../../src/channels/web-types.ts), [src/runtime/control-plane/operations-dashboard-callbacks.ts](../../src/runtime/control-plane/operations-dashboard-callbacks.ts), [src/runtime/host-monitor.ts](../../src/runtime/host-monitor.ts), [src/tools/builtin/network-system-tools.ts](../../src/tools/builtin/network-system-tools.ts), [src/tools/types.ts](../../src/tools/types.ts), [src/config/types.ts](../../src/config/types.ts), [native/windows-helper/src/main.rs](../../native/windows-helper/src/main.rs), [src/reference-guide.ts](../../src/reference-guide.ts)
+**Related docs:** [docs/design/WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md), [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](../guides/CAPABILITY-AUTHORING-GUIDE.md), [docs/architecture/FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md), [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](../design/TOOLS-CONTROL-PLANE-DESIGN.md), [docs/design/ORCHESTRATION-DESIGN.md](../design/ORCHESTRATION-DESIGN.md)
 
 ---
 
@@ -37,9 +37,9 @@ Windows 11 is the primary target because it is the user need and because Windows
 
 Guardian already has pieces of this space:
 
-- host monitoring via [src/runtime/host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts)
+- host monitoring via [src/runtime/host-monitor.ts](../../src/runtime/host-monitor.ts)
 - gateway monitoring via existing control-plane callbacks
-- network diagnostics via [src/tools/builtin/network-system-tools.ts](/mnt/s/Development/GuardianAgent/src/tools/builtin/network-system-tools.ts)
+- network diagnostics via [src/tools/builtin/network-system-tools.ts](../../src/tools/builtin/network-system-tools.ts)
 - web operational pages with typed APIs and SSE invalidation
 
 What it does not have is a single operator surface for workstation performance management.
@@ -72,7 +72,7 @@ That placement is acceptable for the current shell, but the owning concept is st
 - alarm review
 - profile application
 
-This means [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md) will need a follow-up update so the information architecture formally recognizes `Performance` as its own domain.
+This means [docs/design/WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md) will need a follow-up update so the information architecture formally recognizes `Performance` as its own domain.
 
 ### 2. No fake "RAM booster" claims
 
@@ -126,7 +126,7 @@ The UI should always render one `Performance` page, but its capabilities come fr
 
 ## Capability Authoring Alignment
 
-This proposal should be implemented according to [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](/mnt/s/Development/GuardianAgent/docs/guides/CAPABILITY-AUTHORING-GUIDE.md), and the correct capability split is:
+This proposal should be implemented according to [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](../guides/CAPABILITY-AUTHORING-GUIDE.md), and the correct capability split is:
 
 - primary shape: native runtime integration plus dashboard/control-plane surface
 - secondary shape: deferred built-in tools for assistant access to the same runtime-owned actions
@@ -261,18 +261,18 @@ Add a new left-nav item:
 
 The desired product direction is to place it in the current shell between `Reference Guide` and `Configuration`, matching the requested placement.
 
-However, [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md) is now the WebUI source of truth and its current required left-nav order does **not** yet include `Performance`.
+However, [docs/design/WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md) is now the WebUI source of truth and its current required left-nav order does **not** yet include `Performance`.
 
 That means implementation must follow one of these paths:
 
 1. update `WEBUI-DESIGN.md` in the same change that introduces a top-level `Performance` page, making the information-architecture change explicit
 2. do **not** silently insert a top-level page in code until the spec has been amended
 
-So this proposal should be read as a product/design candidate that requires a spec-coordinated WebUI IA change before implementation. The implementation touchpoints remain [web/public/index.html](/mnt/s/Development/GuardianAgent/web/public/index.html) and [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), but they should not be changed ahead of the governing spec.
+So this proposal should be read as a product/design candidate that requires a spec-coordinated WebUI IA change before implementation. The implementation touchpoints remain [web/public/index.html](../../web/public/index.html) and [web/public/js/app.js](../../web/public/js/app.js), but they should not be changed ahead of the governing spec.
 
 ### WebUI Standard Compliance
 
-If and when `Performance` is implemented, it should follow the current WebUI standard from [docs/design/WEBUI-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/WEBUI-DESIGN.md):
+If and when `Performance` is implemented, it should follow the current WebUI standard from [docs/design/WEBUI-DESIGN.md](../design/WEBUI-DESIGN.md):
 
 - one page owns one domain
 - summaries do not duplicate control planes
@@ -567,7 +567,7 @@ Primary implementation sources:
 - `powercfg` for power plans and diagnostics
 - `taskkill` or native Win32 termination for process actions
 - `EmptyWorkingSet` only for explicit expert-mode actions
-- optional extension of [native/windows-helper/src/main.rs](/mnt/s/Development/GuardianAgent/native/windows-helper/src/main.rs) for Win32-only operations that are awkward from Node
+- optional extension of [native/windows-helper/src/main.rs](../../native/windows-helper/src/main.rs) for Win32-only operations that are awkward from Node
 
 ### Linux/macOS adapters
 
@@ -597,7 +597,7 @@ Add a new runtime slice, likely under `src/runtime/`, such as:
 - `performance-adapters/linux.ts`
 - `performance-adapters/darwin.ts`
 
-The key rule is that monitoring, profiles, and action policy belong in the runtime/control-plane layer, not in the web page code and not inline in [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts).
+The key rule is that monitoring, profiles, and action policy belong in the runtime/control-plane layer, not in the web page code and not inline in [src/index.ts](../../src/index.ts).
 
 ### Control plane
 
@@ -616,7 +616,7 @@ That module should own:
 
 ### Web contract
 
-Extend [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts) with typed contracts for:
+Extend [src/channels/web-types.ts](../../src/channels/web-types.ts) with typed contracts for:
 
 - `PerformanceStatus`
 - `PerformanceSnapshot`
@@ -631,9 +631,9 @@ Extend [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels
 Add:
 
 - `web/public/js/pages/performance.js`
-- route wiring in [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js)
-- API client methods in [web/public/js/api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)
-- nav entry in [web/public/index.html](/mnt/s/Development/GuardianAgent/web/public/index.html)
+- route wiring in [web/public/js/app.js](../../web/public/js/app.js)
+- API client methods in [web/public/js/api.js](../../web/public/js/api.js)
+- nav entry in [web/public/index.html](../../web/public/index.html)
 
 ### Tool surface
 
@@ -674,7 +674,7 @@ The preview object and selected-target subset should be resumable through the sh
 
 ## Proposed Config Shape
 
-Add an `assistant.performance` section in [src/config/types.ts](/mnt/s/Development/GuardianAgent/src/config/types.ts) with a shape parallel to existing monitoring systems.
+Add an `assistant.performance` section in [src/config/types.ts](../../src/config/types.ts) with a shape parallel to existing monitoring systems.
 
 Illustrative config:
 

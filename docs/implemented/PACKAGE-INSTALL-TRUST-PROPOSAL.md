@@ -1,10 +1,10 @@
 # Proposal: Package Install Trust And Quarantine
 
-Historical proposal. The shipped behavior now lives in [PACKAGE-INSTALL-TRUST-DESIGN.md](/mnt/s/development/guardianagent/docs/design/PACKAGE-INSTALL-TRUST-DESIGN.md).
+Historical proposal. The shipped behavior now lives in [PACKAGE-INSTALL-TRUST-DESIGN.md](../design/PACKAGE-INSTALL-TRUST-DESIGN.md).
 
-**Date:** 2026-03-26  
-**Status:** Historical Draft  
-**Related:** [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [Code Workspace Trust Spec](/mnt/s/Development/GuardianAgent/docs/design/CODE-WORKSPACE-TRUST-DESIGN.md), [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [workspace-dependency-ledger.ts](/mnt/s/Development/GuardianAgent/src/runtime/workspace-dependency-ledger.ts), [ai-security.ts](/mnt/s/Development/GuardianAgent/src/runtime/ai-security.ts), [security-alerts.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-alerts.ts), [host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts)
+**Date:** 2026-03-26
+**Status:** Historical Draft
+**Related:** [Coding Workspace Spec](../design/CODING-WORKSPACE-DESIGN.md), [Code Workspace Trust Spec](../design/CODE-WORKSPACE-TRUST-DESIGN.md), [Agentic Defensive Security Suite - As-Built Spec](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md), [executor.ts](../../src/tools/executor.ts), [workspace-dependency-ledger.ts](../../src/runtime/workspace-dependency-ledger.ts), [ai-security.ts](../../src/runtime/ai-security.ts), [security-alerts.ts](../../src/runtime/security-alerts.ts), [host-monitor.ts](../../src/runtime/host-monitor.ts)
 
 ## Executive Summary
 
@@ -32,7 +32,7 @@ This proposal does **not** modify the existing Coding Assistant trust flow. It a
 
 ## Why This Needs To Be Separate
 
-The current Coding Assistant trust pipeline in [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts) and [code-workspace-trust-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust-service.ts) is designed for:
+The current Coding Assistant trust pipeline in [code-workspace-trust.ts](../../src/runtime/code-workspace-trust.ts) and [code-workspace-trust-service.ts](../../src/runtime/code-workspace-trust-service.ts) is designed for:
 
 - an attached coding workspace
 - prompt hardening against hostile repo content
@@ -57,12 +57,12 @@ The right design is to reuse the **pattern**, not the existing subsystem.
 
 Guardian already has pieces that make this proposal feasible:
 
-- Workspace trust and native AV enrichment for coding repos in [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts) and [code-workspace-native-protection.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.ts)
-- Install-like command classification in [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- JS dependency awareness history in [workspace-dependency-ledger.ts](/mnt/s/Development/GuardianAgent/src/runtime/workspace-dependency-ledger.ts)
-- Assistant Security findings in [ai-security.ts](/mnt/s/Development/GuardianAgent/src/runtime/ai-security.ts)
-- Unified alert aggregation in [security-alerts.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-alerts.ts)
-- Host monitoring and alert lifecycle infrastructure in [host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts)
+- Workspace trust and native AV enrichment for coding repos in [code-workspace-trust.ts](../../src/runtime/code-workspace-trust.ts) and [code-workspace-native-protection.ts](../../src/runtime/code-workspace-native-protection.ts)
+- Install-like command classification in [executor.ts](../../src/tools/executor.ts)
+- JS dependency awareness history in [workspace-dependency-ledger.ts](../../src/runtime/workspace-dependency-ledger.ts)
+- Assistant Security findings in [ai-security.ts](../../src/runtime/ai-security.ts)
+- Unified alert aggregation in [security-alerts.ts](../../src/runtime/security-alerts.ts)
+- Host monitoring and alert lifecycle infrastructure in [host-monitor.ts](../../src/runtime/host-monitor.ts)
 
 ### Current gaps
 
@@ -188,7 +188,7 @@ The quarantine or staging area is Guardian-owned. The target workspace or enviro
 
 ### Entry points
 
-The initial interception point should be [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), because it already classifies install-like commands across:
+The initial interception point should be [executor.ts](../../src/tools/executor.ts), because it already classifies install-like commands across:
 
 - `npm`, `pnpm`, `yarn`, `bun`
 - `pip`, `pip3`, `python -m pip`, `uv`
@@ -345,7 +345,7 @@ The existing Security surfaces are sufficient for phase 1 if we use them correct
 
 ### Findings
 
-Package-install findings should surface through [ai-security.ts](/mnt/s/Development/GuardianAgent/src/runtime/ai-security.ts) as a new supply-chain oriented finding type or category.
+Package-install findings should surface through [ai-security.ts](../../src/runtime/ai-security.ts) as a new supply-chain oriented finding type or category.
 
 Recommended category addition:
 
@@ -353,7 +353,7 @@ Recommended category addition:
 
 ### Unified alerts
 
-The alert should also flow into [security-alerts.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-alerts.ts).
+The alert should also flow into [security-alerts.ts](../../src/runtime/security-alerts.ts).
 
 Phase 1 can publish these as `assistant`-source alerts to minimize changes.
 
@@ -420,11 +420,11 @@ Recommended new runtime files:
 
 Recommended integration points:
 
-- [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts) for managed install interception
-- [ai-security.ts](/mnt/s/Development/GuardianAgent/src/runtime/ai-security.ts) for findings
-- [security-alerts.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-alerts.ts) for Security queue integration
-- [host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts) or a dedicated observer for unmanaged install detection
-- [workspace-dependency-ledger.ts](/mnt/s/Development/GuardianAgent/src/runtime/workspace-dependency-ledger.ts) as awareness context only, not as the enforcement mechanism
+- [executor.ts](../../src/tools/executor.ts) for managed install interception
+- [ai-security.ts](../../src/runtime/ai-security.ts) for findings
+- [security-alerts.ts](../../src/runtime/security-alerts.ts) for Security queue integration
+- [host-monitor.ts](../../src/runtime/host-monitor.ts) or a dedicated observer for unmanaged install detection
+- [workspace-dependency-ledger.ts](../../src/runtime/workspace-dependency-ledger.ts) as awareness context only, not as the enforcement mechanism
 
 ## Rollout Plan
 

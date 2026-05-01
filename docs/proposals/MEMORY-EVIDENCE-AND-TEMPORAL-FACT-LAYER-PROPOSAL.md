@@ -3,7 +3,7 @@
 **Date:** 2026-04-07
 **Status:** Draft
 **Inspired by:** MemPalace (conceptually, not as a direct implementation dependency)
-**Cross-references:** [MEMORY-SYSTEM-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/MEMORY-SYSTEM-DESIGN.md), [Second Brain Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECOND-BRAIN-PROPOSAL.md), [Backend-Owned Coding Sessions Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [src/runtime/agent-memory-store.ts](/mnt/s/Development/GuardianAgent/src/runtime/agent-memory-store.ts), [src/search/search-service.ts](/mnt/s/Development/GuardianAgent/src/search/search-service.ts)
+**Cross-references:** [MEMORY-SYSTEM-DESIGN.md](../design/MEMORY-SYSTEM-DESIGN.md), [Second Brain Proposal](../implemented/SECOND-BRAIN-PROPOSAL.md), [Backend-Owned Coding Sessions Proposal](../implemented/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [src/runtime/agent-memory-store.ts](../../src/runtime/agent-memory-store.ts), [src/search/search-service.ts](../../src/search/search-service.ts)
 
 ---
 

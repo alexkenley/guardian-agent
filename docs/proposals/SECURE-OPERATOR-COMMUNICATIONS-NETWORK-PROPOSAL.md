@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-01
 **Status:** Draft
-**Related:** [Threat Intelligence Sharing Hub](/mnt/s/Development/GuardianAgent/docs/proposals/THREAT-SHARING-HUB-PROPOSAL.md), [Multi-User Server + Client Agent Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-USER-CLIENT-AGENT-PROPOSAL.md), [Browser Privacy Shield, Tor Routing, and Guarded Dark Web OSINT](/mnt/s/Development/GuardianAgent/docs/proposals/BROWSER-PRIVACY-SHIELD-PROPOSAL.md), [Control Plane Hardening](/mnt/s/Development/GuardianAgent/docs/proposals/CONTROL-PLANE-HARDENING-PROPOSAL.md)
+**Related:** [Threat Intelligence Sharing Hub](THREAT-SHARING-HUB-PROPOSAL.md), [Multi-User Server + Client Agent Proposal](MULTI-USER-CLIENT-AGENT-PROPOSAL.md), [Browser Privacy Shield, Tor Routing, and Guarded Dark Web OSINT](BROWSER-PRIVACY-SHIELD-PROPOSAL.md), [Control Plane Hardening](CONTROL-PLANE-HARDENING-PROPOSAL.md)
 
 This proposal is a companion to Threat Sharing Hub, not a replacement for it.
 

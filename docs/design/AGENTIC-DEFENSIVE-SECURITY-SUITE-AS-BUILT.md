@@ -2,7 +2,7 @@
 
 **Status:** Implemented for the current local-defense scope; canonical current-state document
 **Date:** 2026-04-08
-**Proposal origin:** [Agentic Defensive Security Suite](../proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)
+**Proposal origin:** [Agentic Defensive Security Suite](../implemented/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)
 
 ## Purpose
 

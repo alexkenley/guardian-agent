@@ -1,8 +1,8 @@
 # Notion Workspace Integration — Implementation Plan
 
-**Status:** Draft  
-**Date:** 2026-03-29  
-**Primary context:** [docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md), [docs/design/SKILLS-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/SKILLS-DESIGN.md), [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md), [skills/notion/skill.json](/mnt/s/Development/GuardianAgent/skills/notion/skill.json), [skills/notion/SKILL.md](/mnt/s/Development/GuardianAgent/skills/notion/SKILL.md)
+**Status:** Draft
+**Date:** 2026-03-29
+**Primary context:** [docs/design/CLOUD-HOSTING-INTEGRATION-DESIGN.md](../design/CLOUD-HOSTING-INTEGRATION-DESIGN.md), [docs/design/SKILLS-DESIGN.md](../design/SKILLS-DESIGN.md), [docs/design/INTENT-GATEWAY-ROUTING-DESIGN.md](../design/INTENT-GATEWAY-ROUTING-DESIGN.md), [skills/notion/skill.json](../../skills/notion/skill.json), [skills/notion/SKILL.md](../../skills/notion/SKILL.md)
 
 ## Objective
 

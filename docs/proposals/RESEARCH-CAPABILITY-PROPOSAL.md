@@ -1,18 +1,18 @@
 # Proposal: Research Capability
 
-**Status:** Draft  
-**Date:** 2026-04-11  
-**Inspired by:** [getcompanion-ai/feynman](https://github.com/getcompanion-ai/feynman)  
+**Status:** Draft
+**Date:** 2026-04-11
+**Inspired by:** [getcompanion-ai/feynman](https://github.com/getcompanion-ai/feynman)
 **Related:**
 - [Capability Authoring Guide](../guides/CAPABILITY-AUTHORING-GUIDE.md)
 - [Tools Control Plane Spec](../design/TOOLS-CONTROL-PLANE-DESIGN.md)
 - [Native Skills Specification](../design/SKILLS-DESIGN.md)
 - [Orchestration Specification](../design/ORCHESTRATION-DESIGN.md)
-- [Agent Orchestration Recipes Spec](../design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md)
+- [Agent Orchestration Recipes Spec](../archive/design/AGENT-ORCHESTRATION-RECIPES-DESIGN.md)
 - [WebUI Design Spec](../design/WEBUI-DESIGN.md)
-- [Evidence-Grounded Playbooks Spec](../design/EVIDENCE-GROUNDED-PLAYBOOKS-DESIGN.md)
+- [Evidence-Grounded Playbooks Spec](../archive/design/EVIDENCE-GROUNDED-PLAYBOOKS-DESIGN.md)
 - [Memory Artifact and Operator Wiki Uplift Plan](../plans/MEMORY-ARTIFACT-WIKI-UPLIFT-PLAN.md)
-- [Skills Progressive Disclosure Uplift Plan](../plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md)
+- [Skills Progressive Disclosure Uplift Plan](../archive/plans/SKILLS-PROGRESSIVE-DISCLOSURE-UPLIFT-PLAN.md)
 - [Runtime Intelligence Uplifts Proposal](./RUNTIME-INTELLIGENCE-UPLIFTS-PROPOSAL.md)
 - [src/runtime/intent-gateway.ts](../../src/runtime/intent-gateway.ts)
 - [src/agent/recipes.ts](../../src/agent/recipes.ts)

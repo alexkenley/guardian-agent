@@ -1,10 +1,10 @@
 # General Chat As Canonical Coding Surface Proposal
 
-**Status:** Draft  
-**Date:** 2026-03-27  
-**Primary runtime files:** [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts), [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts), [src/channels/telegram.ts](/mnt/s/Development/GuardianAgent/src/channels/telegram.ts)  
-**Primary web files:** [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js), [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js), [web/public/js/api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)  
-**Related docs:** [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md), [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)
+**Status:** Draft; backend-owned session foundation is implemented, remaining work is product cleanup around canonical chat vs workbench surfaces
+**Date:** 2026-03-27
+**Primary runtime files:** [src/index.ts](../../src/index.ts), [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts), [src/tools/executor.ts](../../src/tools/executor.ts), [src/channels/web.ts](../../src/channels/web.ts), [src/channels/cli.ts](../../src/channels/cli.ts), [src/channels/telegram.ts](../../src/channels/telegram.ts)
+**Primary web files:** [web/public/js/chat-panel.js](../../web/public/js/chat-panel.js), [web/public/js/pages/code.js](../../web/public/js/pages/code.js), [web/public/js/api.js](../../web/public/js/api.js)
+**Related docs:** [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md), [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](../implemented/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](./CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)
 
 ## Goal
 

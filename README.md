@@ -181,7 +181,8 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
 - `web/public/` — dashboard UI, chat panel, code workspace UI, and browser-side assets
 - `scripts/` — setup helpers, test harnesses, and verification scripts
 - `docs/` — architecture notes, specs, guides, research, and supporting documentation
-- `docs/plans/` — implementation roadmaps and status trackers
+- `docs/plans/` — active implementation roadmaps and status trackers
+- `docs/implemented/` and `docs/archive/` — historical proposals and completed plans
 - `policies/` — rule and policy files
 - `native/windows-helper/` — Windows native helper components
 
@@ -352,7 +353,7 @@ The default runtime stays brokered with a `workspace-write` sandbox profile and 
 
 For detailed configuration documentation:
 - [Configuration Center Spec](docs/design/CONFIG-CENTER-DESIGN.md)
-- [Setup Wizard Spec](docs/design/SETUP-WIZARD-DESIGN.md)
+- [WebUI Design Spec](docs/design/WEBUI-DESIGN.md)
 
 ---
 

@@ -1,9 +1,9 @@
 # Reference Coding Runtime Uplift Proposal
 
-**Status:** Draft  
-**Date:** 2026-04-02  
-**Primary Guardian files:** [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts), [src/tools/mcp-client.ts](/mnt/s/Development/GuardianAgent/src/tools/mcp-client.ts), [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts), [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [src/sandbox/types.ts](/mnt/s/Development/GuardianAgent/src/sandbox/types.ts), [docs/architecture/FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md)  
-**Related docs:** [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md), [RUNTIME-INTELLIGENCE-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/RUNTIME-INTELLIGENCE-UPLIFTS-PROPOSAL.md), [CODING-WORKSPACE-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CODING-WORKSPACE-DESIGN.md)
+**Status:** Draft
+**Date:** 2026-04-02
+**Primary Guardian files:** [src/tools/executor.ts](../../src/tools/executor.ts), [src/tools/registry.ts](../../src/tools/registry.ts), [src/tools/mcp-client.ts](../../src/tools/mcp-client.ts), [src/runtime/context-assembly.ts](../../src/runtime/context-assembly.ts), [src/runtime/code-sessions.ts](../../src/runtime/code-sessions.ts), [src/sandbox/types.ts](../../src/sandbox/types.ts), [docs/architecture/FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md)
+**Related docs:** [BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md](../implemented/BACKEND-OWNED-CODING-SESSIONS-PROPOSAL.md), [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md](./GENERAL-CHAT-CANONICAL-CODING-SESSIONS-PROPOSAL.md), [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](./CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md), [RUNTIME-INTELLIGENCE-UPLIFTS-PROPOSAL.md](./RUNTIME-INTELLIGENCE-UPLIFTS-PROPOSAL.md), [CODING-WORKSPACE-DESIGN.md](../design/CODING-WORKSPACE-DESIGN.md)
 
 ## Goal
 
@@ -49,10 +49,10 @@ Guardian is already ahead in several important areas:
 
 The remaining gap is that some of Guardian’s core coding/runtime seams are still more implicit than they should be:
 
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts) still owns too much orchestration detail
-- [src/tools/registry.ts](/mnt/s/Development/GuardianAgent/src/tools/registry.ts) is intentionally simple but too thin to carry richer execution metadata cleanly
-- [src/tools/mcp-client.ts](/mnt/s/Development/GuardianAgent/src/tools/mcp-client.ts) and sandbox/runtime startup state are still more stringly and transport-specific than ideal
-- [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts) builds good structured prompt sections, but source budgeting and source provenance can be made more explicit
+- [src/tools/executor.ts](../../src/tools/executor.ts) still owns too much orchestration detail
+- [src/tools/registry.ts](../../src/tools/registry.ts) is intentionally simple but too thin to carry richer execution metadata cleanly
+- [src/tools/mcp-client.ts](../../src/tools/mcp-client.ts) and sandbox/runtime startup state are still more stringly and transport-specific than ideal
+- [src/runtime/context-assembly.ts](../../src/runtime/context-assembly.ts) builds good structured prompt sections, but source budgeting and source provenance can be made more explicit
 - compaction exists in multiple places, but Guardian still benefits from a more explicit compaction contract that can be reused across chat, coding sessions, brokered workers, and external coding backends
 
 ## Unified Recommendation
@@ -134,7 +134,7 @@ Instead of loose startup state, Guardian should have typed descriptors for:
 - tool prefix / namespacing
 - config source / provenance
 
-This is particularly valuable for [src/tools/mcp-client.ts](/mnt/s/Development/GuardianAgent/src/tools/mcp-client.ts) and [src/sandbox/types.ts](/mnt/s/Development/GuardianAgent/src/sandbox/types.ts), where the runtime needs to explain not just what is configured, but what is truly available right now.
+This is particularly valuable for [src/tools/mcp-client.ts](../../src/tools/mcp-client.ts) and [src/sandbox/types.ts](../../src/sandbox/types.ts), where the runtime needs to explain not just what is configured, but what is truly available right now.
 
 ### Desired features
 
@@ -165,7 +165,7 @@ Guardian’s source classes differ from the reference tree and should stay Guard
 - git status / diff summaries when safe and useful
 - pending-action and approval context
 
-This builds directly on [src/runtime/context-assembly.ts](/mnt/s/Development/GuardianAgent/src/runtime/context-assembly.ts) rather than replacing it.
+This builds directly on [src/runtime/context-assembly.ts](../../src/runtime/context-assembly.ts) rather than replacing it.
 
 ### Desired features
 
@@ -271,4 +271,4 @@ The highest-value borrowings are the boring ones:
 - reusable compaction and session artifacts
 - evidence-driven comparative analysis
 
-Those are exactly the kinds of changes that make Guardian easier to extend while staying aligned with [FORWARD-ARCHITECTURE.md](/mnt/s/Development/GuardianAgent/docs/architecture/FORWARD-ARCHITECTURE.md): composition roots stay thinner, shared orchestration stays central, and new features stop leaking across the same large files.
+Those are exactly the kinds of changes that make Guardian easier to extend while staying aligned with [FORWARD-ARCHITECTURE.md](../architecture/FORWARD-ARCHITECTURE.md): composition roots stay thinner, shared orchestration stays central, and new features stop leaking across the same large files.

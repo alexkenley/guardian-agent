@@ -1,7 +1,7 @@
 # Stream B: Security Uplift Plan
 
-> Archived on 2026-04-03. Most code items in this stream have shipped. Remaining active work was rolled into [Agent Traps Security Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/AGENT-TRAPS-SECURITY-UPLIFT-PLAN.md).
-> Current implementation status is reflected primarily in [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](/mnt/s/Development/GuardianAgent/docs/design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md) and [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](/mnt/s/Development/GuardianAgent/docs/design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md).
+> Archived on 2026-04-03. Most code items in this stream have shipped. Remaining active work was rolled into [Agent Traps Security Uplift Plan](../plans/AGENT-TRAPS-SECURITY-UPLIFT-PLAN.md).
+> Current implementation status is reflected primarily in [CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md](../design/CONTEXTUAL-SECURITY-UPLIFT-DESIGN.md) and [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md](../design/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT.md).
 
 ## Context
 
