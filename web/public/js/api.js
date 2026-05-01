@@ -612,9 +612,6 @@ export const api = {
     body: JSON.stringify(collection ? { collection } : {}),
   }),
 
-  gwsStatus: () => request('/api/gws/status'),
-  gwsReauth: () => request('/api/gws/reauth', { method: 'POST' }),
-
   // Native Google integration
   googleStatus: () => request('/api/google/status'),
   googleAuthStart: (services) => request('/api/google/auth/start', {

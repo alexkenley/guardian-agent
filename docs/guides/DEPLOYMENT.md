@@ -76,13 +76,11 @@ Same pipeline as Unix, plus: detects cross-platform node_modules (WSL vs Windows
 
 ---
 
-## Bundled CLI Tools
-
-External CLI tools used by the system:
+## Connector Runtime Tools
 
 ### Google Workspace
 
-GuardianAgent supports two backends for Google Workspace. **Native mode is the default** — it requires no external CLI.
+GuardianAgent uses native Google Workspace OAuth by default. The assistant-facing tool name remains `gws` for compatibility with prompts, policies, skills, and automations, but operator authentication is handled by Guardian's direct Google OAuth flow rather than the Google Workspace CLI.
 
 #### Native Mode (Default)
 
@@ -96,17 +94,7 @@ Calls Google APIs directly via the `googleapis` SDK. OAuth 2.0 PKCE handled with
 
 Native mode is recommended because it reduces setup from 7 steps to 3 and eliminates subprocess latency.
 
-#### CLI Mode (Legacy)
-
-Uses the external `@googleworkspace/cli` tool via subprocess. Retained for users with existing gws setups.
-
-- **Bundled** as a project dependency (`npm install` installs it)
-- **Binary:** `node_modules/.bin/gws` (or `gws.cmd` on Windows)
-- **Config:** `assistant.tools.mcp.managedProviders.gws` in config.yaml
-- **Auth:** Run `gws auth setup` then `gws auth login` in a terminal (requires interactive browser OAuth)
-- **Web UI:** Configuration > Integrations > Google Workspace (select CLI mode)
-
-Both modes use the same `gws` tool name — the LLM interface is identical. Switching modes does not affect automations or skills.
+Legacy `gws` CLI auth is no longer the operator path. Existing `gws` tool references still route through Guardian's native Google adapter when Google Workspace is enabled.
 
 ---
 

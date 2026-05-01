@@ -4465,7 +4465,7 @@ export class CLIChannel implements ChannelAdapter {
   // ─── /google ─────────────────────────────────────────────────
 
   private async handleGoogle(args: string[]): Promise<void> {
-    if (!this.dashboard?.onGwsStatus) {
+    if (!this.dashboard?.onGoogleStatus) {
       this.write('\nGoogle Workspace integration is not available.\n\n');
       return;
     }
@@ -4473,50 +4473,33 @@ export class CLIChannel implements ChannelAdapter {
     const sub = (args[0] ?? 'status').toLowerCase();
 
     if (sub === 'status') {
-      const status = await this.dashboard.onGwsStatus();
+      const status = await this.dashboard.onGoogleStatus();
       this.write('\n');
       this.write(this.bold('Google Workspace\n'));
-      this.write(`  Installed:       ${status.installed ? this.green('yes') : this.red('no')}${status.version ? ` (${status.version})` : ''}\n`);
-      this.write(`  Authenticated:   ${status.authenticated ? this.green('yes') : this.red('no')}${status.authMethod ? ` (${status.authMethod})` : ''}\n`);
-      this.write(`  Provider:        ${status.enabled ? this.green('enabled') : this.dim('disabled')}\n`);
+      this.write(`  Mode:            ${status.mode ?? 'native'} OAuth\n`);
+      this.write(`  Authenticated:   ${status.authenticated ? this.green('yes') : this.red('no')}${status.authPending ? ` (${this.dim('auth pending')})` : ''}\n`);
       this.write(`  Services:        ${status.services.length ? status.services.join(', ') : this.dim('none')}\n`);
       if (!status.authenticated) {
-        this.write(`\n  To connect, run ${this.cyan('gws auth login')} in a terminal.\n`);
-        this.write(`  See ${this.cyan('Settings > Google Workspace')} in the web UI for setup instructions.\n`);
+        this.write(`\n  To connect, use ${this.cyan('/google login')} or open ${this.cyan('Settings > Google Workspace')} in the web UI.\n`);
       }
       this.write('\n');
       return;
     }
 
     if (sub === 'login') {
-      this.write('\nStarting Google Workspace authentication...\n');
-      this.write('A browser window will open for OAuth consent.\n\n');
-      try {
-        const { execFile } = await import('node:child_process');
-        const child = execFile('gws', ['auth', 'login'], {
-          shell: process.platform === 'win32',
-        } as any);
-        child.stdout?.on('data', (data: Buffer) => this.write(data.toString()));
-        child.stderr?.on('data', (data: Buffer) => this.write(data.toString()));
-        await new Promise<void>((resolve) => {
-          child.on('close', (code) => {
-            if (code === 0) {
-              this.write(this.green('\nAuthentication successful.\n\n'));
-              resolve();
-            } else {
-              this.write(this.red(`\nAuthentication failed (exit code ${code}).\n\n`));
-              resolve(); // Don't reject — just report
-            }
-          });
-          child.on('error', (err) => {
-            this.write(this.red(`\nFailed to run gws: ${err.message}\n`));
-            this.write(`Make sure gws is installed: ${this.cyan('npm install -g @googleworkspace/cli')}\n\n`);
-            resolve();
-          });
-        });
-      } catch (err) {
-        this.write(this.red(`\nError: ${err instanceof Error ? err.message : String(err)}\n\n`));
+      if (!this.dashboard.onGoogleAuthStart) {
+        this.write('\nNative Google OAuth is not available in this runtime.\n\n');
+        return;
       }
+      this.write('\nStarting native Google Workspace OAuth...\n');
+      const status = await this.dashboard.onGoogleStatus();
+      const result = await this.dashboard.onGoogleAuthStart(status.services);
+      if (!result.success || !result.authUrl) {
+        this.write(this.red(`\n${result.message || 'Failed to start Google OAuth.'}\n\n`));
+        return;
+      }
+      this.write('Open this URL in a browser to complete Google consent:\n');
+      this.write(`${this.cyan(result.authUrl)}\n\n`);
       return;
     }
 

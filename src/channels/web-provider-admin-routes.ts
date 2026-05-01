@@ -24,6 +24,21 @@ export async function handleWebProviderAdminRoutes(
   const { req, res, url, dashboard } = context;
 
   if (req.method === 'GET' && url.pathname === '/api/gws/status') {
+    if (dashboard.onGoogleStatus) {
+      const status = await dashboard.onGoogleStatus();
+      sendJSON(res, 200, {
+        installed: true,
+        authenticated: status.authenticated,
+        authMethod: 'native_oauth',
+        authPending: status.authPending,
+        tokenExpiry: status.tokenExpiry,
+        services: status.services,
+        enabled: true,
+        mode: status.mode,
+        legacyEndpoint: true,
+      });
+      return true;
+    }
     if (!dashboard.onGwsStatus) {
       sendJSON(res, 404, { error: 'Not available' });
       return true;
@@ -33,36 +48,11 @@ export async function handleWebProviderAdminRoutes(
   }
 
   if (req.method === 'POST' && url.pathname === '/api/gws/reauth') {
-    try {
-      const { execFile } = await import('node:child_process');
-      const gwsCmd = 'gws';
-      const child = execFile(gwsCmd, ['auth', 'login'], {
-        shell: process.platform === 'win32',
-        timeout: 120_000,
-      } as any);
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (data: Buffer) => { stdout += data.toString(); });
-      child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
-      const exitCode = await new Promise<number>((resolve) => {
-        child.on('close', (code) => resolve(code ?? 1));
-        child.on('error', () => resolve(1));
-      });
-      if (exitCode === 0) {
-        sendJSON(res, 200, { success: true, message: 'Authentication successful. Refresh status to verify.' });
-      } else {
-        sendJSON(res, 200, {
-          success: false,
-          message: `Authentication flow exited with code ${exitCode}. Check the browser window that opened.`,
-          detail: stderr || stdout,
-        });
-      }
-    } catch (err) {
-      sendJSON(res, 500, {
-        success: false,
-        message: err instanceof Error ? err.message : 'Failed to start auth flow',
-      });
-    }
+    sendJSON(res, 410, {
+      success: false,
+      message: 'Legacy gws CLI authentication is no longer used. Start native Google OAuth with /api/google/auth/start or use the Google Workspace settings page.',
+      nextAction: 'Open Settings > Integrations > Google Workspace and click Connect Google.',
+    });
     return true;
   }
 

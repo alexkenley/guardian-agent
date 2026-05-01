@@ -523,13 +523,13 @@ export const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
   {
     aliases: ['google'],
     title: '/google',
-    summary: 'Inspect or start Google Workspace authentication from the CLI.',
+    summary: 'Inspect or start native Google Workspace OAuth from the CLI.',
     usage: [
       '/google status',
       '/google login',
     ],
     notes: [
-      'login launches the gws auth login flow and may open a browser window.',
+      'login starts Guardian-owned Google OAuth and prints the browser consent URL.',
     ],
   },
   {

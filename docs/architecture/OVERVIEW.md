@@ -28,7 +28,7 @@ Core principles:
 
 Current extensions:
 - **Native skills layer** for reusable procedural knowledge, templates, and task guidance
-- **Managed MCP providers** for curated external capability bundles such as Google Workspace via `gws`
+- **Native Google and Microsoft connectors** for provider-owned mail, calendar, drive, docs, sheets, and contacts through direct OAuth integrations
 - **Brokered worker execution** for the built-in chat/planner path, enabled by default
 - **Strict sandbox availability model** that disables risky tools when strong OS isolation is unavailable
 
@@ -164,7 +164,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Document Search (src/search/) — native hybrid search (BM25 + vector) over document collections
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
 ├── Native Google Service (src/google/)  — direct googleapis SDK integration (OAuth PKCE, encrypted tokens)
-├── Managed MCP Providers               — curated provider wrappers, including Google Workspace via `gws` CLI (legacy)
+├── Managed Provider Tool Facade         — stable tool names such as `gws` backed by native adapters
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
 │   ├── types.ts                        — test case, matcher, and result types
 │   ├── metrics.ts                      — content, trajectory, metadata, workflow, evidence, and safety metrics
@@ -326,9 +326,9 @@ See [Native Skills Spec](../design/SKILLS-DESIGN.md).
 
 GuardianAgent includes a managed MCP provider foundation for complex ecosystems where both tool schemas and procedural guidance matter.
 
-Google Workspace integration supports two backends:
+Google Workspace integration uses the native backend:
 
-**Native mode (default, recommended):**
+**Native mode (default):**
 
 - `src/google/` module calls Google APIs directly via `googleapis` SDK
 - OAuth 2.0 PKCE with localhost callback, tokens encrypted at `~/.guardianagent/secrets.enc.json`
@@ -336,13 +336,7 @@ Google Workspace integration supports two backends:
 - No external CLI dependency, no subprocess overhead
 - Config: `assistant.tools.google` (enabled, mode: `native`, services, oauthCallbackPort, credentialsPath)
 
-**CLI mode (legacy, power users):**
-
-- execution via `gws` CLI subprocess (`@googleworkspace/cli`)
-- separate install and terminal auth required
-- Config: `assistant.tools.mcp.managedProviders.gws`
-
-Both modes:
+Tool facade:
 
 - use the same `gws` and `gws_schema` tool names (transparent routing in ToolExecutor)
 - safety and approvals via ToolExecutor + Guardian
