@@ -441,7 +441,7 @@ Current Security page behavior:
 - per-tab hover tooltips on the tab buttons
 - Overview optimized for fast posture readout with compact cards, a mode recommendation panel, and top active signals
 - Security Log centered on the unified queue, with historical audit review collapsed until needed
-- alert and audit rows expand into deterministic investigation guidance, normalized evidence/context, and raw JSON without requiring an AI triage pass
+- alert and audit rows expand into deterministic investigation guidance, normalized evidence/context, and redacted raw JSON without requiring an AI triage pass
 - only incident-candidate Assistant Security findings are promoted into Security Log; broader posture findings stay in the Assistant Security queue
 - Assistant Security centered on posture, monitoring, and the live findings queue, with targets, runs, and activity moved into secondary expandable sections
 - threat-intel workspace focused on summary, watchlist, and findings, with drafted actions and operating plan kept as secondary expandable sections
