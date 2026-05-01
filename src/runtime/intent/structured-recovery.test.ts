@@ -993,6 +993,33 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.requiresRepoGrounding).toBe('derived.workload');
   });
 
+  it('preserves connector status domains when synthesizing route-only fallback plans', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'complex_planning_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Check multiple service statuses, automations, and repo evidence.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+      sourceContent: 'Check Vercel status, WHM status, Gmail auth/status, Microsoft calendar status, list my saved automations, and search this workspace for runLiveToolLoopController. Return six short bullets and do not expose credential values.',
+    });
+
+    const categories = decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? []) ?? [];
+    expect(categories).toEqual(expect.arrayContaining([
+      'vercel_status',
+      'whm_status',
+      'gws_status',
+      'm365_status',
+      'automation_list',
+      'repo_inspect',
+    ]));
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.requiresRepoGrounding).toBe(true);
+  });
+
   it('routes automation evidence plus answer plans through tool-backed synthesis even when the classifier says direct', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'automation_control',

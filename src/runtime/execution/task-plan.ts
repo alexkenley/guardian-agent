@@ -920,6 +920,15 @@ function inferSemanticEvidenceToolCategories(summary: string | undefined): strin
     return [];
   }
   const categories: string[] = [];
+  const mentionsProviderConnector = containsAny(normalized, [
+    'google',
+    'gmail',
+    'gws',
+    'workspace',
+    'microsoft',
+    'm365',
+    'outlook',
+  ]);
   if (containsAny(normalized, ['memory', 'remembered', 'knowledge base'])) {
     categories.push('memory');
   }
@@ -951,9 +960,20 @@ function inferSemanticEvidenceToolCategories(summary: string | undefined): strin
   if (containsAny(normalized, ['automation', 'automations', 'workflow', 'workflows'])) {
     categories.push('automation_list');
   }
+  if (containsAny(normalized, ['vercel'])) {
+    categories.push('vercel_status');
+  }
+  if (containsAny(normalized, ['whm', 'cpanel', 'c-panel'])) {
+    categories.push('whm_status');
+  }
+  if (containsAny(normalized, ['gmail', 'google', 'gws', 'google workspace'])) {
+    categories.push('gws_status');
+  }
+  if (containsAny(normalized, ['microsoft', 'm365', 'outlook'])) {
+    categories.push('m365_status');
+  }
   if (containsAny(normalized, [
     'second brain',
-    'calendar',
     'appointment',
     'reminder',
     'note',
@@ -961,6 +981,9 @@ function inferSemanticEvidenceToolCategories(summary: string | undefined): strin
     'contacts',
     'library',
   ])) {
+    categories.push('second_brain');
+  }
+  if (!mentionsProviderConnector && containsAny(normalized, ['calendar'])) {
     categories.push('second_brain');
   }
   return [...new Set(categories)];

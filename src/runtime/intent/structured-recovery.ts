@@ -1136,22 +1136,39 @@ function inferSynthesizedEvidenceToolCategories(
   if (!normalized) {
     return [];
   }
+  const categories: string[] = [];
   if (/\b(?:memory|remembered|saved marker)\b/i.test(normalized)) {
-    return ['memory'];
+    categories.push('memory');
   }
   if (/\b(?:repo|repository|workspace|codebase|source code|local code)\b/i.test(normalized)) {
-    return ['repo_inspect'];
+    categories.push('repo_inspect');
   }
   if (/\bhttps?:\/\/|\b(?:web|internet|online|website|page title)\b/i.test(normalized)) {
-    return kind === 'search'
+    categories.push(...(kind === 'search'
       ? ['web_search', 'browser']
-      : ['web_fetch', 'browser'];
+      : ['web_fetch', 'browser']));
   }
   if (/\b(?:automation|automations|workflow|workflows|routine|routines)\b/i.test(normalized)) {
-    return ['automation_list'];
+    categories.push('automation_list');
   }
-  if (/\b(?:second brain|calendar|appointment|reminder|task list|notes?|contacts?|library)\b/i.test(normalized)) {
-    return ['second_brain'];
+  const mentionsProviderConnector = /\b(?:google|gmail|gws|workspace|microsoft|m365|outlook)\b/i.test(normalized);
+  if (/\b(?:vercel)\b/i.test(normalized)) {
+    categories.push('vercel_status');
   }
-  return [];
+  if (/\b(?:whm|c[\s-]?panel|cpanel)\b/i.test(normalized)) {
+    categories.push('whm_status');
+  }
+  if (/\b(?:gmail|google|gws|google workspace)\b/i.test(normalized)) {
+    categories.push('gws_status');
+  }
+  if (/\b(?:microsoft|m365|outlook)\b/i.test(normalized)) {
+    categories.push('m365_status');
+  }
+  if (
+    /\b(?:second brain|appointment|reminder|task list|notes?|contacts?|library)\b/i.test(normalized)
+    || (!mentionsProviderConnector && /\bcalendar\b/i.test(normalized))
+  ) {
+    categories.push('second_brain');
+  }
+  return [...new Set(categories)];
 }

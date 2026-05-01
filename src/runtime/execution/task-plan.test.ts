@@ -296,6 +296,39 @@ describe('task plan receipt accounting', () => {
     })).toBe('step_3');
   });
 
+  it('infers multiple connector status categories from a mixed status read step', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'complex_planning_task',
+      operation: 'inspect',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Check Vercel status, WHM status, Gmail auth/status, Microsoft calendar status, and saved automations.',
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search this workspace for runLiveToolLoopController.',
+          required: true,
+        },
+      ],
+    }, {
+      kind: 'general_answer',
+      route: 'complex_planning_task',
+      operation: 'inspect',
+      summary: 'User wants a mixed connector status and repo sweep.',
+    });
+
+    expect(plannedTask.steps[0]?.expectedToolCategories).toEqual([
+      'automation_list',
+      'vercel_status',
+      'whm_status',
+      'gws_status',
+      'm365_status',
+    ]);
+    expect(plannedTask.steps[1]?.expectedToolCategories).toEqual(['repo_inspect']);
+  });
+
   it('requires real evidence when a read-only tool-synthesis plan only contains answer steps', () => {
     const plannedTask = buildPlannedTask({
       route: 'general_assistant',
