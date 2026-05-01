@@ -1854,7 +1854,8 @@ export function redactSecurityTextForDisplay(value) {
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, 'jwt_[REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, 'sk-[REDACTED]')
     .replace(/\bghp_[A-Za-z0-9_]{12,}/g, 'ghp_[REDACTED]')
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{12,}/gi, 'xox[REDACTED]')
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{12,}\b/g, 'aws_[REDACTED]')
+    .replace(/\bxox[a-z]-[A-Za-z0-9-]{12,}/gi, 'xox[REDACTED]')
     .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, 'AIza[REDACTED]');
 }
 

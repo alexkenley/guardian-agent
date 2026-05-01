@@ -26,6 +26,8 @@ describe('Security page redaction helpers', () => {
         resources: [
           'file:C:\\Users\\kenle\\.guardianagent\\config.yaml',
           'ghp_abcdefghijklmnopqrstuvwxyz',
+          'AKIAIOSFODNN7EXAMPLE',
+          'xoxc-123456789012-abcdefghijklmnop',
         ],
       },
     });
@@ -35,8 +37,12 @@ describe('Security page redaction helpers', () => {
     expect(redacted.evidence.nested.note).toContain('token=[REDACTED]');
     expect(redacted.evidence.resources[0]).toContain('.guardianagent');
     expect(redacted.evidence.resources[1]).toBe('ghp_[REDACTED]');
+    expect(redacted.evidence.resources[2]).toBe('aws_[REDACTED]');
+    expect(redacted.evidence.resources[3]).toBe('xox[REDACTED]');
     expect(JSON.stringify(redacted)).not.toContain('sk-live-secret-value');
     expect(JSON.stringify(redacted)).not.toContain('abcdefghijklmnopqrstuvwxyz');
+    expect(JSON.stringify(redacted)).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(JSON.stringify(redacted)).not.toContain('xoxc-123456789012');
   });
 
   it('redacts OAuth and JWT-shaped tokens from visible security summary text', async () => {
