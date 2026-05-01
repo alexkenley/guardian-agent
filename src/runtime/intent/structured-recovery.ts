@@ -352,8 +352,16 @@ export function normalizeIntentGatewayDecision(
     ? 'filesystem_task' as const
     : null;
   const effectiveRoute = structuredWritePlanRoute ?? route;
+  const readOnlyEvidenceOperation = deriveReadOnlyEvidenceOperation({
+    route: effectiveRoute,
+    operation,
+    plannedSteps: effectivePlannedSteps,
+    parsed,
+  });
   const effectiveOperation = structuredWritePlanRoute && operation === 'unknown'
     ? 'create'
+    : readOnlyEvidenceOperation
+      ? readOnlyEvidenceOperation
     : operation;
   const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(effectiveRoute, effectivePlannedSteps);
   const structurallyDirectAnswer = isStructurallyDirectAssistantTurn({
@@ -417,6 +425,8 @@ export function normalizeIntentGatewayDecision(
         ? 'repair.structured'
         : 'resolver.clarification',
     operation: structuredWritePlanRoute && operation === 'unknown'
+      ? 'derived.workload'
+      : readOnlyEvidenceOperation
       ? 'derived.workload'
       : operation === parsedOperation
       ? classifierSource
@@ -574,6 +584,60 @@ function isStructurallyDirectAssistantTurn(input: {
   if (input.executionClass !== 'direct_assistant') return false;
   if (input.requiresRepoGrounding || input.requiresToolSynthesis) return false;
   return input.plannedSteps.every((step) => step.required === false || step.kind === 'answer');
+}
+
+function deriveReadOnlyEvidenceOperation(input: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+  plannedSteps: IntentGatewayPlannedStep[];
+  parsed: Record<string, unknown>;
+}): IntentGatewayDecision['operation'] | null {
+  if (input.operation !== 'run') return null;
+  if (input.route !== 'general_assistant' && input.route !== 'complex_planning_task') return null;
+  if (hasExplicitExecutionTarget(input.parsed)) return null;
+
+  const requiredSteps = input.plannedSteps.filter((step) => step.required !== false);
+  if (requiredSteps.length === 0) return null;
+  const evidenceSteps = requiredSteps.filter((step) => step.kind !== 'answer');
+  if (evidenceSteps.length === 0) return null;
+  if (!requiredSteps.every((step) => step.kind === 'read' || step.kind === 'search' || step.kind === 'answer')) {
+    return null;
+  }
+  if (requiredSteps.some((step) => step.expectedToolCategories?.some(isMutationPlanCategory))) {
+    return null;
+  }
+  return evidenceSteps.some((step) => step.kind === 'search') ? 'search' : 'inspect';
+}
+
+function hasExplicitExecutionTarget(parsed: Record<string, unknown>): boolean {
+  return (typeof parsed.toolName === 'string' && parsed.toolName.trim().length > 0)
+    || typeof parsed.codingBackend === 'string'
+    || parsed.codingBackendRequested === true
+    || parsed.codingRemoteExecRequested === true;
+}
+
+function isMutationPlanCategory(category: string): boolean {
+  switch (category.trim()) {
+    case 'write':
+    case 'tool_call':
+    case 'memory_save':
+    case 'fs_write':
+    case 'fs_mkdir':
+    case 'fs_delete':
+    case 'fs_move':
+    case 'fs_copy':
+    case 'automation_save':
+    case 'automation_create':
+    case 'automation_update':
+    case 'automation_delete':
+    case 'email_send':
+    case 'calendar_create':
+    case 'calendar_update':
+    case 'calendar_delete':
+      return true;
+    default:
+      return false;
+  }
 }
 
 function normalizePlannedStepKind(value: unknown): IntentGatewayPlannedStep['kind'] | null {

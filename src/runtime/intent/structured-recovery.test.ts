@@ -1020,6 +1020,85 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.requiresRepoGrounding).toBe(true);
   });
 
+  it('normalizes run-labeled read-only evidence plans to read/search semantics', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'complex_planning_task',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Check connector statuses, automations, and repo evidence.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Collect connector status and automation evidence.',
+          expectedToolCategories: ['vercel_status', 'whm_status', 'gws_status', 'm365_status', 'automation_list'],
+          required: true,
+        },
+        {
+          kind: 'search',
+          summary: 'Search the repo for implementation evidence.',
+          expectedToolCategories: ['repo_inspect'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Summarize the evidence.',
+          required: true,
+          dependsOn: ['step_1', 'step_2'],
+        },
+      ],
+    }, {
+      sourceContent: 'Check Vercel status, WHM status, Gmail auth/status, Microsoft calendar status, list my saved automations, and search this workspace for runLiveToolLoopController.',
+    });
+
+    expect(decision.operation).toBe('search');
+    expect(decision.provenance?.operation).toBe('derived.workload');
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.requiresRepoGrounding).toBe(true);
+  });
+
+  it('keeps explicit tool run decisions as run operations', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      toolName: 'whm_status',
+      summary: 'Run the WHM status tool.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Collect WHM status.',
+          expectedToolCategories: ['whm_status'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the status.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Run whm_status and tell me the result.',
+    });
+
+    expect(decision.operation).toBe('run');
+    expect(decision.provenance?.operation).not.toBe('derived.workload');
+  });
+
   it('routes automation evidence plus answer plans through tool-backed synthesis even when the classifier says direct', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'automation_control',
