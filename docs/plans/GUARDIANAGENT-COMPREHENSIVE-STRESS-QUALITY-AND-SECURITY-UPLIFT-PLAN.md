@@ -26,6 +26,8 @@ Completed and committed slices:
 - `fix(security): redact assistant security API evidence` — added backend redaction for Assistant Security findings, targets, runs, summaries, and scan results.
 - `fix(security): redact direct monitor API responses` — added backend redaction for direct network, Defender, host, gateway, posture, containment, and scan/check security monitoring responses.
 - `docs(security): document redacted monitoring details` — aligned `SECURITY.md`, `src/reference-guide.ts`, and the as-built security design with redacted raw-detail behavior.
+- `fix(web): centralize response redaction` — centralized web response redaction and extended it to audit, routing trace, and assistant run/timeline API boundaries.
+- `fix(logging): redact secret-shaped log fields` — added central structured-log redaction for error objects, stack text, and secret-shaped log fields.
 
 Proven in this pass:
 
@@ -37,7 +39,8 @@ Proven in this pass:
 - Code UI smoke passes: `node scripts/test-code-ui-smoke.mjs`.
 - Connector status-only harnesses are available for deterministic status checks, and the user confirmed Google and Microsoft manual Test Connection checks report authenticated successfully.
 - Manual Second Brain memory/routine checks showed the Kimi raw tool-call response issue was handled without regex/keyword routing; routing remains Intent Gateway/direct-dispatch based and the memory overview path can answer from tool evidence.
-- Security monitoring now has defense-in-depth redaction at both UI display and backend web API boundaries for security alerts, activity, Assistant Security, and direct monitoring surfaces.
+- Security monitoring now has defense-in-depth redaction at both UI display and backend web API boundaries for security alerts, activity, Assistant Security, direct monitoring, audit, routing trace, and assistant run/timeline surfaces.
+- Structured logging now redacts secret-shaped strings in logged error objects/stacks and sensitive keyed fields; the channel regression that emitted a secret-shaped config-update stack now prints `[REDACTED]`.
 
 Known caveats from the latest pass:
 

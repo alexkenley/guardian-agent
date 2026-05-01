@@ -839,7 +839,7 @@ The memory boundary is explicit:
 
 - raw security alerts stay in security-specific state
 - reviewed summaries may be promoted to memory separately
-- security monitoring API responses and raw Security page detail panes redact credential-like values before operator delivery
+- security monitoring API responses, audit/routing trace/run timeline web API responses, structured error logs, and raw Security page detail panes redact credential-like values before operator delivery or persistence in process logs
 
 ### Agentic Security Triage And Activity Logging
 
