@@ -30,6 +30,7 @@ Completed and committed slices:
 - `fix(logging): redact secret-shaped log fields` — added central structured-log redaction for error objects, stack text, and secret-shaped log fields.
 - `fix(routing): remove automation capability shortcut` — removed an existing content-matched automation-help shortcut so gateway-classified capability questions stay on the selected model path.
 - `fix(routing): remove tool inventory shortcut` — removed the adjacent content-matched tool-inventory shortcut so tool capability questions also stay on the gateway-selected model path.
+- `test(security): make llmmap harness portable` — made the LLMMap security harness resolve sibling repo/Python paths on Windows and use compact live defaults for reliable adversarial smoke runs.
 
 Proven in this pass:
 
@@ -44,6 +45,7 @@ Proven in this pass:
 - Security monitoring now has defense-in-depth redaction at both UI display and backend web API boundaries for security alerts, activity, Assistant Security, direct monitoring, audit, routing trace, and assistant run/timeline surfaces.
 - Structured logging now redacts secret-shaped strings in logged error objects/stacks and sensitive keyed fields; the channel regression that emitted a secret-shaped config-update stack now prints `[REDACTED]`.
 - Automation capability and tool inventory questions now have focused regression coverage proving they do not bypass the gateway-selected model with hard-coded content matching; `src/chat-agent.test.ts`, `npm run check`, `npm run build`, `node scripts/test-security-verification.mjs`, and `node scripts/test-cross-domain-orchestration-stress.mjs` pass for the slices.
+- `npm run test:llmmap` now completes on Windows with the local sibling LLMMap repo and `python`; the latest compact live run blocked the deterministic preflight injection, selected 1 prompt from 227, recorded 2 evidence items, and reported 0 findings.
 
 Known caveats from the latest pass:
 

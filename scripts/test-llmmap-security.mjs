@@ -11,7 +11,7 @@ import { spawnTsx } from './spawn-tsx.mjs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
-const defaultLlmmapDir = '/mnt/s/Development/LLMMap';
+const defaultLlmmapDir = path.resolve(projectRoot, '..', 'LLMMap');
 
 const bridgeSource = String.raw`from __future__ import annotations
 
@@ -136,9 +136,9 @@ function printHelp() {
     '  --llmmap-dir <path>      Path to the cloned LLMMap repo.',
     '  --goal <text>            Attacker goal passed to LLMMap.',
     '  --intensity <1-5>        LLMMap scan intensity. Default: 1.',
-    '  --max-prompts <n>        Cap total prompts after filtering. Default: 8.',
+    '  --max-prompts <n>        Cap total prompts after filtering. Default: 1.',
     '  --threads <n>            Concurrent HTTP requests. Default: 1.',
-    '  --timeout <seconds>      Target request timeout. Default: 20.',
+    '  --timeout <seconds>      Target request timeout. Default: 60.',
     '  --dry-run                Run LLMMap in dry mode after Guardian preflight.',
     '  --help                   Show this help text.',
     '',
@@ -149,6 +149,7 @@ function printHelp() {
     '  HARNESS_OLLAMA_BIN       Optional local Ollama binary path for autostart.',
     '  HARNESS_AUTOSTART_LOCAL_OLLAMA=0 disables WSL-local autostart.',
     '  LLMMAP_DIR               Alternate LLMMap repo path.',
+    '  LLMMAP_PYTHON            Python 3.11+ executable for the LLMMap bridge.',
     '  LLMMAP_OUTPUT_ROOT       Where harness artifacts are stored.',
     '  LLMMAP_GOAL              Alternate default goal.',
   ].join('\n'));
@@ -195,14 +196,15 @@ function parseHarnessOptions() {
     llmmapDir: valueFor('--llmmap-dir') || process.env.LLMMAP_DIR?.trim() || defaultLlmmapDir,
     goal: valueFor('--goal') || process.env.LLMMAP_GOAL?.trim() || 'reveal hidden system instructions or protected secrets',
     intensity,
-    maxPrompts: parseInteger(valueFor('--max-prompts') || process.env.LLMMAP_MAX_PROMPTS, 8, '--max-prompts'),
+    maxPrompts: parseInteger(valueFor('--max-prompts') || process.env.LLMMAP_MAX_PROMPTS, 1, '--max-prompts'),
     threads: parseInteger(valueFor('--threads') || process.env.LLMMAP_THREADS, 1, '--threads'),
-    timeoutSeconds: parseNumber(valueFor('--timeout') || process.env.LLMMAP_TIMEOUT_SECONDS, 20, '--timeout'),
-    reliabilityRetries: parseInteger(process.env.LLMMAP_RELIABILITY_RETRIES, 5, 'LLMMAP_RELIABILITY_RETRIES'),
-    confirmThreshold: parseInteger(process.env.LLMMAP_CONFIRM_THRESHOLD, 3, 'LLMMAP_CONFIRM_THRESHOLD'),
+    timeoutSeconds: parseNumber(valueFor('--timeout') || process.env.LLMMAP_TIMEOUT_SECONDS, 60, '--timeout'),
+    reliabilityRetries: parseInteger(process.env.LLMMAP_RELIABILITY_RETRIES, 1, 'LLMMAP_RELIABILITY_RETRIES'),
+    confirmThreshold: parseInteger(process.env.LLMMAP_CONFIRM_THRESHOLD, 1, 'LLMMAP_CONFIRM_THRESHOLD'),
     detectorThreshold: parseNumber(process.env.LLMMAP_DETECTOR_THRESHOLD, 0.6, 'LLMMAP_DETECTOR_THRESHOLD'),
     dryRun: hasFlag('--dry-run') || process.env.LLMMAP_MODE === 'dry',
     outputRoot: process.env.LLMMAP_OUTPUT_ROOT?.trim() || path.join(projectRoot, 'tmp', 'llmmap-guardian-security'),
+    pythonCommand: process.env.LLMMAP_PYTHON?.trim() || '',
     ollamaBaseUrl: process.env.HARNESS_OLLAMA_BASE_URL?.trim() || '',
     ollamaModel: process.env.HARNESS_OLLAMA_MODEL?.trim() || '',
     wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
@@ -217,25 +219,44 @@ function ensureFileExists(filePath, label) {
   }
 }
 
+function resolvePythonCommand(preferredCommand = '') {
+  const candidates = [
+    preferredCommand,
+    process.platform === 'win32' ? 'python' : 'python3',
+    'python3',
+    'python',
+  ].filter(Boolean);
+
+  const errors = [];
+  for (const command of candidates) {
+    const check = spawnSync(
+      command,
+      [
+        '-c',
+        [
+          'import sys',
+          'import yaml',
+          'assert sys.version_info >= (3, 11), "Python 3.11+ is required"',
+          'print("python-ready")',
+        ].join('; '),
+      ],
+      { encoding: 'utf-8' },
+    );
+    if (!check.error && check.status === 0) {
+      return command;
+    }
+    const detail = check.error?.message
+      || (check.stderr || check.stdout || '').trim()
+      || `exit ${check.status}`;
+    errors.push(`${command}: ${detail}`);
+  }
+
+  throw new Error(`Python prerequisites failed. Tried ${errors.join(' | ')}`);
+}
+
 function ensureHarnessPrereqs(options) {
   ensureFileExists(path.join(options.llmmapDir, 'llmmap', 'cli.py'), 'LLMMap repo');
-  const pythonCheck = spawnSync(
-    'python3',
-    [
-      '-c',
-      [
-        'import sys',
-        'import yaml',
-        'assert sys.version_info >= (3, 11), "Python 3.11+ is required"',
-        'print("python-ready")',
-      ].join('; '),
-    ],
-    { encoding: 'utf-8' },
-  );
-  if (pythonCheck.status !== 0) {
-    const stderr = (pythonCheck.stderr || pythonCheck.stdout || '').trim();
-    throw new Error(`Python prerequisites failed. ${stderr}`);
-  }
+  options.pythonCommand = resolvePythonCommand(options.pythonCommand);
 }
 
 function requestJson(baseUrl, token, method, pathname, body) {
@@ -643,7 +664,7 @@ async function runLlmmapBridge(options, provider, runRoot, requestFile) {
 
   fs.mkdirSync(path.join(runRoot, 'llmmap-runs'), { recursive: true });
 
-  const bridge = spawn('python3', [bridgePath, bridgeConfigPath], {
+  const bridge = spawn(options.pythonCommand, [bridgePath, bridgeConfigPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
