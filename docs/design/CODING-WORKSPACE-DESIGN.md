@@ -628,6 +628,7 @@ As built:
 - output is streamed over SSE
 - terminals use `xterm.js`
 - multiple panes are supported
+- normal printable key input, including a single spacebar press, is forwarded by `xterm.js` data events only; the DOM text-input bridge is a fallback for paste, composition, replacement/drop, control whitespace such as enter/tab, and larger inserted text so it must not duplicate ordinary spacebar input
 
 Important boundary:
 

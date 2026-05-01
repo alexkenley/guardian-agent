@@ -1956,8 +1956,7 @@ function shouldBridgeTerminalTextInput(event, text = '') {
   if (!candidate) return false;
   if (isClipboardPasteSentinel(candidate)) return true;
   if (/[\r\n\t]/.test(candidate)) return true;
-  if (/\s/.test(candidate)) return true;
-  return candidate.length > 1;
+  return candidate.length >= 4;
 }
 
 async function forwardTerminalInsertedText(event, tab, text = '') {

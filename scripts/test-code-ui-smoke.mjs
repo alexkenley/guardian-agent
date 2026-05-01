@@ -1032,6 +1032,51 @@ guardian:
     });
     await page.waitForSelector('.code-terminal__viewport .xterm');
 
+    const terminalSingleSpaceBridgeState = await page.evaluate(async () => {
+      const helper = document.querySelector('.code-terminal__viewport textarea');
+      if (!(helper instanceof HTMLTextAreaElement)) {
+        throw new Error('Terminal helper textarea not found');
+      }
+      const { api } = await import('/js/api.js');
+      const originalInput = api.codeTerminalInput;
+      const calls = [];
+      api.codeTerminalInput = (terminalId, payload) => {
+        calls.push({ terminalId, input: payload?.input || '' });
+        return Promise.resolve({ success: true });
+      };
+      try {
+        helper.focus();
+        helper.value = ' ';
+        const beforeInput = new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          data: ' ',
+          inputType: 'insertText',
+        });
+        const input = new InputEvent('input', {
+          bubbles: true,
+          cancelable: true,
+          data: ' ',
+          inputType: 'insertText',
+        });
+        helper.dispatchEvent(beforeInput);
+        helper.dispatchEvent(input);
+      } finally {
+        helper.value = '';
+        api.codeTerminalInput = originalInput;
+      }
+      return {
+        callCount: calls.length,
+        inputs: calls.map((call) => call.input),
+        singleSpaceCount: calls.filter((call) => call.input === ' ').length,
+      };
+    });
+    assert.equal(
+      terminalSingleSpaceBridgeState.singleSpaceCount,
+      1,
+      `Terminal beforeinput/input fallback must not duplicate a single space; observed inputs: ${JSON.stringify(terminalSingleSpaceBridgeState.inputs)}`,
+    );
+
     const terminalPasteToken = 'WISPR_FLOW_PASTE_SMOKE';
     await page.evaluate((token) => {
       const helper = document.querySelector('.code-terminal__viewport textarea');
