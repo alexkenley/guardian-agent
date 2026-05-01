@@ -13,6 +13,7 @@
  */
 
 import pino from 'pino';
+import { redactLogValue } from './log-redaction.js';
 
 type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
 
@@ -56,6 +57,17 @@ function buildTransport(): pino.TransportSingleOptions | undefined {
 export const logger = pino({
   level: normalizeLogLevel(process.env['LOG_LEVEL'], defaultLogLevel()),
   transport: buildTransport(),
+  serializers: {
+    err: (err) => redactLogValue(err),
+  },
+  formatters: {
+    log(object) {
+      const redacted = redactLogValue(object);
+      return redacted && typeof redacted === 'object' && !Array.isArray(redacted)
+        ? redacted as Record<string, unknown>
+        : { value: redacted };
+    },
+  },
 });
 
 /** Create a child logger with component context. */

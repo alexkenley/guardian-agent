@@ -3,6 +3,7 @@ import {
   hashObjectSha256Hex,
   hashRedactedObject,
   isSensitiveKeyName,
+  redactSensitiveText,
   redactSensitiveValue,
   stableStringify,
   timingSafeEqualString,
@@ -49,5 +50,9 @@ describe('crypto-guardrails', () => {
     expect(timingSafeEqualString('abc123', 'abc123')).toBe(true);
     expect(timingSafeEqualString('abc123', 'abc124')).toBe(false);
     expect(timingSafeEqualString('abc123', 'abc1234')).toBe(false);
+  });
+
+  it('redacts generated secret token labels in text', () => {
+    expect(redactSensitiveText('stack trace detail: secret-token-123456')).toBe('stack trace detail: [REDACTED]');
   });
 });
