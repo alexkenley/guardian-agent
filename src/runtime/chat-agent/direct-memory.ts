@@ -12,11 +12,17 @@ import {
 import { deriveAnswerConstraints } from '../intent/request-patterns.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { ToolExecutor } from '../../tools/executor.js';
+import type { ContentTrustLevel } from '../../tools/types.js';
 import { buildPendingApprovalMetadata } from '../pending-approval-copy.js';
 import type { PendingActionRecord } from '../pending-actions.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 type MemoryResponse = string | { content: string; metadata?: Record<string, unknown> } | null;
+type MemorySaveSecurityContext = {
+  contentTrustLevel?: ContentTrustLevel;
+  taintReasons?: string[];
+  derivedFromTaintedContent?: boolean;
+};
 
 function formatDirectMemorySearchResponse(
   output: unknown,
@@ -199,12 +205,14 @@ export async function tryDirectMemorySave(input: {
     result: PendingActionSetResult,
     fallbackContent: string,
   ) => { content: string; metadata?: Record<string, unknown> };
+  sourceMessage?: UserMessage;
 }): Promise<MemoryResponse> {
   if (!input.tools?.isEnabled()) return null;
 
   const intent = parseDirectMemorySaveRequest(stripLeadingContextPrefix(input.message.content))
     ?? parseDirectMemorySaveRequest(stripLeadingContextPrefix(input.originalUserContent ?? ''));
   if (!intent) return null;
+  const securityContext = readMemorySaveSecurityContext(input.message, input.sourceMessage);
 
   const toolResult = await input.tools.executeModelTool(
     'memory_save',
@@ -225,6 +233,7 @@ export async function tryDirectMemorySave(input: {
       allowModelMemoryMutation: true,
       bypassApprovals: true,
       agentContext: { checkAction: input.ctx.checkAction },
+      ...securityContext,
       ...(input.codeContext?.workspaceRoot ? {
         codeContext: {
           workspaceRoot: input.codeContext.workspaceRoot,
@@ -287,7 +296,7 @@ export async function tryDirectMemorySave(input: {
   if (strictAcknowledgement) {
     return strictAcknowledgement;
   }
-  return `I saved that to ${savedScope}.`;
+  return formatDirectMemorySaveAcknowledgement(output, savedScope, strictAcknowledgement);
 }
 
 export async function tryDirectMemoryRead(input: {
@@ -382,4 +391,74 @@ function readStrictReplyOnlyDirective(content: string | undefined): string | nul
   );
   const value = match?.[1]?.trim();
   return value || null;
+}
+
+function formatDirectMemorySaveAcknowledgement(
+  output: Record<string, unknown>,
+  savedScope: string,
+  strictAcknowledgement: string | null,
+): string {
+  const status = toString(output.status).trim().toLowerCase();
+  const trustLevel = toString(output.trustLevel).trim().toLowerCase();
+  if (status === 'quarantined' || trustLevel === 'quarantined' || trustLevel === 'untrusted') {
+    return `I quarantined that ${savedScope} entry for review instead of making it active.`;
+  }
+  if (strictAcknowledgement) {
+    return strictAcknowledgement;
+  }
+  return `I saved that to ${savedScope}.`;
+}
+
+function readMemorySaveSecurityContext(
+  message: UserMessage,
+  sourceMessage?: UserMessage,
+): MemorySaveSecurityContext {
+  const sources = [sourceMessage?.metadata, message.metadata].filter(isRecord);
+  let contentTrustLevel: ContentTrustLevel | undefined;
+  const taintReasons = new Set<string>();
+  let derivedFromTaintedContent = false;
+
+  for (const source of sources) {
+    const candidates = [
+      source,
+      isRecord(source.security) ? source.security : null,
+      isRecord(source.contentSecurity) ? source.contentSecurity : null,
+    ].filter(isRecord);
+    for (const candidate of candidates) {
+      const trust = normalizeContentTrustLevel(candidate.contentTrustLevel);
+      contentTrustLevel = mergeContentTrustLevel(contentTrustLevel, trust);
+      if (candidate.derivedFromTaintedContent === true) {
+        derivedFromTaintedContent = true;
+      }
+      if (Array.isArray(candidate.taintReasons)) {
+        for (const reason of candidate.taintReasons) {
+          const normalized = typeof reason === 'string' ? reason.trim() : '';
+          if (normalized) taintReasons.add(normalized);
+        }
+      }
+    }
+  }
+
+  return {
+    ...(contentTrustLevel ? { contentTrustLevel } : {}),
+    ...(taintReasons.size > 0 ? { taintReasons: [...taintReasons] } : {}),
+    ...(derivedFromTaintedContent ? { derivedFromTaintedContent: true } : {}),
+  };
+}
+
+function normalizeContentTrustLevel(value: unknown): ContentTrustLevel | undefined {
+  return value === 'trusted' || value === 'low_trust' || value === 'quarantined'
+    ? value
+    : undefined;
+}
+
+function mergeContentTrustLevel(
+  current: ContentTrustLevel | undefined,
+  next: ContentTrustLevel | undefined,
+): ContentTrustLevel | undefined {
+  if (!next) return current;
+  if (!current) return next;
+  if (current === 'quarantined' || next === 'quarantined') return 'quarantined';
+  if (current === 'low_trust' || next === 'low_trust') return 'low_trust';
+  return 'trusted';
 }

@@ -306,6 +306,7 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       userKey: input.userKey,
       codeContext: input.codeContext,
       originalUserContent: input.message.content,
+      sourceMessage: input.message,
       getPendingApprovals: input.runtimeDeps.getPendingApprovals,
       setApprovalFollowUp: input.runtimeDeps.setApprovalFollowUp,
       formatPendingApprovalPrompt: input.runtimeDeps.formatPendingApprovalPrompt,
