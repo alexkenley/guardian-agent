@@ -20,6 +20,22 @@
   <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram-2496ED?style=for-the-badge" alt="Multi-Channel"/>
 </p>
 
+## Table of Contents
+
+- [Product Overview](#product-overview)
+- [Core Capabilities](#core-capabilities)
+- [Repository Status](#repository-status)
+- [Project Layout](#project-layout)
+- [Documentation](#documentation)
+- [Security at a Glance](#security-at-a-glance)
+- [Getting Started](#getting-started)
+- [LLM Providers](#llm-providers)
+- [Configuration](#configuration)
+- [Development and Verification](#development-and-verification)
+- [Contributing](#contributing)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
 ## Product Overview
 
 ### Second Brain
@@ -35,8 +51,8 @@ Second Brain (`#/`) is the default web home.
 - Further reading: [Second Brain As-Built Design](docs/design/SECOND-BRAIN-AS-BUILT.md)
 
 <p align="center">
-  <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134400.png">
-    <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134400.png" alt="GuardianAgent Second Brain Today view" width="100%"/>
+  <a href="docs/images/secondbrain/today-2026-05-01.png">
+    <img src="docs/images/secondbrain/today-2026-05-01.png" alt="GuardianAgent Second Brain Today view" width="100%"/>
   </a>
 </p>
 
@@ -47,8 +63,8 @@ Second Brain (`#/`) is the default web home.
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="docs/images/secondbrain/Screenshot%202026-04-08%20134425.png">
-        <img src="docs/images/secondbrain/Screenshot%202026-04-08%20134425.png" alt="GuardianAgent Second Brain Calendar view" width="100%"/>
+      <a href="docs/images/secondbrain/calendar-2026-05-01.png">
+        <img src="docs/images/secondbrain/calendar-2026-05-01.png" alt="GuardianAgent Second Brain Calendar view" width="100%"/>
       </a>
       <br/>
       <strong>Calendar</strong>
@@ -138,15 +154,15 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
     </tr>
     <tr>
       <td align="center" width="50%">
-        <a href="docs/images/configuration.png">
-          <img src="docs/images/configuration.png" alt="GuardianAgent configuration view" width="100%"/>
+        <a href="docs/images/configuration-providers-2026-05-01.png">
+          <img src="docs/images/configuration-providers-2026-05-01.png" alt="GuardianAgent configuration provider routing view" width="100%"/>
         </a>
         <br/>
-        <strong>Configuration</strong>
+        <strong>Configuration / Providers</strong>
       </td>
       <td align="center" width="50%">
-        <a href="docs/images/Coding-assistant-gruvbox.png">
-          <img src="docs/images/Coding-assistant-gruvbox.png" alt="GuardianAgent coding workspace view" width="100%"/>
+        <a href="docs/images/coding-workspace-2026-05-01.png">
+          <img src="docs/images/coding-workspace-2026-05-01.png" alt="GuardianAgent coding workspace view" width="100%"/>
         </a>
         <br/>
         <strong>Coding Workspace</strong>
@@ -175,25 +191,63 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
 - Search, integrations, and workflow automation without collapsing everything into raw shell access
 - Specs and architecture docs for the deeper implementation detail when you need it
 
-## Project Structure
+## Repository Status
 
-- `src/` — core application runtime, orchestration, tools, channels, prompts, and memory systems
-- `web/public/` — dashboard UI, chat panel, code workspace UI, and browser-side assets
-- `scripts/` — setup helpers, test harnesses, and verification scripts
-- `docs/` — architecture notes, specs, guides, research, and supporting documentation
-- `docs/plans/` — active implementation roadmaps and status trackers
-- `docs/implemented/` and `docs/archive/` — historical proposals and completed plans
-- `policies/` — rule and policy files
-- `native/windows-helper/` — Windows native helper components
+GuardianAgent is a security-focused local-first assistant runtime with several mature product surfaces and several actively evolving control-plane areas.
 
-## Development Commands
+| Area | Status |
+|------|--------|
+| Second Brain, Coding Workspace, Security dashboard, Configuration Center | Actively implemented product surfaces |
+| Web, CLI, and Telegram channels | Supported first-party channels |
+| Local, managed-cloud, and frontier LLM providers | Supported through configurable provider profiles |
+| Brokered worker isolation, approvals, output scanning, audit trail | Core runtime security model |
+| Some cloud, hosted, federation, and enterprise proposals | Design-stage or roadmap material under `docs/proposals/` and `docs/plans/` |
 
-- `npm run dev` — start GuardianAgent in development mode
-- `npm run build` — compile TypeScript into `dist/`
-- `npm run check` — run TypeScript checking without emitting output
-- `npm test` — run the Vitest suite
-- `node scripts/test-code-ui-smoke.mjs` — run the web/code UI smoke harness
-- `node scripts/test-coding-assistant.mjs` — run the coding workspace smoke harness
+Historical proposals that have shipped live in `docs/implemented/`. Completed one-time plans live in `docs/archive/`. Active specifications live primarily in `docs/design/` and `docs/architecture/`.
+
+## Project Layout
+
+```text
+GuardianAgent/
+├─ src/                    TypeScript runtime, channels, tools, prompts, memory, and orchestration
+│  ├─ channels/            Web, CLI, Telegram, and runtime route adapters
+│  ├─ runtime/             Intent gateway, orchestration, code sessions, memory, security, automations
+│  ├─ tools/               Built-in tools, executor, registry, MCP client, and tool policy surfaces
+│  ├─ llm/                 Provider clients, routing, failover, and guarded LLM access
+│  ├─ guardian/            Admission, policy, output, and audit security controls
+│  └─ search/              Local and provider-backed search integration
+├─ web/public/             Browser UI, page modules, chat panel, styles, assets, and vendored UI code
+├─ scripts/                Setup scripts, smoke tests, integration harnesses, and packaging helpers
+├─ docs/
+│  ├─ architecture/        Current architecture and module-boundary guidance
+│  ├─ design/              Current product and runtime specifications
+│  ├─ guides/              Operator and contributor guides
+│  ├─ plans/               Active implementation plans
+│  ├─ proposals/           Unshipped or partially scoped future proposals
+│  ├─ implemented/         Historical proposals whose core scope has shipped
+│  └─ archive/             Retired designs and completed plans
+├─ policies/               Security and runtime policy files
+├─ skills/                 Bundled skill instructions and workflows
+├─ native/windows-helper/  Rust helper for Windows-native host integration and isolation support
+└─ build/                  Generated packaging artifacts
+```
+
+## Documentation
+
+Start with these documents instead of browsing every file under `docs/`:
+
+| Topic | Document |
+|-------|----------|
+| Architecture overview | [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) |
+| Forward module boundaries | [docs/architecture/FORWARD-ARCHITECTURE.md](docs/architecture/FORWARD-ARCHITECTURE.md) |
+| Security model | [SECURITY.md](SECURITY.md) |
+| Web UI information architecture | [docs/design/WEBUI-DESIGN.md](docs/design/WEBUI-DESIGN.md) |
+| Second Brain product surface | [docs/design/SECOND-BRAIN-AS-BUILT.md](docs/design/SECOND-BRAIN-AS-BUILT.md) |
+| Coding workspace | [docs/design/CODING-WORKSPACE-DESIGN.md](docs/design/CODING-WORKSPACE-DESIGN.md) |
+| Tools control plane | [docs/design/TOOLS-CONTROL-PLANE-DESIGN.md](docs/design/TOOLS-CONTROL-PLANE-DESIGN.md) |
+| Capability authoring | [docs/guides/CAPABILITY-AUTHORING-GUIDE.md](docs/guides/CAPABILITY-AUTHORING-GUIDE.md) |
+| Integration testing | [docs/guides/INTEGRATION-TEST-HARNESS.md](docs/guides/INTEGRATION-TEST-HARNESS.md) |
+| Installation and packaging | [INSTALLATION.md](INSTALLATION.md) |
 
 ## Security at a Glance
 
@@ -224,7 +278,7 @@ For the full security architecture, threat model, and configuration details, see
 
 SQLite-backed persistence and monitoring are enabled when the Node build includes `node:sqlite`. Otherwise, assistant memory and analytics run in-memory automatically.
 
-### Install & Start
+### Quick Start
 
 Clone the repository and use the platform start script:
 
@@ -239,6 +293,15 @@ bash scripts/start-dev-unix.sh
 ```
 
 These scripts handle dependency installation, build, startup, and the initial configuration bootstrap.
+
+For a manual development loop:
+
+```bash
+npm install
+npm run check
+npm test
+npm run dev
+```
 
 ### First Run
 
@@ -357,20 +420,7 @@ For detailed configuration documentation:
 
 ---
 
-## Further Reading
-
-- [SECURITY.md](SECURITY.md) for the security model and trust boundaries
-- [WebUI Design](docs/design/WEBUI-DESIGN.md) for page ownership and product-surface design
-- [Second Brain As-Built Design](docs/design/SECOND-BRAIN-AS-BUILT.md) for the daily-home experience
-- [Performance Management Spec](docs/design/PERFORMANCE-MANAGEMENT-DESIGN.md) for workstation operations
-- [Coding Workspace Spec](docs/design/CODING-WORKSPACE-DESIGN.md) for the repo-scoped coding surface
-- [Automation Framework Spec](docs/design/AUTOMATION-FRAMEWORK-DESIGN.md) for saved and scheduled automation behavior
-- [Configuration Center Spec](docs/design/CONFIG-CENTER-DESIGN.md) for setup, integrations, and policy controls
-- [docs/](docs/) for the full architecture, specs, guides, proposals, and research set
-
----
-
-## Development
+## Development and Verification
 
 ```bash
 npm test                              # Run all tests (vitest)
@@ -383,7 +433,38 @@ npm run build         # TypeScript compilation → dist/
 npm run dev           # Run with tsx (starts CLI channel)
 ```
 
-For local development, packaging, and platform-specific setup, use the scripts in `scripts/` and the architecture/spec documentation linked above.
+Focused harnesses for common regression surfaces:
+
+```bash
+node scripts/test-coding-assistant.mjs
+node scripts/test-code-ui-smoke.mjs
+node scripts/test-contextual-security-uplifts.mjs
+node scripts/test-security-verification.mjs
+```
+
+Use focused Vitest runs during iteration, then run the broader relevant harness before handing off changes that touch routing, approvals, coding, security, web UI, providers, or startup behavior. The integration testing guide has the full matrix: [docs/guides/INTEGRATION-TEST-HARNESS.md](docs/guides/INTEGRATION-TEST-HARNESS.md).
+
+## Contributing
+
+This repository is structured for architecture-sensitive changes. Before changing a subsystem, read the owning design document and keep implementation, tests, and docs in sync.
+
+- Keep code in the existing TypeScript style: strict ESM, 2-space indentation, semicolons, single quotes, and explicit `.js` extensions in relative imports.
+- Add or update colocated `*.test.ts` coverage for behavior changes.
+- Run `npm run check` and the relevant Vitest or harness commands before opening a PR.
+- Update `src/reference-guide.ts` for user/operator-facing workflow changes.
+- Update the relevant `docs/design/`, `docs/architecture/`, or guide document when changing architecture, routes, tool behavior, security boundaries, or web surfaces.
+- Do not commit secrets, local credentials, generated runtime state from `~/.guardianagent/`, or scratch output from `tmp/`.
+
+## Troubleshooting
+
+| Symptom | First Checks |
+|---------|--------------|
+| Web UI does not load | Confirm the dev script is still running, check the configured port, and look for startup errors in the terminal. |
+| Provider calls fail | Recheck the provider profile in `Configuration > AI Providers`, API key or credential ref, model name, and network access. |
+| Local Ollama model is unavailable | Confirm `ollama serve` is running and the configured model is pulled locally. |
+| Web API returns unauthorized | Configure or rotate web auth in `Configuration > Integration System > Web Authentication` or through CLI `/auth ...`. |
+| Tool execution is blocked | Review the pending approval, sandbox mode, allowed paths, allowed commands, and tool policy in Configuration. |
+| Coding Workspace cannot access files | Confirm the active code session points at the intended workspace and that the request is bound to that session. |
 
 ---
 

@@ -505,8 +505,8 @@ The brokered chat worker is also launched through the managed sandbox layer with
 
 Guardian treats Layer 1.5 as a capability-driven execution boundary, not as a single sandbox implementation.
 
-- **Intelligent Routing Heuristics:** Guardian analyzes your project (e.g., detecting `Makefile`, `go.mod`, `node-pty`) to automatically select the most compatible backend. It prioritize **Daytona** for complex builds requiring a full OS environment and **Vercel** for fast, stateless burst tasks.
-- **Language-Agnostic Fingerprinting:** The system works out behavioral equivalence for Python, Go, Rust, and C/C++ projects by scanning for build manifests and native dependencies, ensuring the "Build Essential" tier is used where appropriate.
+- **Provider-neutral target selection:** Guardian can use Vercel, Daytona, or both through the same remote-execution service. It first reuses a compatible managed sandbox for the current code session, then honors a configured default target, then falls back to the first ready target in deterministic config order.
+- **Operator-facing provider guidance:** Guardian surfaces practical tradeoffs such as Vercel being a faster fit for short bounded isolated runs and Daytona being a stronger fit for reusable long-running workspaces. Those tradeoffs are guidance, not a hidden provider-specific routing fork.
 - **Manual Lifecycle Control & Visibility:** Persistent sandboxes can be manually **Stopped** or **Started** from the web UI to optimize cloud resource usage. Real-time status badges (**RUNNING**, **STOPPED**, **UNREACHABLE**) provide visibility into the active state of remote environments.
 - **Brokered worker isolation** for the built-in chat/planner loop.
 - local process sandboxing for managed child processes
