@@ -340,6 +340,15 @@ export function normalizeIntentGatewayDecision(
     route,
     operation,
     personalItemType: entityResolution.entities.personalItemType,
+    configuredSearchSources: repairContext?.configuredSearchSources,
+  });
+  const searchSurfaceClarification = buildSearchSurfaceClarification({
+    route,
+    confidence,
+    operation,
+    resolution: effectiveResolution,
+    plannedSteps: effectivePlannedSteps,
+    configuredSearchSources: repairContext?.configuredSearchSources,
   });
   const plannedStepsRequireRepoGrounding = !directSecurityRefusal
     && planRequiresRepoGrounding(effectivePlannedSteps);
@@ -410,6 +419,13 @@ export function normalizeIntentGatewayDecision(
     : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
       ? derivedWorkload.simpleVsComplex
       : simpleVsComplex;
+  const finalResolution = searchSurfaceClarification
+    ? 'needs_clarification' as const
+    : effectiveResolution;
+  const finalMissingFields = searchSurfaceClarification
+    ? [...new Set([...effectiveMissingFields, 'search_surface'])]
+    : effectiveMissingFields;
+  const finalSummary = searchSurfaceClarification?.prompt ?? summary;
   const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
   const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
   const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
@@ -505,10 +521,10 @@ export function normalizeIntentGatewayDecision(
     route: effectiveRoute,
     confidence,
     operation: effectiveOperation,
-    summary,
+    summary: finalSummary,
     turnRelation,
-    resolution: effectiveResolution,
-    missingFields: effectiveMissingFields,
+    resolution: finalResolution,
+    missingFields: finalMissingFields,
     executionClass: effectiveExecutionClass,
     preferredTier: effectivePreferredTier,
     requiresRepoGrounding: effectiveRequiresRepoGrounding,
@@ -775,6 +791,7 @@ function normalizePlannedStepsForDecision(
     route: IntentGatewayDecision['route'];
     operation: IntentGatewayDecision['operation'];
     personalItemType?: IntentGatewayDecision['entities']['personalItemType'];
+    configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
   },
 ): IntentGatewayPlannedStep[] {
   if (
@@ -891,7 +908,7 @@ function isWebReadDecision(decision: {
   route: IntentGatewayDecision['route'];
   operation: IntentGatewayDecision['operation'];
 }): boolean {
-  return (decision.route === 'browser_task' || decision.route === 'search_task')
+  return decision.route === 'browser_task'
     && (
       decision.operation === 'read'
       || decision.operation === 'inspect'
@@ -964,6 +981,43 @@ function isToolBackedEvidenceCategory(category: string): boolean {
     || isWebEvidenceCategory(normalized)
     || normalized === 'second_brain'
     || normalized.startsWith('second_brain_');
+}
+
+function buildSearchSurfaceClarification(input: {
+  route: IntentGatewayDecision['route'];
+  confidence: IntentGatewayDecision['confidence'];
+  operation: IntentGatewayDecision['operation'];
+  resolution: IntentGatewayDecision['resolution'];
+  plannedSteps: IntentGatewayPlannedStep[];
+  configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
+}): { prompt: string } | null {
+  if (input.route !== 'search_task' || input.resolution !== 'ready') {
+    return null;
+  }
+  const hasIndexedSource = input.configuredSearchSources?.some((source) => (
+    source.enabled && source.indexedSearchAvailable
+  )) === true;
+  if (!hasIndexedSource) {
+    return null;
+  }
+  if (hasConcreteSearchSurface(input.plannedSteps)) {
+    return null;
+  }
+  if (input.confidence !== 'low' && input.operation !== 'unknown' && input.plannedSteps.length > 0) {
+    return null;
+  }
+  return {
+    prompt: 'Which search surface should I use: the configured document search source, the current workspace/repo files, or web search?',
+  };
+}
+
+function hasConcreteSearchSurface(steps: IntentGatewayPlannedStep[]): boolean {
+  return steps.some((step) => step.expectedToolCategories?.some((category) => {
+    const normalized = category.trim();
+    return isDocumentSearchEvidenceCategory(normalized)
+      || isWebEvidenceCategory(normalized)
+      || isRepoEvidenceCategory(normalized);
+  }) === true);
 }
 
 function isAutomationToolCategory(category: string): boolean {

@@ -884,7 +884,9 @@ function inferSearchToolCategories(
     return ['second_brain'];
   }
   if (contract.route === 'browser_task' || contract.route === 'search_task') {
-    return ['web_search', 'doc_search', 'doc_search_list', 'fs_search', 'code_symbol_search'];
+    return contract.route === 'search_task'
+      ? ['web_search', 'doc_search', 'doc_search_list']
+      : ['web_search', 'doc_search', 'doc_search_list', 'fs_search', 'code_symbol_search'];
   }
   return ['fs_search', 'code_symbol_search'];
 }
@@ -909,7 +911,9 @@ function inferReadToolCategories(
     return ['second_brain'];
   }
   if (contract.route === 'browser_task' || contract.route === 'search_task') {
-    return ['web_fetch', 'doc_search_status', 'doc_search_list', 'fs_read', 'fs_list'];
+    return contract.route === 'search_task'
+      ? ['web_fetch', 'doc_search_status', 'doc_search_list']
+      : ['web_fetch', 'doc_search_status', 'doc_search_list', 'fs_read', 'fs_list'];
   }
   return ['fs_read', 'fs_list'];
 }
@@ -1063,13 +1067,21 @@ function inferWriteToolCategories(
 
 function inferStepKindFromToolName(toolName: string): PlannedStepKind {
   if (toolName === 'memory_save') return 'memory_save';
-  if (toolName === 'find_tools' || toolName === 'fs_search' || toolName === 'web_search' || toolName === 'code_symbol_search') {
+  if (
+    toolName === 'find_tools'
+    || toolName === 'fs_search'
+    || toolName === 'web_search'
+    || toolName === 'code_symbol_search'
+    || toolName === 'doc_search'
+    || toolName === 'doc_search_list'
+  ) {
     return 'search';
   }
   if (
     toolName === 'fs_read'
     || toolName === 'fs_list'
     || toolName === 'web_fetch'
+    || toolName === 'doc_search_status'
     || BROWSER_READ_TOOL_NAMES.has(toolName)
     || MEMORY_READ_TOOL_NAMES.has(toolName)
     || toolName === 'automation_list'

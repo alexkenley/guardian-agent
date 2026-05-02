@@ -250,6 +250,87 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('asks for a search-surface clarification when search routing is ambiguous and indexed sources exist', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Search for JSON files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    }, {
+      sourceContent: 'Search documents for any JSON files and list them out',
+      configuredSearchSources: [
+        {
+          id: 'data-sources',
+          name: 'Data Sources',
+          type: 'directory',
+          enabled: true,
+          indexedSearchAvailable: true,
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.json_fallback',
+    });
+
+    expect(decision.route).toBe('search_task');
+    expect(decision.resolution).toBe('needs_clarification');
+    expect(decision.missingFields).toContain('search_surface');
+    expect(decision.summary).toContain('configured document search source');
+  });
+
+  it('keeps concrete document-search plans ready when indexed sources exist', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'List indexed JSON document files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'search',
+          summary: 'List indexed JSON document files.',
+          expectedToolCategories: ['doc_search_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return the indexed JSON file paths.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Search documents for any JSON files and list them out',
+      configuredSearchSources: [
+        {
+          id: 'data-sources',
+          name: 'Data Sources',
+          type: 'directory',
+          enabled: true,
+          indexedSearchAvailable: true,
+        },
+      ],
+    });
+
+    expect(decision.resolution).toBe('ready');
+    expect(decision.plannedSteps?.[0]?.expectedToolCategories).toEqual(['doc_search_list']);
+  });
+
   it('preserves mixed automation creation and control plans as automation authoring', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'automation_authoring',

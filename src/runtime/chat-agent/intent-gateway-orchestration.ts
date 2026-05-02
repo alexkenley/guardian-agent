@@ -265,6 +265,25 @@ export function buildGatewayClarificationResponse(
   if (decision.resolution === 'needs_clarification') {
     const prompt = sanitizePendingActionPrompt(decision.summary, 'clarification');
     const clarificationField = resolveSingleClarificationField(missingFields);
+    const options = clarificationField === 'search_surface'
+      ? [
+          {
+            value: 'configured_documents',
+            label: 'Configured document search source',
+            description: 'Search the indexed document sources configured in Search Providers.',
+          },
+          {
+            value: 'workspace',
+            label: 'Current workspace/repo files',
+            description: 'Search files in the current coding workspace or repository.',
+          },
+          {
+            value: 'web',
+            label: 'Web search',
+            description: 'Search the web instead of local indexed sources.',
+          },
+        ]
+      : undefined;
     const pendingActionResult = deps.setClarificationPendingAction(
       input.surfaceUserId,
       input.surfaceChannel,
@@ -282,6 +301,7 @@ export function buildGatewayClarificationResponse(
         missingFields: decision.missingFields,
         provenance: decision.provenance,
         entities: deps.toPendingActionEntities(decision.entities),
+        ...(options ? { options } : {}),
       },
     );
     const responseContent = pendingActionResult.collisionPrompt ?? prompt;

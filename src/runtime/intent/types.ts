@@ -241,6 +241,7 @@ export interface IntentGatewayRepairContext {
   sourceContent?: string;
   pendingAction?: IntentGatewayInput['pendingAction'] | null;
   continuity?: IntentGatewayInput['continuity'] | null;
+  configuredSearchSources?: IntentGatewayInput['configuredSearchSources'];
 }
 
 export type IntentGatewayPromptProfile = 'compact' | 'full';

@@ -296,6 +296,44 @@ describe('task plan receipt accounting', () => {
     })).toBe('step_3');
   });
 
+  it('does not satisfy search-task document/web fallback steps with workspace file search', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'search_task',
+      operation: 'search',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the requested external or indexed document source.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Answer from the collected search evidence.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      kind: 'general_answer',
+      route: 'search_task',
+      operation: 'search',
+      summary: 'Search and answer from the requested source.',
+    });
+
+    expect(plannedTask.steps[0]?.expectedToolCategories).not.toContain('fs_search');
+    expect(plannedTask.steps[0]?.expectedToolCategories).not.toContain('code_symbol_search');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'fs_search',
+      args: { pattern: '*.json' },
+    })).toBeUndefined();
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'doc_search',
+      args: { query: 'json files' },
+    })).toBe('step_1');
+  });
+
   it('infers multiple connector status categories from a mixed status read step', () => {
     const plannedTask = buildPlannedTask({
       route: 'complex_planning_task',

@@ -258,6 +258,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'An active pending action does not automatically make the next turn a follow_up, clarification_answer, or correction.',
   'If the user is clearly asking for a different task, classify it as turnRelation=new_request and route it on its own merits, even when a pending action exists.',
   'Only use pending action context when the current turn is clearly resolving, continuing, correcting, approving, denying, switching, or clarifying that same blocked request.',
+  'If the pending action field is search_surface and the user selects or names one of its options, classify turnRelation=clarification_answer, keep the pending route/operation, set resolution=ready, and use concrete planned_steps for the selected surface.',
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'When the request is a concrete sequence of actions, emit planned_steps with one entry per required action in order.',
@@ -643,6 +644,7 @@ export async function classifyIntentGatewayPass(
       sourceContent: input.content,
       pendingAction: input.pendingAction,
       continuity: input.continuity,
+      configuredSearchSources: input.configuredSearchSources,
     }, {
       mode: options.mode,
     });
