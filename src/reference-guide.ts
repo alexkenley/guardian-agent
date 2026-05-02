@@ -103,7 +103,9 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Open `#/config` to verify your AI connection, web access settings, and enabled channels.',
                   'Open Configuration > Second Brain when you want to change assistant response style, the Second Brain home setup card, or default delivery channels later without rerunning a one-shot wizard.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
-                  'Open Configuration > Appearance when you want to switch between built-in and curated visual bundles, let typography follow the selected bundle, raise the web UI text size slightly, or reduce interface motion.',
+                  'Open Configuration > Appearance when you want to switch between built-in and curated design-system bundles, let typography follow the selected bundle, tune text scale, align editor appearance, or reduce interface motion without changing page layout.',
+                  'Use Configuration > Appearance > Shell Layer or the Workstation button in the web header when you want to switch between Classic Layer and Web Browser Layer.',
+                  'Drag the edge of the web chat rail to resize it. Guardian keeps the chosen size locally while new sessions keep the default 460px rail.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want alerts, findings, and security status.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
@@ -132,7 +134,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Minimum Working Setup',
                 items: [
-                  'Open `#/config` first. That is the main setup surface for AI providers, auth, integrations, search, and appearance.',
+                  'Open `#/config` first. Configuration starts on an Overview tab with subsection navigation for AI providers, auth, integrations, search, tools, security, and appearance.',
                   'In Configuration > AI Providers add at least one usable AI profile before expecting normal chat to work well.',
                   'Each saved AI profile now has an enable checkbox in the AI Providers list. Unchecking it removes that profile from live routing without deleting its settings.',
                   'If you want the simplest private setup, start with local Ollama. If you want a hosted fallback, add Ollama Cloud, OpenRouter, or NVIDIA Cloud as a managed-cloud provider, or add a frontier provider after that.',

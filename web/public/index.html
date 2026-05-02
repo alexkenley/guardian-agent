@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/workstation.css">
 </head>
 <body>
   <!-- Auth Modal -->
@@ -35,7 +36,22 @@
       <div class="header-right">
         <span id="header-clock" class="header-clock"></span>
         <span id="connection-indicator" class="indicator disconnected">Disconnected</span>
-        <button id="killswitch-btn" class="btn-killswitch" title="Shut down all services">&#x26A1; Killswitch</button>
+        <button id="workstation-toggle" class="btn btn-secondary btn-workstation-toggle" type="button" title="Open workstation shell">
+          <svg class="shell-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="9"/>
+            <rect x="14" y="3" width="7" height="5"/>
+            <rect x="14" y="12" width="7" height="9"/>
+            <rect x="3" y="16" width="7" height="5"/>
+          </svg>
+          <span>Workstation</span>
+        </button>
+        <button id="killswitch-btn" class="btn-killswitch" title="Shut down all services">
+          <svg class="shell-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m13 2-9 13h7l-1 7 9-13h-7l1-7Z"/>
+            <path d="m3 3 18 18"/>
+          </svg>
+          <span>Killswitch</span>
+        </button>
       </div>
     </header>
 
@@ -149,7 +165,11 @@
           </span>
           <span class="nav-label"> Configuration</span>
         </a>
-        <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="Collapse sidebar">&#x276E;</button>
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar">
+          <svg class="shell-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m15 18-6-6 6-6"/>
+          </svg>
+        </button>
       </nav>
 
       <main id="content" class="content">

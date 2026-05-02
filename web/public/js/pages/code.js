@@ -4754,19 +4754,26 @@ function renderApprovalList(session) {
     <div class="code-status-list">
       ${approvals.map((approval) => `
         <article class="approval-card">
-          <div class="approval-card__header">
-            <div>
-              <div class="approval-card__title">${esc(humanizeToolName(approval.toolName))}</div>
-              <div class="approval-card__meta">
-                ${approval.createdAt ? esc(formatRelativeTime(approval.createdAt)) : ''}
-                ${approval.risk ? ` • ${esc(approval.risk)}` : ''}
-                ${approval.origin ? ` • ${esc(approval.origin)}` : ''}
+          <svg class="approval-card__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>
+            <path d="M12 8v4"/>
+            <path d="M12 16h.01"/>
+          </svg>
+          <div class="approval-card__content">
+            <div class="approval-card__header">
+              <div>
+                <div class="approval-card__title">${esc(humanizeToolName(approval.toolName))}</div>
+                <div class="approval-card__meta">
+                  ${approval.createdAt ? esc(formatRelativeTime(approval.createdAt)) : ''}
+                  ${approval.risk ? ` • ${esc(approval.risk)}` : ''}
+                  ${approval.origin ? ` • ${esc(approval.origin)}` : ''}
+                </div>
               </div>
             </div>
-          </div>
-          <div class="approval-card__preview">${esc(approval.actionLabel || approval.argsPreview || 'No preview available.')}</div>
-          <div class="approval-card__actions">
-            ${renderCodeApprovalActionsMarkup(approval)}
+            <div class="approval-card__preview">${esc(approval.actionLabel || approval.argsPreview || 'No preview available.')}</div>
+            <div class="approval-card__actions">
+              ${renderCodeApprovalActionsMarkup(approval)}
+            </div>
           </div>
         </article>
       `).join('')}
@@ -4789,8 +4796,8 @@ function renderCodeApprovalActionsMarkup(approval) {
     ? `<span class="code-approval-error">${esc(uiState.message || 'Approval update failed')}</span>`
     : '';
   return `
-    <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="approved">Approve</button>
-    <button class="btn btn-secondary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="denied">Deny</button>
+    <button class="btn btn-primary btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="approved">Approve</button>
+    <button class="btn btn-danger btn-sm" type="button" data-code-approval-id="${escAttr(approval.id)}" data-code-approval-decision="denied">Deny</button>
     ${errorMarkup}
   `;
 }

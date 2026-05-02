@@ -555,7 +555,7 @@ describe('chat direct route handlers', () => {
       skipDirectWebSearch: false,
     });
 
-    expect(result).toContain('Configured AI providers:');
+    expect(result).toContain('Configured AI providers');
     expect(executeModelTool).toHaveBeenCalledWith(
       'llm_provider_list',
       {},

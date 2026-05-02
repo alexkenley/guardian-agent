@@ -184,40 +184,7 @@ export async function renderAutomations(container, options = {}) {
       return;
     }
 
-    container.innerHTML = `
-      ${renderGuidancePanel({
-        kicker: 'Automation Guide',
-        title: 'Automations, output, history, and automation execution',
-        whatItIs: 'Automations is the page where Guardian automations are defined, scheduled, executed, and reviewed.',
-        whatSeeing: 'You are seeing the saved automation catalog, a dedicated output view for recent runs, a history and automation execution tab, engine-level settings, and the controls for creating or updating automations.',
-        whatCanDo: 'Build new automations, use starter examples, attach schedules, run them on demand, inspect prior output, and reconstruct execution history without leaving this page.',
-        howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, run output, and automation execution history. System owns the broader assistant and routine runtime timeline.',
-      })}
-
-      <div class="intel-summary-grid">
-        <div class="status-card ${summary.enabled ? 'success' : 'warning'}">
-          <div class="card-title">Engine Status</div>
-          <div class="card-value">${summary.enabled ? 'Enabled' : 'Disabled'}</div>
-          <div class="card-subtitle">Mode: ${esc(summary.executionMode || 'plan_then_execute')}</div>
-        </div>
-        <div class="status-card info">
-          <div class="card-title">Total Automations</div>
-          <div class="card-value">${automations.length}</div>
-          <div class="card-subtitle">${automations.filter((a) => a.enabled).length} enabled</div>
-        </div>
-        <div class="status-card accent">
-          <div class="card-title">Scheduled</div>
-          <div class="card-value">${totalScheduled}</div>
-          <div class="card-subtitle">${totalScheduled} with cron</div>
-        </div>
-        <div class="status-card warning">
-          <div class="card-title">Total Runs</div>
-          <div class="card-value">${totalRuns}</div>
-        </div>
-      </div>
-
-      <div id="auto-tabs-host"></div>
-    `;
+    container.innerHTML = '<div id="auto-tabs-host"></div>';
 
     const tabsHost = container.querySelector('#auto-tabs-host');
     const tabDefs = [
@@ -235,6 +202,8 @@ export async function renderAutomations(container, options = {}) {
             summary,
             workflowConfig,
             studio,
+            totalScheduled,
+            totalRuns,
           });
         },
       },
@@ -307,8 +276,32 @@ function renderCatalogTabContent({
   summary,
   workflowConfig,
   studio,
+  totalScheduled,
+  totalRuns,
 }) {
   return `
+    ${renderAutomationPageGuide()}
+    <div class="intel-summary-grid">
+      <div class="status-card ${summary.enabled ? 'success' : 'warning'}">
+        <div class="card-title">Engine Status</div>
+        <div class="card-value">${summary.enabled ? 'Enabled' : 'Disabled'}</div>
+        <div class="card-subtitle">Mode: ${esc(summary.executionMode || 'plan_then_execute')}</div>
+      </div>
+      <div class="status-card info">
+        <div class="card-title">Total Automations</div>
+        <div class="card-value">${automations.length}</div>
+        <div class="card-subtitle">${automations.filter((a) => a.enabled).length} enabled</div>
+      </div>
+      <div class="status-card accent">
+        <div class="card-title">Scheduled</div>
+        <div class="card-value">${totalScheduled}</div>
+        <div class="card-subtitle">${totalScheduled} with cron</div>
+      </div>
+      <div class="status-card warning">
+        <div class="card-title">Total Runs</div>
+        <div class="card-value">${totalRuns}</div>
+      </div>
+    </div>
     <div class="table-container">
       <div class="table-header">
         <h3>Automation Catalog</h3>
@@ -368,6 +361,7 @@ function renderCatalogTabContent({
 
 function renderOutputTabContent(history) {
   return `
+    ${renderAutomationTabGuide('Output', AUTOMATION_HELP.Output)}
     <div class="table-container">
       <div class="table-header"><h3>Output</h3></div>
       <div id="auto-run-results" style="padding:0 1rem 1rem"></div>
@@ -385,6 +379,7 @@ function renderHistoryTabContent(history, recentAssistantRuns) {
   const continuityKey = normalizeTimelineFilterValue(automationUiState.timelineFilters?.continuityKey);
   const activeExecutionRef = normalizeTimelineFilterValue(automationUiState.timelineFilters?.activeExecutionRef);
   return `
+    ${renderAutomationTabGuide('History & Timeline', AUTOMATION_HELP['History & Timeline'])}
     <div class="table-container">
       <div class="table-header"><h3>History & Timeline</h3></div>
       <table id="auto-history-table">
@@ -422,6 +417,29 @@ function renderHistoryTabContent(history, recentAssistantRuns) {
       </table>
     </div>
   `;
+}
+
+function renderAutomationPageGuide() {
+  return renderGuidancePanel({
+    kicker: 'Automation Guide',
+    compact: true,
+    title: 'Automations, output, history, and automation execution',
+    whatItIs: 'Automations is the page where Guardian automations are defined, scheduled, executed, and reviewed.',
+    whatSeeing: 'You are seeing the saved automation catalog, a dedicated output view for recent runs, a history and automation execution tab, engine-level settings, and the controls for creating or updating automations.',
+    whatCanDo: 'Build new automations, use starter examples, attach schedules, run them on demand, inspect prior output, and reconstruct execution history without leaving this page.',
+    howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, run output, and automation execution history. System owns the broader assistant and routine runtime timeline.',
+  });
+}
+
+function renderAutomationTabGuide(kicker, help = {}) {
+  return renderGuidancePanel({
+    kicker,
+    compact: true,
+    whatItIs: help.whatItIs,
+    whatSeeing: help.whatSeeing,
+    whatCanDo: help.whatCanDo,
+    howLinks: help.howLinks,
+  });
 }
 
 function bindRunTimelineUpdates() {

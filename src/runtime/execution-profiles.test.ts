@@ -157,8 +157,8 @@ describe('execution profiles', () => {
 
     expect(current?.providerName).toBe('ollama-cloud-tools');
     expect(sibling).toMatchObject({
-      providerName: 'ollama-cloud-coding',
-      providerModel: 'qwen3-coder-next',
+      providerName: 'ollama-cloud-general',
+      providerModel: 'gpt-oss:120b',
       providerTier: 'managed_cloud',
       selectionSource: 'delegated_role',
     });

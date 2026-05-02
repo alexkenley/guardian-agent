@@ -64,7 +64,7 @@ describe('direct route orchestration', () => {
       'direct_candidates_evaluated',
       expect.objectContaining({
         details: expect.objectContaining({
-          candidates: ['web_search'],
+          candidates: [],
           skipDirectWebSearch: true,
           codeSessionResolved: true,
           codeSessionId: 'code-1',

@@ -1,0 +1,1491 @@
+/* Workstation shell: opt-in desktop frame layer over the existing page system. */
+
+.btn-workstation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 30px;
+  padding: 0 0.75rem;
+  font-size: 0.68rem;
+  letter-spacing: var(--font-label-tracking, 0.05em);
+  text-transform: var(--font-label-transform, uppercase);
+}
+
+body.workstation-mode {
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 620px at 12% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 62%),
+    radial-gradient(900px 520px at 105% 108%, color-mix(in srgb, var(--success) 5%, transparent), transparent 56%),
+    var(--bg-primary);
+}
+
+body.workstation-mode .header,
+body.workstation-mode .layout {
+  display: none;
+}
+
+.workstation-shell {
+  --ws-titlebar-h: 38px;
+  --ws-dock-h: 0px;
+  --ws-frame-header-h: 34px;
+  --ws-content-inset: clamp(12px, 1.1vw, 18px);
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  overflow: hidden;
+  color: var(--text-primary);
+  background:
+    radial-gradient(820px 460px at 30% 10%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 62%),
+    var(--bg-primary);
+}
+
+body.workstation-mode .workstation-shell {
+  display: block;
+}
+
+.ws-titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--ws-titlebar-h);
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(220px, auto) minmax(280px, 520px) minmax(220px, auto);
+  align-items: center;
+  gap: 1rem;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.ws-titlebar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.32;
+}
+
+.ws-titlebar__left,
+.ws-titlebar__center,
+.ws-titlebar__right {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ws-titlebar__left {
+  gap: 0.7rem;
+}
+
+.ws-titlebar__center {
+  justify-content: center;
+}
+
+.ws-titlebar__right {
+  justify-content: flex-end;
+  gap: 0.7rem;
+}
+
+.ws-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.ws-brand .logo-mark {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.ws-workspace-name,
+.ws-clock {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.ws-command-trigger {
+  width: min(100%, 500px);
+  height: 28px;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.ws-command-trigger:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.ws-command-trigger svg,
+.ws-icon svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ws-command-trigger kbd,
+.ws-kbd {
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+}
+
+.ws-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid currentColor;
+  color: var(--success);
+  padding: 3px 9px;
+  font-family: var(--font-display);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: var(--font-label-tracking, 0.05em);
+  text-transform: var(--font-label-transform, uppercase);
+  white-space: nowrap;
+}
+
+.ws-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.ws-exit,
+.ws-killswitch,
+.ws-frame-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.ws-exit {
+  height: 28px;
+  padding: 0 0.7rem;
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: var(--font-label-tracking, 0.05em);
+  text-transform: var(--font-label-transform, uppercase);
+}
+
+.ws-killswitch {
+  height: 28px;
+  gap: 0.4rem;
+  padding: 0 0.7rem;
+  border-color: var(--error);
+  color: var(--error);
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: var(--font-label-tracking, 0.05em);
+  text-transform: var(--font-label-transform, uppercase);
+}
+
+.ws-killswitch svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ws-exit:hover,
+.ws-killswitch:hover,
+.ws-frame-control:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ws-killswitch:hover {
+  color: #fff;
+  background: var(--error);
+  border-color: var(--error);
+}
+
+.ws-stage {
+  position: absolute;
+  inset: var(--ws-titlebar-h) 0 var(--ws-dock-h) 0;
+  overflow: hidden;
+}
+
+.ws-desktop-hint {
+  position: absolute;
+  left: 28px;
+  bottom: 24px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.ws-frame {
+  position: absolute;
+  min-width: 360px;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.46), 0 0 0 1px color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.ws-frame[hidden] {
+  display: none !important;
+}
+
+.ws-frame.is-active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.56), 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 0 32px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.ws-frame.ws-frame-flash {
+  animation: ws-frame-flash 0.52s ease;
+}
+
+@keyframes ws-frame-flash {
+  0% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 48%, transparent), 0 0 34px color-mix(in srgb, var(--accent) 24%, transparent);
+  }
+  100% {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  }
+}
+
+.ws-frame.is-maximized {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-width: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.ws-frame.is-maximized .ws-frame__head {
+  margin: 0 !important;
+}
+
+.ws-frame__head {
+  position: relative;
+  height: var(--ws-frame-header-h);
+  flex: 0 0 var(--ws-frame-header-h);
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  cursor: grab;
+  user-select: none;
+}
+
+.ws-frame.is-active .ws-frame__head {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
+}
+
+.ws-frame.is-active .ws-frame__head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.ws-frame__nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-height: 44px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.ws-frame__nav[hidden] {
+  display: none !important;
+}
+
+.ws-frame__nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: var(--font-label-tracking);
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ws-frame__nav-btn:hover,
+.ws-frame__nav-btn:focus-visible {
+  color: var(--text-primary);
+  background: var(--accent-glow);
+  outline: none;
+}
+
+.ws-frame__nav-btn.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.ws-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+}
+
+.ws-frame.is-active .ws-icon {
+  color: var(--accent);
+}
+
+.ws-frame__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.ws-frame.is-active .ws-frame__title {
+  color: var(--text-primary);
+}
+
+.ws-frame__route {
+  margin-left: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.ws-frame__trust {
+  color: var(--success);
+  border: 1px solid currentColor;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ws-frame__controls {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.ws-frame-control {
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  background: transparent;
+}
+
+.ws-frame-control svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ws-frame-control.is-close:hover {
+  color: var(--error);
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.ws-frame__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-page-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ws-content-inset);
+  background: var(--bg-primary);
+}
+
+.ws-page-content > .page-title:first-child,
+.ws-page-content > .layout-heading:first-child {
+  display: none;
+}
+
+.ws-page-content > .context-panel {
+  display: none;
+}
+
+.ws-page-content > .tab-bar {
+  display: none;
+}
+
+.ws-page-content > .tab-panel {
+  padding: 0;
+}
+
+.ws-page-content.content-code-page {
+  overflow: hidden;
+  padding: 0;
+}
+
+.ws-chat-body {
+  padding: 0;
+  background: var(--bg-primary);
+}
+
+.workstation-shell .chat-panel {
+  position: static;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border: 0;
+  border-left: 0;
+  box-shadow: none;
+}
+
+.workstation-shell .chat-panel::before {
+  display: none;
+}
+
+.workstation-shell .chat-rail-resizer {
+  display: none;
+}
+
+.ws-resize-handle {
+  position: absolute;
+  z-index: 4;
+}
+
+.ws-resize-top {
+  left: 18px;
+  right: 56px;
+  top: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.ws-resize-right {
+  right: 0;
+  top: var(--ws-frame-header-h);
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.ws-resize-left {
+  left: 0;
+  top: var(--ws-frame-header-h);
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.ws-resize-bottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.ws-resize-bottom-right,
+.ws-resize-bottom-left {
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+}
+
+.ws-resize-bottom-right {
+  right: 0;
+}
+
+.ws-resize-bottom-left {
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.ws-resize-bottom-right::after,
+.ws-resize-bottom-left::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-bottom: 1px solid var(--text-muted);
+  opacity: 0.7;
+}
+
+.ws-resize-bottom-right::after {
+  right: 4px;
+  border-right: 1px solid var(--text-muted);
+}
+
+.ws-resize-bottom-left::after {
+  left: 4px;
+  border-left: 1px solid var(--text-muted);
+}
+
+.ws-section-flash {
+  outline: 1px solid var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent), 0 0 20px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.ws-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 34;
+  transform: translateX(-50%);
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ws-dock-item {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--bg-surface) 78%, transparent);
+  color: var(--text-secondary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  transition: all 0.15s ease;
+}
+
+.ws-dock-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  transform: translateY(-2px);
+}
+
+.ws-dock-item.is-open,
+.ws-dock-item.is-active {
+  color: var(--accent);
+}
+
+.ws-dock-item.is-open::after,
+.ws-dock-item.is-active::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: translateX(-50%);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.ws-dock-item svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ws-dock-sep {
+  width: 1px;
+  height: 22px;
+  margin: 0 3px;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.ws-dock-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  opacity: 0;
+  padding: 5px 8px;
+  border: 1px solid #202020;
+  background: #d4d0c8;
+  color: #000000;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45);
+  transition: opacity 0.15s ease;
+}
+
+.ws-dock-item:hover .ws-dock-tip {
+  opacity: 1;
+}
+
+:root[data-theme='windows-31-workstation'] body.workstation-mode,
+:root[data-theme='windows-95-workstation'] body.workstation-mode,
+:root[data-theme='windows-98-workstation'] body.workstation-mode,
+:root[data-theme='apple-classic-workstation'] body.workstation-mode {
+  background: var(--ws-desktop-bg, var(--bg-primary));
+}
+
+:root[data-theme='windows-31-workstation'] .workstation-shell,
+:root[data-theme='windows-95-workstation'] .workstation-shell,
+:root[data-theme='windows-98-workstation'] .workstation-shell,
+:root[data-theme='apple-classic-workstation'] .workstation-shell {
+  background: var(--ws-desktop-bg, var(--bg-primary));
+}
+
+:root[data-theme='windows-31-workstation'] .workstation-shell {
+  --ws-titlebar-h: 30px;
+}
+
+:root[data-theme='windows-95-workstation'] .workstation-shell,
+:root[data-theme='apple-classic-workstation'] .workstation-shell {
+  --ws-titlebar-h: 32px;
+}
+
+:root[data-theme='windows-98-workstation'] .workstation-shell {
+  --ws-titlebar-h: 34px;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-titlebar,
+:root[data-theme='windows-95-workstation'] .ws-titlebar,
+:root[data-theme='windows-98-workstation'] .ws-titlebar,
+:root[data-theme='apple-classic-workstation'] .ws-titlebar {
+  background: var(--bg-surface);
+  border-bottom-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 #404040;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-titlebar::after,
+:root[data-theme='windows-95-workstation'] .ws-titlebar::after,
+:root[data-theme='windows-98-workstation'] .ws-titlebar::after,
+:root[data-theme='apple-classic-workstation'] .ws-titlebar::after {
+  display: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame,
+:root[data-theme='windows-95-workstation'] .ws-frame,
+:root[data-theme='windows-98-workstation'] .ws-frame,
+:root[data-theme='apple-classic-workstation'] .ws-frame {
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #404040, 2px 2px 0 rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active,
+:root[data-theme='apple-classic-workstation'] .ws-frame.is-active {
+  border-color: var(--border-strong);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #404040, 3px 3px 0 rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content,
+:root[data-theme='windows-31-workstation'] .ws-chat-body,
+:root[data-theme='windows-95-workstation'] .ws-page-content,
+:root[data-theme='windows-95-workstation'] .ws-chat-body,
+:root[data-theme='windows-98-workstation'] .ws-page-content,
+:root[data-theme='windows-98-workstation'] .ws-chat-body,
+:root[data-theme='apple-classic-workstation'] .ws-page-content,
+:root[data-theme='apple-classic-workstation'] .ws-chat-body {
+  background: var(--bg-primary);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header {
+  background: var(--panel-header-bg);
+  color: var(--accent-text);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header h3,
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header .cfg-header-note,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header h3,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header .cfg-header-note,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header h3,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header .cfg-header-note {
+  color: var(--accent-text);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header,
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header *,
+:root[data-theme='windows-31-workstation'] .ws-page-content .code-rail__header,
+:root[data-theme='windows-31-workstation'] .ws-page-content .code-rail__header *,
+:root[data-theme='windows-31-workstation'] .ws-page-content .panel__header,
+:root[data-theme='windows-31-workstation'] .ws-page-content .panel__header *,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__route,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-icon,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header *,
+:root[data-theme='windows-95-workstation'] .ws-page-content .code-rail__header,
+:root[data-theme='windows-95-workstation'] .ws-page-content .code-rail__header *,
+:root[data-theme='windows-95-workstation'] .ws-page-content .panel__header,
+:root[data-theme='windows-95-workstation'] .ws-page-content .panel__header *,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__route,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-icon,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header *,
+:root[data-theme='windows-98-workstation'] .ws-page-content .code-rail__header,
+:root[data-theme='windows-98-workstation'] .ws-page-content .code-rail__header *,
+:root[data-theme='windows-98-workstation'] .ws-page-content .panel__header,
+:root[data-theme='windows-98-workstation'] .ws-page-content .panel__header *,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__route,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-icon {
+  color: #ffffff;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header svg,
+:root[data-theme='windows-31-workstation'] .ws-page-content .code-rail__header svg,
+:root[data-theme='windows-31-workstation'] .ws-page-content .panel__header svg,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-icon svg,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header svg,
+:root[data-theme='windows-95-workstation'] .ws-page-content .code-rail__header svg,
+:root[data-theme='windows-95-workstation'] .ws-page-content .panel__header svg,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-icon svg,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header svg,
+:root[data-theme='windows-98-workstation'] .ws-page-content .code-rail__header svg,
+:root[data-theme='windows-98-workstation'] .ws-page-content .panel__header svg,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-icon svg {
+  color: #ffffff;
+  stroke: currentColor;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header button,
+:root[data-theme='windows-31-workstation'] .ws-page-content .code-rail__header button,
+:root[data-theme='windows-31-workstation'] .ws-page-content .panel__header button,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__head button,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header button,
+:root[data-theme='windows-95-workstation'] .ws-page-content .code-rail__header button,
+:root[data-theme='windows-95-workstation'] .ws-page-content .panel__header button,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__head button,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header button,
+:root[data-theme='windows-98-workstation'] .ws-page-content .code-rail__header button,
+:root[data-theme='windows-98-workstation'] .ws-page-content .panel__header button,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__head button {
+  color: #000000;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-header button svg,
+:root[data-theme='windows-31-workstation'] .ws-page-content .code-rail__header button svg,
+:root[data-theme='windows-31-workstation'] .ws-page-content .panel__header button svg,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame-control svg,
+:root[data-theme='windows-95-workstation'] .ws-page-content .table-header button svg,
+:root[data-theme='windows-95-workstation'] .ws-page-content .code-rail__header button svg,
+:root[data-theme='windows-95-workstation'] .ws-page-content .panel__header button svg,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame-control svg,
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header button svg,
+:root[data-theme='windows-98-workstation'] .ws-page-content .code-rail__header button svg,
+:root[data-theme='windows-98-workstation'] .ws-page-content .panel__header button svg,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame-control svg {
+  color: #000000;
+  stroke: currentColor;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .code-rail__header,
+:root[data-theme='windows-31-workstation'] .ws-page-content .panel__header,
+:root[data-theme='windows-95-workstation'] .ws-page-content .code-rail__header,
+:root[data-theme='windows-95-workstation'] .ws-page-content .panel__header,
+:root[data-theme='windows-98-workstation'] .ws-page-content .code-rail__header,
+:root[data-theme='windows-98-workstation'] .ws-page-content .panel__header {
+  background: var(--panel-header-bg);
+  color: #ffffff;
+}
+
+body.workstation-mode .context-help-tooltip {
+  border: 1px solid #202020;
+  background: #d4d0c8;
+  color: #000000;
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.45);
+}
+
+body.workstation-mode .context-help-tooltip-title,
+body.workstation-mode .context-help-tooltip-copy {
+  color: #000000;
+}
+
+body.workstation-mode .context-help-tooltip-label {
+  color: #000080;
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-page-content .table-header {
+  background: linear-gradient(#f2f2f2, #c4c4c4);
+  color: var(--text-primary);
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-page-content .table-header h3,
+:root[data-theme='apple-classic-workstation'] .ws-page-content .table-header .cfg-header-note {
+  color: var(--text-primary);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame__head,
+:root[data-theme='windows-95-workstation'] .ws-frame__head,
+:root[data-theme='windows-98-workstation'] .ws-frame__head {
+  margin: 2px 2px 0;
+  background: #808080;
+  color: #ffffff;
+  border-bottom: 0;
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-frame__head {
+  margin: 2px 2px 0;
+  background: linear-gradient(#f7f7f7, #bdbdbd);
+  border-bottom: 1px solid #777777;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__head,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: #000080;
+}
+
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: #0a246a;
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: linear-gradient(#e9e9e9, #b8b8b8);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__head::after,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__head::after,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__head::after,
+:root[data-theme='apple-classic-workstation'] .ws-frame.is-active .ws-frame__head::after {
+  display: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame__title,
+:root[data-theme='windows-31-workstation'] .ws-frame__route,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-icon,
+:root[data-theme='windows-95-workstation'] .ws-frame__title,
+:root[data-theme='windows-95-workstation'] .ws-frame__route,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-icon,
+:root[data-theme='windows-98-workstation'] .ws-frame__title,
+:root[data-theme='windows-98-workstation'] .ws-frame__route,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-icon {
+  color: #ffffff;
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-frame__title,
+:root[data-theme='apple-classic-workstation'] .ws-frame__route,
+:root[data-theme='apple-classic-workstation'] .ws-frame.is-active .ws-frame__title,
+:root[data-theme='apple-classic-workstation'] .ws-frame.is-active .ws-icon {
+  color: #000000;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame-control,
+:root[data-theme='windows-31-workstation'] .ws-exit,
+:root[data-theme='windows-31-workstation'] .ws-killswitch,
+:root[data-theme='windows-31-workstation'] .ws-dock-item,
+:root[data-theme='windows-95-workstation'] .ws-frame-control,
+:root[data-theme='windows-95-workstation'] .ws-exit,
+:root[data-theme='windows-95-workstation'] .ws-killswitch,
+:root[data-theme='windows-95-workstation'] .ws-dock-item,
+:root[data-theme='windows-98-workstation'] .ws-frame-control,
+:root[data-theme='windows-98-workstation'] .ws-exit,
+:root[data-theme='windows-98-workstation'] .ws-killswitch,
+:root[data-theme='windows-98-workstation'] .ws-dock-item,
+:root[data-theme='apple-classic-workstation'] .ws-frame-control,
+:root[data-theme='apple-classic-workstation'] .ws-exit,
+:root[data-theme='apple-classic-workstation'] .ws-killswitch,
+:root[data-theme='apple-classic-workstation'] .ws-dock-item {
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #404040;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame__nav,
+:root[data-theme='windows-95-workstation'] .ws-frame__nav,
+:root[data-theme='windows-98-workstation'] .ws-frame__nav,
+:root[data-theme='apple-classic-workstation'] .ws-frame__nav {
+  background: var(--bg-surface);
+  border-bottom-color: var(--border);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-dock,
+:root[data-theme='windows-95-workstation'] .ws-dock,
+:root[data-theme='windows-98-workstation'] .ws-dock,
+:root[data-theme='apple-classic-workstation'] .ws-dock {
+  padding: 5px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-dock-item,
+:root[data-theme='windows-31-workstation'] .ws-dock-sep,
+:root[data-theme='windows-95-workstation'] .ws-dock-item,
+:root[data-theme='windows-95-workstation'] .ws-dock-sep,
+:root[data-theme='windows-98-workstation'] .ws-dock-item,
+:root[data-theme='windows-98-workstation'] .ws-dock-sep,
+:root[data-theme='apple-classic-workstation'] .ws-dock-item,
+:root[data-theme='apple-classic-workstation'] .ws-dock-sep {
+  pointer-events: auto;
+}
+
+:root[data-theme='windows-11-workstation'] .workstation-shell,
+:root[data-theme='apple-modern-workstation'] .workstation-shell {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 42%),
+    var(--bg-primary);
+}
+
+:root[data-theme='windows-11-workstation'] .ws-titlebar,
+:root[data-theme='apple-modern-workstation'] .ws-titlebar {
+  background: color-mix(in srgb, var(--bg-surface) 78%, transparent);
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(18px);
+}
+
+:root[data-theme='windows-11-workstation'] .ws-frame,
+:root[data-theme='apple-modern-workstation'] .ws-frame {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(18px);
+}
+
+:root[data-theme='windows-11-workstation'] .ws-frame.is-active,
+:root[data-theme='apple-modern-workstation'] .ws-frame.is-active {
+  box-shadow: 0 22px 58px rgba(15, 23, 42, 0.16), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+:root[data-theme='windows-11-workstation'] .ws-frame__head,
+:root[data-theme='apple-modern-workstation'] .ws-frame__head {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+:root[data-theme='windows-11-workstation'] .ws-frame.is-active .ws-frame__head,
+:root[data-theme='apple-modern-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-elevated));
+}
+
+:root[data-theme='windows-11-workstation'] .ws-dock,
+:root[data-theme='apple-modern-workstation'] .ws-dock {
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.13);
+  backdrop-filter: blur(18px);
+}
+
+:root[data-theme='windows-11-workstation'] .ws-dock-item,
+:root[data-theme='apple-modern-workstation'] .ws-dock-item {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  box-shadow: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-titlebar {
+  background: #c0c0c0;
+  border-bottom: 2px solid #000000;
+  box-shadow: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-brand,
+:root[data-theme='windows-31-workstation'] .ws-workspace-name,
+:root[data-theme='windows-31-workstation'] .ws-clock {
+  color: #000080;
+  text-shadow: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame {
+  border-width: 2px;
+  border-style: solid;
+  border-color: #ffffff #000000 #000000 #ffffff;
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.65);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active {
+  border-color: #ffffff #000000 #000000 #ffffff;
+  box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.7);
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame__head {
+  height: 26px;
+  margin: 3px 3px 0;
+  padding: 0 5px;
+  background: #808080;
+  border: 0;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: #000080;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame__title {
+  font-size: 0.72rem;
+  letter-spacing: 0;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame-control,
+:root[data-theme='windows-31-workstation'] .ws-exit,
+:root[data-theme='windows-31-workstation'] .ws-killswitch,
+:root[data-theme='windows-31-workstation'] .ws-dock-item,
+:root[data-theme='windows-31-workstation'] .ws-page-content button,
+:root[data-theme='windows-31-workstation'] .ws-page-content input,
+:root[data-theme='windows-31-workstation'] .ws-page-content select {
+  border-width: 2px;
+  border-style: solid;
+  border-color: #ffffff #404040 #404040 #ffffff;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame-control:active,
+:root[data-theme='windows-31-workstation'] .ws-exit:active,
+:root[data-theme='windows-31-workstation'] .ws-killswitch:active,
+:root[data-theme='windows-31-workstation'] .ws-dock-item:active {
+  border-color: #404040 #ffffff #ffffff #404040;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-frame__nav {
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 #808080;
+}
+
+:root[data-theme='windows-31-workstation'] .ws-page-content .table-container,
+:root[data-theme='windows-31-workstation'] .ws-page-content .cfg-center-body {
+  border: 2px solid;
+  border-color: #808080 #ffffff #ffffff #808080;
+}
+
+:root[data-theme='windows-95-workstation'] .ws-titlebar {
+  background: #c0c0c0;
+  border-bottom: 2px solid #404040;
+  box-shadow: inset 1px 1px 0 #ffffff, inset 0 -1px 0 #808080;
+}
+
+:root[data-theme='windows-95-workstation'] .ws-frame {
+  border-width: 2px;
+  border-style: solid;
+  border-color: #dfdfdf #404040 #404040 #dfdfdf;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #808080,
+    3px 3px 0 rgba(0, 0, 0, 0.48);
+}
+
+:root[data-theme='windows-95-workstation'] .ws-frame__head {
+  height: 28px;
+  margin: 3px 3px 0;
+  background: #808080;
+}
+
+:root[data-theme='windows-95-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: #000080;
+}
+
+:root[data-theme='windows-95-workstation'] .ws-frame-control,
+:root[data-theme='windows-95-workstation'] .ws-exit,
+:root[data-theme='windows-95-workstation'] .ws-killswitch,
+:root[data-theme='windows-95-workstation'] .ws-dock-item,
+:root[data-theme='windows-95-workstation'] .ws-page-content button {
+  border-width: 2px;
+  border-style: solid;
+  border-color: #ffffff #404040 #404040 #ffffff;
+  box-shadow: inset 1px 1px 0 #dfdfdf, inset -1px -1px 0 #808080;
+}
+
+:root[data-theme='windows-95-workstation'] .ws-dock {
+  padding: 4px 6px;
+  background: #c0c0c0;
+  border: 2px solid;
+  border-color: #ffffff #404040 #404040 #ffffff;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.38);
+}
+
+:root[data-theme='windows-95-workstation'] .ws-dock-item.is-open,
+:root[data-theme='windows-95-workstation'] .ws-dock-item[aria-pressed='true'] {
+  border-color: #404040 #ffffff #ffffff #404040;
+  background: #d7d7d7;
+}
+
+:root[data-theme='windows-98-workstation'] .ws-titlebar {
+  background: linear-gradient(90deg, #0a246a 0%, #3a6ea5 54%, #a6caf0 100%);
+  border-bottom: 1px solid #404040;
+  box-shadow: inset 0 1px 0 #ffffff, 0 1px 0 #808080;
+}
+
+:root[data-theme='windows-98-workstation'] .ws-brand,
+:root[data-theme='windows-98-workstation'] .ws-workspace-name,
+:root[data-theme='windows-98-workstation'] .ws-clock {
+  color: #ffffff;
+}
+
+:root[data-theme='windows-98-workstation'] .ws-frame {
+  border-width: 2px;
+  border-style: solid;
+  border-color: #f2f2f2 #5a5a5a #5a5a5a #f2f2f2;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #8a8a8a,
+    4px 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme='windows-98-workstation'] .ws-frame__head {
+  height: 29px;
+  margin: 3px 3px 0;
+  background: linear-gradient(90deg, #808080, #b5b5b5);
+}
+
+:root[data-theme='windows-98-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: linear-gradient(90deg, #0a246a 0%, #1663b7 58%, #a6caf0 100%);
+}
+
+:root[data-theme='windows-98-workstation'] .ws-frame-control,
+:root[data-theme='windows-98-workstation'] .ws-exit,
+:root[data-theme='windows-98-workstation'] .ws-killswitch,
+:root[data-theme='windows-98-workstation'] .ws-dock-item,
+:root[data-theme='windows-98-workstation'] .ws-page-content button {
+  border-width: 2px;
+  border-style: solid;
+  border-color: #ffffff #606060 #606060 #ffffff;
+  background: linear-gradient(#efefef, #c9c9c9);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #8a8a8a;
+}
+
+:root[data-theme='windows-98-workstation'] .ws-page-content .table-header {
+  background: linear-gradient(90deg, var(--panel-header-bg), #3a6ea5);
+}
+
+:root[data-theme='windows-98-workstation'] .ws-dock {
+  padding: 5px 7px;
+  background: linear-gradient(#dcdcdc, #bfbfbf);
+  border: 2px solid;
+  border-color: #ffffff #606060 #606060 #ffffff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.32);
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-titlebar {
+  background:
+    repeating-linear-gradient(0deg, #d8d8d8 0 1px, #f2f2f2 1px 2px);
+  border-bottom: 1px solid #555555;
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-frame {
+  border-width: 1px;
+  border-color: #4f4f4f;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.38);
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-frame__head {
+  min-height: 30px;
+  background:
+    repeating-linear-gradient(0deg, #cfcfcf 0 1px, #eeeeee 1px 2px);
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-frame-control {
+  border-radius: 50%;
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #777777;
+}
+
+:root[data-theme='apple-classic-workstation'] .ws-dock {
+  border: 1px solid #555555;
+  background:
+    repeating-linear-gradient(0deg, #d0d0d0 0 1px, #eeeeee 1px 2px);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme='windows-11-workstation'] .workstation-shell,
+:root[data-theme='windows-11-dark-workstation'] .workstation-shell {
+  background:
+    radial-gradient(900px 620px at 14% -8%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 62%),
+    radial-gradient(760px 520px at 98% 110%, color-mix(in srgb, #7c3aed 14%, transparent), transparent 60%),
+    var(--ws-desktop-bg, var(--bg-primary));
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-titlebar,
+:root[data-theme='apple-modern-dark-workstation'] .ws-titlebar {
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-frame,
+:root[data-theme='apple-modern-dark-workstation'] .ws-frame {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-frame.is-active,
+:root[data-theme='apple-modern-dark-workstation'] .ws-frame.is-active {
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-frame__head,
+:root[data-theme='apple-modern-dark-workstation'] .ws-frame__head {
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-frame.is-active .ws-frame__head,
+:root[data-theme='apple-modern-dark-workstation'] .ws-frame.is-active .ws-frame__head {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-dock,
+:root[data-theme='apple-modern-dark-workstation'] .ws-dock {
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 68%, transparent);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+:root[data-theme='windows-11-dark-workstation'] .ws-dock-item,
+:root[data-theme='apple-modern-dark-workstation'] .ws-dock-item {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  box-shadow: none;
+}
+
+:root[data-theme='apple-modern-workstation'] .workstation-shell,
+:root[data-theme='apple-modern-dark-workstation'] .workstation-shell {
+  background:
+    radial-gradient(900px 580px at 18% -10%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 64%),
+    radial-gradient(780px 520px at 102% 104%, color-mix(in srgb, #64d2ff 12%, transparent), transparent 58%),
+    var(--ws-desktop-bg, var(--bg-primary));
+}
+
+:root[data-theme='apple-modern-workstation'] .ws-frame,
+:root[data-theme='apple-modern-dark-workstation'] .ws-frame {
+  border-radius: 10px;
+}
+
+:root[data-theme='apple-modern-workstation'] .ws-frame-control,
+:root[data-theme='apple-modern-dark-workstation'] .ws-frame-control {
+  border-radius: 999px;
+}
+
+.ws-palette-backdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 74px;
+  background: rgba(0, 0, 0, 0.46);
+}
+
+.ws-palette-backdrop.is-open {
+  display: flex;
+}
+
+.ws-palette {
+  width: min(680px, calc(100vw - 48px));
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.55);
+}
+
+.ws-palette__input {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.ws-palette__input svg {
+  width: 18px;
+  height: 18px;
+  stroke: var(--accent);
+  fill: none;
+  stroke-width: 1.6;
+}
+
+.ws-palette__input input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.ws-palette__list {
+  max-height: 360px;
+  overflow: auto;
+  padding: 0.45rem;
+}
+
+.ws-palette__row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+}
+
+.ws-palette__row:hover,
+.ws-palette__row.is-selected {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.ws-palette__row svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.55;
+}
+
+.ws-palette__label {
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.ws-palette__meta {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--text-muted);
+}
+
+html[data-reduce-motion='true'] .workstation-shell * {
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workstation-shell * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 980px) {
+  .ws-titlebar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .ws-titlebar__center {
+    display: none;
+  }
+
+  .ws-clock {
+    display: none;
+  }
+
+  .ws-frame {
+    left: 10px !important;
+    right: auto !important;
+    top: 54px !important;
+    width: calc(100vw - 20px) !important;
+    height: calc(58vh - var(--ws-titlebar-h)) !important;
+  }
+
+  .ws-chat-frame {
+    top: auto !important;
+    bottom: 60px !important;
+    height: min(34vh, 320px) !important;
+    min-height: 220px;
+  }
+}

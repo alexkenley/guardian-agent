@@ -1,7 +1,7 @@
 # WebUI Design
 
 **Status:** Source of truth
-**Date:** 2026-04-05
+**Date:** 2026-05-01
 **Owner:** WebUI uplift
 **Supersedes:** earlier WebUI panel-consolidation proposal workstreams
 
@@ -27,9 +27,10 @@ This spec governs:
 
 This spec does not define:
 
-- visual theme tokens
 - exact CSS implementation
 - backend schema details outside what the UI requires
+
+Visual theme tokens, component chrome, typography roles, iconography, and shell visual language are governed by the Guardian Agent design-system handoff and the production appearance runtime. This document still owns the WebUI's route structure, page ownership, behavioral rules, and shell invariants.
 
 ## Design Principles
 
@@ -71,17 +72,40 @@ The default Guardian profile should stay sharp, dense, and engineering-oriented.
 
 ## Visual Standards
 
+The Guardian Agent design-system handoff is the visual-language reference for the WebUI. Implementations should port design intent from the handoff into production files rather than replacing production code with prototype snapshots. The default classic shell remains the stable production shell; workstation-style UI is an opt-in shell mode that must stay consistent with the workstation proposal and preserve page ownership.
+
+### Classic Shell
+The classic shell is `52px` header plus `220px` sidebar, flexible content, and a persistent `460px` right chat rail by default. The chat rail may be operator-resized; store the chosen width locally and preserve the `460px` default for new sessions. Shell action icons should be monochrome stroked SVGs that inherit `currentColor`; do not use Unicode emoji or full-color glyphs for navigation, the killswitch, or shell controls.
+
+At narrower desktop and tablet widths, the classic shell should keep the assistant available by moving the chat rail into a bottom pane rather than dropping it entirely. On mobile widths, the sidebar becomes a horizontal navigation strip, content stays in the middle pane, and chat remains a compact bottom pane with internal scrolling.
+
+### Workstation Shell
+Workstation mode is an opt-in desktop shell layered over the same route/page modules as classic mode. It provides a workstation titlebar, floating page windows, floating assistant frame, centered transparent panel navigator, and command-palette entry point. Classic mode remains the default and must be restorable without reload.
+
+Workstation frames must render existing page modules rather than duplicating page code. Opening a page that is not already open creates a new window. Opening a page that is already open brings that existing window to the front and gives it a subtle active flash. Operators can move and resize windows, and the shell persists window position, size, closed/open state, and stacking state locally so the workspace restores on reload. Window bounds are relative to the workstation stage below the top bar; maximized windows and manually moved windows may sit flush against that stage top with no extra gap. Maximized windows should remove outer borders, shadows, and titlebar insets so the frame sits flush with the left and right stage edges. Theme-specific titlebar heights must update the shared titlebar-height token used by both the titlebar and the stage offset.
+
+Window resizing should support top edge, left edge, right edge, bottom edge, bottom-left corner, and bottom-right corner handles. The top resize target should stay narrow so the remaining titlebar continues to work as the primary drag surface; resizing from the top anchors the bottom edge so lower window content remains visible while the operator adjusts height.
+
+In workstation frames, the window titlebar owns the page title. Duplicate in-page route titles and page-level intro panels should not sit above subsection navigation. Tabbed pages should expose subsection navigation as a frame-owned rail directly under the window titlebar, while the embedded page keeps using the same route module and tab state as classic mode. Opening a tab-only sub-panel must reset the page window to the top of that tab; only explicit named-section search targets may scroll deeper into the tab content. A compact guide should then appear inside the active tab before summary cards, tables, or forms. They should default to an `Overview` tab where the page has one.
+
+The persistent assistant moves into the workstation chat frame while mode is active and returns to the classic right rail when the operator exits workstation mode.
+
+The workstation command palette should search pages, sub-panels, and named sections. Selecting a section opens or focuses the owning page window, switches to the correct sub-panel where supported, and scrolls the section into view.
+
+Page and frame shells should paint before slow status probes finish. Use cached or fast configuration metadata for first render, show narrow loading states only inside the subsection that truly needs fresh data, and refresh expensive provider/readiness status in the background.
+
 ### Border Radius
 Default Guardian profile uses strict `0`. Alternate appearance bundles may apply tokenized radius values to buttons, cards, panels, inputs, tooltips, and code blocks without changing page layout.
 
 ### Shadows
 Used sparingly to create subtle depth (e.g., on hover for cards), avoiding heavy or dated drop shadows.
+Workstation appearance bundles may intentionally use era-specific window chrome such as classic bevels or modern translucent depth, but those changes must stay tokenized and must not alter route ownership, shell mode behavior, or frame persistence. Desktop wallpaper color should be separated from normal page/window surface color so retro workstation themes do not leak desktop teal or blue into page content.
 
 ### Accents
 Use 2px-4px accent borders (typically left-border or bottom-border) to denote focus, activity, or status levels.
 
 ### Typography
-- **Sans / Display bundles**: Theme-driven typography may swap the primary UI and display stacks.
+- **Sans / Display bundles**: Theme-driven typography may swap the primary UI and display stacks. Era-themed bundles should pair with an appropriate period stack, such as MS Sans Serif/Tahoma for classic Windows themes and Chicago/Charcoal/Geneva for classic Apple themes.
 - **Monospace**: Code, logs, diff output, terminals, and other system-level surfaces remain monospaced even when the UI theme changes.
 
 ### Spacing & Grid
@@ -133,7 +157,7 @@ Notes:
 | network inventory and diagnostics | `Network` | system count only |
 | cloud connections and cloud posture | `Cloud` | system count only |
 | automations, schedules, run history | `Automations` | system count only |
-| AI provider config and search config | `Configuration` | compact system card only |
+| AI provider config and search config | `Configuration > Overview`, `Configuration > AI Providers`, `Configuration > Search Providers` | compact system card only |
 | live pending tool approvals | `System` | compact counts only |
 | tools, runtime routing, recent tool jobs | `Configuration > Tools` | filtered links only |
 | sandbox, allowlists, trust, browser risk controls, security-related configuration | `Configuration > Security` | filtered links only |
@@ -834,6 +858,7 @@ Overview cards in this tab should stay limited to operator-access and channel st
 Owns:
 
 - theme bundles and display settings
+- workstation-separated desktop-style theme bundles, including distinct traditional Windows 3.1, Windows 95, Windows 98, and Apple Classic profiles plus light and dark modern Windows 11 and Apple Modern profiles that apply across classic and workstation modes
 - typography presets and theme-following font behavior
 - motion-reduction preferences
 - IDE/editor theme alignment with the main app appearance

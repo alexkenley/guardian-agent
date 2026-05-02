@@ -60,6 +60,7 @@ export function redactSensitiveText(value: string, replacement = DEFAULT_REDACTE
     .replace(/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, () => replacement)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, () => replacement)
     .replace(/\bsecret[-_][A-Za-z0-9._-]{5,}\b/gi, () => replacement)
+    .replace(/\bslack[-_]?token[-_][A-Za-z0-9._-]{5,}\b/gi, () => replacement)
     .replace(/\b(?:sk|rk|xox[baprs]|gh[pousr]|glpat|github_pat|hf)[-_][A-Za-z0-9._-]{12,}\b/g, () => replacement);
 }
 

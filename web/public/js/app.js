@@ -17,6 +17,7 @@ import { confirmCodeRouteLeave, renderCode, updateCode, teardownCode } from './p
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
+import { initWorkstationShell, installClassicChatRailResize } from './workstation/workstation-shell.js';
 
 const content = document.getElementById('content');
 const chatPanel = document.getElementById('chat-panel');
@@ -37,6 +38,7 @@ let authRecoveryInProgress = false;
 let navigationInFlight = false;
 let navigationQueued = false;
 let sseDisconnectTimer = null;
+let workstationShell = null;
 const DENSE_CHAT_PANEL_ROUTES = new Set(['automations', 'config']);
 
 // ─── Auth ────────────────────────────────────────────────
@@ -365,6 +367,11 @@ async function refreshCurrentRoute(options = {}) {
   const updater = route?.update || route?.render;
   if (!updater) return;
 
+  if (workstationShell?.isActive()) {
+    await workstationShell.refreshActiveRoute(options);
+    return;
+  }
+
   // Preserve scroll position across hot reload
   const scrollTop = content.scrollTop;
   const activeEl = document.activeElement;
@@ -458,6 +465,14 @@ async function navigate() {
 
   lastCommittedHash = nextHash;
 
+  if (workstationShell?.isActive()) {
+    content.innerHTML = '';
+    await workstationShell.renderActiveRoute({ tab: params.get('tab') });
+    return;
+  }
+
+  workstationShell?.restoreClassicChat();
+
   // Render page, passing options like tab deep-link.
   await route.render(content, { tab: params.get('tab') });
 }
@@ -522,6 +537,7 @@ function startApp() {
   void initChatPanel(chatPanel).then(() => {
     const { route } = getRouteState();
     setChatContext(currentPage || route?.name || 'second-brain');
+    installClassicChatRailResize({ layout, chatPanel });
   });
 
   // ── Collapsible sidebar ──
@@ -530,21 +546,44 @@ function startApp() {
   const SIDEBAR_COLLAPSED_KEY = 'guardianagent_sidebar_collapsed';
   const SIDEBAR_EXPANDED_WIDTH = '220px';
   const SIDEBAR_COLLAPSED_WIDTH = '60px';
+  const setSidebarToggleState = (isCollapsed) => {
+    sidebarToggle.innerHTML = isCollapsed
+      ? '<svg class="shell-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>'
+      : '<svg class="shell-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+    sidebarToggle.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    sidebarToggle.setAttribute('aria-label', sidebarToggle.title);
+  };
   if (sidebarToggle && sidebar) {
     if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true') {
       sidebar.classList.add('is-collapsed');
       layout?.style.setProperty('--sidebar-width', SIDEBAR_COLLAPSED_WIDTH);
-      sidebarToggle.innerHTML = '&#x276F;';
-      sidebarToggle.title = 'Expand sidebar';
+      setSidebarToggleState(true);
+    } else {
+      setSidebarToggleState(false);
     }
     sidebarToggle.addEventListener('click', () => {
       const isCollapsed = sidebar.classList.toggle('is-collapsed');
       layout?.style.setProperty('--sidebar-width', isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH);
-      sidebarToggle.innerHTML = isCollapsed ? '&#x276F;' : '&#x276E;';
-      sidebarToggle.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      setSidebarToggleState(isCollapsed);
       localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(isCollapsed));
     });
   }
+
+  workstationShell = initWorkstationShell({
+    app,
+    routes,
+    chatPanel,
+    layout,
+    content,
+    getRouteState,
+    updateChatContext: setChatContext,
+    renderRoute: async ({ route, params, container, options }) => {
+      await route.render(container, {
+        ...(options || {}),
+        tab: params?.get?.('tab') || options?.tab || null,
+      });
+    },
+  });
 
   window.addEventListener('hashchange', () => {
     scheduleNavigation();
@@ -557,7 +596,7 @@ function startApp() {
     killBtn.onclick = async () => {
       if (!confirm('Shut down Guardian Agent and all services?')) return;
       killBtn.disabled = true;
-      killBtn.textContent = 'Shutting down...';
+      killBtn.innerHTML = '<span>Shutting down...</span>';
       try {
         await api.killswitch();
       } catch {}

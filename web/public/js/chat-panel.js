@@ -1666,22 +1666,22 @@ function buildSourceBadge(responseSource) {
  */
 function buildApprovalButtons(approvals, onApproval) {
   const container = document.createElement('div');
-  container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);';
+  container.className = 'chat-approval-card';
   const approvalIds = approvals.map((approval) => approval.id);
   const uiState = getApprovalUiGroupState(approvalIds);
 
   const summary = document.createElement('div');
-  summary.style.cssText = 'font-size:0.65rem;color:var(--text-muted);margin-bottom:0.4rem;';
+  summary.className = 'chat-approval-card__summary';
   summary.textContent = approvals.length === 1
     ? 'Approval required for this action:'
     : `Approval required for these ${approvals.length} actions:`;
   container.appendChild(summary);
 
   const detailList = document.createElement('div');
-  detailList.style.cssText = 'display:flex;flex-direction:column;gap:0.25rem;margin-bottom:0.45rem;';
+  detailList.className = 'chat-approval-card__list';
   approvals.forEach((approval) => {
     const item = document.createElement('div');
-    item.style.cssText = 'font-size:0.72rem;color:var(--text-primary);line-height:1.35;';
+    item.className = 'chat-approval-card__item';
     item.textContent = approvals.length === 1
       ? describeApprovalAction(approval)
       : `• ${describeApprovalAction(approval)}`;
@@ -1690,49 +1690,43 @@ function buildApprovalButtons(approvals, onApproval) {
   container.appendChild(detailList);
 
   const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:0.5rem;align-items:center;';
+  btnRow.className = 'chat-approval-card__actions';
 
   const approveBtn = document.createElement('button');
   approveBtn.className = 'btn btn-primary';
   approveBtn.textContent = approvals.length > 1 ? `Approve All (${approvals.length})` : 'Approve';
-  approveBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.7rem;';
 
   const denyBtn = document.createElement('button');
-  denyBtn.className = 'btn btn-secondary';
+  denyBtn.className = 'btn btn-danger';
   denyBtn.textContent = 'Deny';
-  denyBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.7rem;';
 
   const statusEl = document.createElement('span');
-  statusEl.style.cssText = 'font-size:0.65rem;color:var(--text-muted);';
+  statusEl.className = 'chat-approval-card__status';
 
   const applyUiState = (state) => {
     if (!state) return false;
     approveBtn.disabled = true;
     denyBtn.disabled = true;
-    approveBtn.style.opacity = '0.5';
-    denyBtn.style.opacity = '0.5';
+    statusEl.className = 'chat-approval-card__status';
     if (state.status === 'processing') {
       statusEl.textContent = state.message || (state.decision === 'denied' ? 'Denying…' : 'Approving…');
-      statusEl.style.color = 'var(--text-muted)';
       return true;
     }
     if (state.status === 'approved') {
       statusEl.textContent = state.message || 'Approved';
-      statusEl.style.color = 'var(--success)';
+      statusEl.classList.add('is-success');
       return true;
     }
     if (state.status === 'denied') {
       statusEl.textContent = state.message || 'Denied';
-      statusEl.style.color = 'var(--error)';
+      statusEl.classList.add('is-error');
       return true;
     }
     if (state.status === 'error') {
       approveBtn.disabled = false;
       denyBtn.disabled = false;
-      approveBtn.style.opacity = '1';
-      denyBtn.style.opacity = '1';
       statusEl.textContent = state.message || 'Approval update failed';
-      statusEl.style.color = 'var(--error)';
+      statusEl.classList.add('is-error');
       return true;
     }
     return false;
@@ -1741,15 +1735,13 @@ function buildApprovalButtons(approvals, onApproval) {
   const disable = () => {
     approveBtn.disabled = true;
     denyBtn.disabled = true;
-    approveBtn.style.opacity = '0.5';
-    denyBtn.style.opacity = '0.5';
   };
 
   approveBtn.addEventListener('click', async () => {
     const approvalIds = approvals.map((approval) => approval.id);
     disable();
     statusEl.textContent = 'Approving\u2026';
-    statusEl.style.color = 'var(--text-muted)';
+    statusEl.className = 'chat-approval-card__status';
     await onApproval(approvalIds, 'approved');
     applyUiState(getApprovalUiGroupState(approvalIds));
   });
@@ -1758,7 +1750,7 @@ function buildApprovalButtons(approvals, onApproval) {
     const approvalIds = approvals.map((approval) => approval.id);
     disable();
     statusEl.textContent = 'Denying\u2026';
-    statusEl.style.color = 'var(--text-muted)';
+    statusEl.className = 'chat-approval-card__status';
     await onApproval(approvalIds, 'denied');
     applyUiState(getApprovalUiGroupState(approvalIds));
   });
@@ -1771,40 +1763,37 @@ function buildApprovalButtons(approvals, onApproval) {
 
 function buildPendingActionClearControls(pendingAction, onClearPending) {
   const container = document.createElement('div');
-  container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);';
+  container.className = 'chat-pending-clear';
 
   const summary = document.createElement('div');
-  summary.style.cssText = 'font-size:0.65rem;color:var(--text-muted);margin-bottom:0.4rem;';
+  summary.className = 'chat-pending-clear__summary';
   summary.textContent = 'This request is blocking the chat. Clear it if you want to move on.';
   container.appendChild(summary);
 
   const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:0.5rem;align-items:center;';
+  btnRow.className = 'chat-pending-clear__actions';
 
   const clearBtn = document.createElement('button');
   clearBtn.className = 'btn btn-secondary';
   clearBtn.textContent = describePendingActionClearLabel(pendingAction);
-  clearBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.7rem;';
 
   const statusEl = document.createElement('span');
-  statusEl.style.cssText = 'font-size:0.65rem;color:var(--text-muted);';
+  statusEl.className = 'chat-pending-clear__status';
 
   clearBtn.addEventListener('click', async () => {
     clearBtn.disabled = true;
-    clearBtn.style.opacity = '0.5';
     statusEl.textContent = 'Clearing…';
-    statusEl.style.color = 'var(--text-muted)';
+    statusEl.className = 'chat-pending-clear__status';
     try {
       await onClearPending();
       statusEl.textContent = 'Cleared';
-      statusEl.style.color = 'var(--success)';
+      statusEl.classList.add('is-success');
     } catch (error) {
       clearBtn.disabled = false;
-      clearBtn.style.opacity = '1';
       statusEl.textContent = error instanceof Error && error.message
         ? error.message
         : 'Failed to clear blocked request';
-      statusEl.style.color = 'var(--error)';
+      statusEl.classList.add('is-error');
     }
   });
 

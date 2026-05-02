@@ -55,4 +55,8 @@ describe('crypto-guardrails', () => {
   it('redacts generated secret token labels in text', () => {
     expect(redactSensitiveText('stack trace detail: secret-token-123456')).toBe('stack trace detail: [REDACTED]');
   });
+
+  it('redacts slack token labels in text', () => {
+    expect(redactSensitiveText('review output: slack-token-fixture-runsecret')).toBe('review output: [REDACTED]');
+  });
 });

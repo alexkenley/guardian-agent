@@ -95,6 +95,8 @@ interface AutomationControlUpdateRequest {
 }
 
 const AUTOMATION_CATALOG_CONTINUATION_KIND = 'automation_catalog_list';
+const AUTOMATION_CATALOG_FULL_LIST_THRESHOLD = 25;
+const AUTOMATION_CATALOG_DEFAULT_PAGE_SIZE = 20;
 
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
@@ -407,12 +409,15 @@ function sortAutomationCatalogForList(
 function resolveAutomationCatalogDefaultPageSize(
   sortedCatalog: readonly SavedAutomationCatalogEntry[],
 ): number {
+  const maxItems = sortedCatalog.length > AUTOMATION_CATALOG_FULL_LIST_THRESHOLD
+    ? AUTOMATION_CATALOG_DEFAULT_PAGE_SIZE
+    : sortedCatalog.length;
   return resolveListLimitWithinCharacterBudget(sortedCatalog, {
     header: `Automation catalog (${sortedCatalog.length})`,
     renderItem: formatAutomationCatalogListRow,
     footerForRemaining: (remaining) => `- ...and ${remaining} more`,
     maxChars: DEFAULT_VERBOSE_LIST_CHAR_BUDGET,
-    maxItems: sortedCatalog.length,
+    maxItems,
   });
 }
 

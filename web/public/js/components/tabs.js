@@ -60,10 +60,42 @@ export function createTabs(container, tabs, defaultTab) {
     const btn = e.target.closest('.tab-btn');
     if (!btn) return;
     switchTo(btn.dataset.tabId);
+    keepTabBarVisible(container, bar);
   });
 
   // Activate default tab
   switchTo(defaultTab || tabs[0]?.id);
 
   return { switchTo };
+}
+
+function keepTabBarVisible(container, bar) {
+  requestAnimationFrame(() => {
+    if (!container?.isConnected || !bar?.isConnected) return;
+    const scrollParent = findScrollParent(container);
+    if (!scrollParent) return;
+
+    if (scrollParent === document.documentElement || scrollParent === document.body) {
+      bar.scrollIntoView({ block: 'start', inline: 'nearest' });
+      return;
+    }
+
+    const parentRect = scrollParent.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect();
+    if (barRect.top < parentRect.top || barRect.top > parentRect.top + 8) {
+      scrollParent.scrollTop += barRect.top - parentRect.top;
+    }
+  });
+}
+
+function findScrollParent(element) {
+  let node = element.parentElement;
+  while (node) {
+    const style = window.getComputedStyle(node);
+    if (/(auto|scroll)/.test(`${style.overflowY} ${style.overflow}`) && node.scrollHeight > node.clientHeight) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
 }
