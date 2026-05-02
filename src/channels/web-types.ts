@@ -16,6 +16,12 @@ import type {
   MemoryTrustLevel,
   StoredMemoryEntry,
 } from '../runtime/agent-memory-store.js';
+import type {
+  CapabilityCandidate,
+  CapabilityCandidateKind,
+  CapabilityCandidateStatus,
+  CapabilityCandidateSummary,
+} from '../runtime/capability-candidate-store.js';
 import type { QuickActionDefinition } from '../quick-actions.js';
 import type { SetupStatus, SetupApplyInput, SearchConfigInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
@@ -328,6 +334,25 @@ export interface DashboardMemoryMaintenanceInput {
   codeSessionId?: string;
   maintenanceType?: 'consolidation' | 'idle_sweep';
   actor?: string;
+}
+
+export interface DashboardCapabilityCandidatesInput {
+  status?: CapabilityCandidateStatus | 'active' | 'inactive' | 'all';
+  kind?: CapabilityCandidateKind;
+  limit?: number;
+}
+
+export interface DashboardCapabilityCandidatesResponse {
+  generatedAt: string;
+  summary: CapabilityCandidateSummary;
+  candidates: CapabilityCandidate[];
+}
+
+export interface DashboardCapabilityCandidateActionInput {
+  candidateId: string;
+  action: 'approve' | 'reject' | 'archive' | 'reopen' | 'promote';
+  actor?: string;
+  reason?: string;
 }
 
 export interface RedactedCloudCpanelProfile {
@@ -1506,6 +1531,8 @@ export interface DashboardCallbacks {
   onMemoryView?: (args?: DashboardMemoryFilterInput) => DashboardMemoryResponse;
   onMemoryCurate?: (input: DashboardMemoryMutationInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onMemoryMaintenance?: (input: DashboardMemoryMaintenanceInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onCapabilityCandidates?: (input?: DashboardCapabilityCandidatesInput) => DashboardCapabilityCandidatesResponse;
+  onCapabilityCandidateAction?: (input: DashboardCapabilityCandidateActionInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainOverview?: () => DashboardSecondBrainOverview;
   onSecondBrainGenerateBrief?: (input: SecondBrainGenerateBriefInput) => DashboardSecondBrainBrief | Promise<DashboardSecondBrainBrief>;
   onSecondBrainCalendar?: (args?: SecondBrainEventFilter) => DashboardSecondBrainEvent[];

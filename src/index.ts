@@ -160,6 +160,7 @@ import {
 } from './runtime/memory-flush.js';
 import { MemoryMutationService } from './runtime/memory-mutation-service.js';
 import { AutomatedMaintenanceService } from './runtime/automated-maintenance-service.js';
+import { CapabilityCandidateStore } from './runtime/capability-candidate-store.js';
 import {
   IntentGateway,
   type IntentGatewayRecord,
@@ -638,6 +639,7 @@ function buildDashboardCallbacks(
     runMaintenance?: boolean;
   }) => import('./runtime/memory-mutation-service.js').PersistMemoryEntryResult,
   runMemoryMaintenanceForScope: (input: import('./runtime/memory-mutation-service.js').RunMemoryScopeMaintenanceInput) => import('./runtime/memory-mutation-service.js').MemoryScopeHygieneResult,
+  capabilityCandidateStore: CapabilityCandidateStore,
   chatAgents: Map<string, ChatAgentInstance>,
   skillRegistry: SkillRegistry | undefined,
   enabledManagedProviders: Set<string>,
@@ -2554,6 +2556,62 @@ function buildDashboardCallbacks(
           message,
           statusCode: 400,
           errorCode: 'memory_maintenance_failed',
+        };
+      }
+    },
+
+    onCapabilityCandidates: (input = {}) => ({
+      generatedAt: new Date().toISOString(),
+      summary: capabilityCandidateStore.summary(),
+      candidates: capabilityCandidateStore.list({
+        status: input.status ?? 'active',
+        kind: input.kind,
+        limit: input.limit ?? 100,
+      }),
+    }),
+
+    onCapabilityCandidateAction: async (input) => {
+      const candidateId = input.candidateId?.trim();
+      if (!candidateId) {
+        return {
+          success: false,
+          message: 'candidateId is required.',
+          statusCode: 400,
+          errorCode: 'capability_candidate_invalid',
+        };
+      }
+      if (!['approve', 'reject', 'archive', 'reopen', 'promote'].includes(input.action)) {
+        return {
+          success: false,
+          message: 'Unsupported capability candidate action.',
+          statusCode: 400,
+          errorCode: 'capability_candidate_action_invalid',
+        };
+      }
+      try {
+        const result = capabilityCandidateStore.applyAction({
+          candidateId,
+          action: input.action,
+          actor: input.actor,
+          reason: input.reason,
+        });
+        return {
+          success: true,
+          message: result.changed
+            ? `Capability candidate '${result.candidate.title}' marked ${result.candidate.status}.`
+            : `Capability candidate '${result.candidate.title}' was already ${result.candidate.status}.`,
+          details: {
+            candidateId: result.candidate.id,
+            status: result.candidate.status,
+            kind: result.candidate.kind,
+          },
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : String(err),
+          statusCode: 404,
+          errorCode: 'capability_candidate_not_found',
         };
       }
     },
@@ -5658,6 +5716,7 @@ async function main(): Promise<void> {
     auditLog: runtime.auditLog,
     jobTracker,
   });
+  const capabilityCandidateStore = new CapabilityCandidateStore();
   const getRuntimePrincipalMemoryScopeId = (): string => (
     configRef.current.channels.web?.defaultAgent
       ?? configRef.current.channels.cli?.defaultAgent
@@ -5685,6 +5744,7 @@ async function main(): Promise<void> {
     codeSessionMemoryStore,
     codeSessionStore,
     memoryMutationService: memoryMutationServiceRef.current,
+    capabilityCandidateStore,
   });
 
   // ─── Model fallback chain ─────────────────────────────────
@@ -6397,6 +6457,7 @@ async function main(): Promise<void> {
           changed: false,
         }
     ),
+    capabilityCandidateStore,
     chatAgents,
     skillRegistry,
     enabledManagedProviders,

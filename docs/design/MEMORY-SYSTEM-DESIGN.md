@@ -206,12 +206,28 @@ assistant:
         includeCodeSessions: true
         maxScopesPerSweep: 4
         minIntervalMs: 21600000
+      learningReview:
+        enabled: true
+        includeGlobalScope: true
+        includeCodeSessions: true
+        maxCandidatesPerSweep: 5
+        minIntervalMs: 21600000
+        minContextFlushEntries: 3
+        maxEvidenceEntries: 5
+        candidateExpiresAfterDays: 30
+      capabilityCandidateHygiene:
+        enabled: true
+        minIntervalMs: 21600000
+        expireAfterDays: 30
+        maxCandidatesPerSweep: 50
 ```
 
 Notes:
 
 - `assistant.memory.knowledgeBase` config governs both persistent memory stores.
 - `assistant.maintenance` governs runtime-owned idle hygiene, not prompt-authored assistant behavior.
+- `assistant.maintenance.jobs.learningReview` performs deterministic signal review and writes quarantined capability candidates for operator review; it does not call an LLM or promote skills/tools by itself.
+- `assistant.maintenance.jobs.capabilityCandidateHygiene` expires stale candidate proposals from the review queue.
 - Global memory defaults to `~/.guardianagent/memory`.
 - Code-session memory defaults to `~/.guardianagent/code-session-memory`.
 - If `knowledgeBase.basePath` is set, Code-session memory is stored under `<basePath>/code-sessions`.

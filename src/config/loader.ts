@@ -615,6 +615,32 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (memoryHygiene.minIntervalMs < 60_000) {
     errors.push('assistant.maintenance.jobs.memoryHygiene.minIntervalMs must be >= 60000');
   }
+  const learningReview = assistant.maintenance.jobs.learningReview;
+  if (learningReview.maxCandidatesPerSweep < 1) {
+    errors.push('assistant.maintenance.jobs.learningReview.maxCandidatesPerSweep must be >= 1');
+  }
+  if (learningReview.minIntervalMs < 60_000) {
+    errors.push('assistant.maintenance.jobs.learningReview.minIntervalMs must be >= 60000');
+  }
+  if (learningReview.minContextFlushEntries < 1) {
+    errors.push('assistant.maintenance.jobs.learningReview.minContextFlushEntries must be >= 1');
+  }
+  if (learningReview.maxEvidenceEntries < 1) {
+    errors.push('assistant.maintenance.jobs.learningReview.maxEvidenceEntries must be >= 1');
+  }
+  if (learningReview.candidateExpiresAfterDays < 1) {
+    errors.push('assistant.maintenance.jobs.learningReview.candidateExpiresAfterDays must be >= 1');
+  }
+  const capabilityCandidateHygiene = assistant.maintenance.jobs.capabilityCandidateHygiene;
+  if (capabilityCandidateHygiene.minIntervalMs < 60_000) {
+    errors.push('assistant.maintenance.jobs.capabilityCandidateHygiene.minIntervalMs must be >= 60000');
+  }
+  if (capabilityCandidateHygiene.expireAfterDays < 1) {
+    errors.push('assistant.maintenance.jobs.capabilityCandidateHygiene.expireAfterDays must be >= 1');
+  }
+  if (capabilityCandidateHygiene.maxCandidatesPerSweep < 1) {
+    errors.push('assistant.maintenance.jobs.capabilityCandidateHygiene.maxCandidatesPerSweep must be >= 1');
+  }
   if (assistant.analytics.retentionDays < 1) {
     errors.push('assistant.analytics.retentionDays must be >= 1');
   }

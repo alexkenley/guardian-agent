@@ -4358,6 +4358,108 @@ describe('WebChannel', () => {
       expect(ollamaConfig).not.toHaveProperty('apiKey');
     });
 
+    it('GET /api/capability-candidates should forward filters and return review candidates', async () => {
+      let receivedArgs: Record<string, unknown> | null = null;
+      web = new WebChannel({
+        port: 19097,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          ...mockDashboard,
+          onCapabilityCandidates: (args) => {
+            receivedArgs = { ...args };
+            return {
+              generatedAt: '2026-05-02T10:00:00.000Z',
+              summary: {
+                total: 1,
+                active: 1,
+                quarantined: 1,
+                needsReview: 0,
+                approved: 0,
+                rejected: 0,
+                expired: 0,
+                archived: 0,
+                promoted: 0,
+                byKind: {
+                  memory_update: 0,
+                  skill_create: 0,
+                  skill_patch: 0,
+                  workflow: 1,
+                  tool_adapter: 0,
+                },
+              },
+              candidates: [{
+                id: 'candidate-1',
+                kind: 'workflow',
+                status: 'quarantined',
+                risk: 'low',
+                title: 'Consider a repeat workflow',
+                summary: 'Repeated context flushes suggest a reviewable workflow.',
+                purpose: 'operator_review',
+                source: 'learning_review',
+                evidence: [],
+                tags: ['learning-review'],
+                dedupeKey: 'workflow:global:repeat',
+                createdAt: '2026-05-02T10:00:00.000Z',
+                updatedAt: '2026-05-02T10:00:00.000Z',
+              }],
+            };
+          },
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:19097/api/capability-candidates?status=active&kind=workflow&limit=7', { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { candidates: Array<{ id: string; kind: string }>; summary: { quarantined: number } };
+      expect(body.candidates).toEqual([expect.objectContaining({ id: 'candidate-1', kind: 'workflow' })]);
+      expect(body.summary.quarantined).toBe(1);
+      expect(receivedArgs).toEqual({ status: 'active', kind: 'workflow', limit: 7 });
+    });
+
+    it('POST /api/capability-candidates/action should forward review decisions', async () => {
+      let receivedArgs: Record<string, unknown> | null = null;
+      web = new WebChannel({
+        port: 19098,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          ...mockDashboard,
+          onCapabilityCandidateAction: async (input) => {
+            receivedArgs = { ...input };
+            return {
+              success: true,
+              message: 'Candidate approved',
+              candidate: {
+                id: input.candidateId,
+                status: 'approved',
+              },
+            };
+          },
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:19098/api/capability-candidates/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          candidateId: 'candidate-1',
+          action: 'approve',
+          actor: 'operator',
+          reason: 'Looks useful',
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; candidate: { id: string; status: string } };
+      expect(body.success).toBe(true);
+      expect(body.candidate).toEqual({ id: 'candidate-1', status: 'approved' });
+      expect(receivedArgs).toEqual({
+        candidateId: 'candidate-1',
+        action: 'approve',
+        actor: 'operator',
+        reason: 'Looks useful',
+      });
+    });
+
     it('GET /api/budget should return budget info', async () => {
       web = new WebChannel({ port: 18946, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));

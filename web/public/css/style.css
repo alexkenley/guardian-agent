@@ -1899,6 +1899,25 @@ tr:hover td {
   margin-bottom: 1rem;
 }
 
+.capability-review-section .policy-overview {
+  margin-bottom: 1rem;
+}
+
+.capability-evidence-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.capability-evidence-list code {
+  display: inline-block;
+  margin-left: 0.25rem;
+  font-size: 0.68rem;
+}
+
 .cfg-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));

@@ -67,6 +67,7 @@ const CONFIG_TAB_IDS = [
   'search-providers',
   'second-brain',
   'tools',
+  'capability-review',
   'security',
   'integration-system',
   'appearance',
@@ -314,6 +315,7 @@ function getConfigTabs() {
     { id: 'search-providers', label: 'Search Providers', render: withSharedConfig(renderSearchProvidersTab) },
     { id: 'second-brain', label: 'Second Brain', render: withSharedConfig(renderSecondBrainTab) },
     { id: 'tools', label: 'Tools', render: renderToolsOnlyTab },
+    { id: 'capability-review', label: 'Capability Review', render: renderCapabilityReviewTab },
     { id: 'security', label: 'Security', render: withSharedConfig(renderSecurityTab) },
     { id: 'integration-system', label: 'Integration System', render: withSharedConfig(renderIntegrationSystemTab) },
     { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
@@ -325,7 +327,7 @@ function hasSharedConfigData() {
 }
 
 function requiresSharedConfig(tabId) {
-  return !['overview', 'appearance', 'tools'].includes(tabId);
+  return !['overview', 'appearance', 'tools', 'capability-review'].includes(tabId);
 }
 
 function withSharedConfig(render) {
@@ -404,6 +406,7 @@ function normalizeConfigTab(tab) {
     if (tab === 'search-sources') return 'search-providers';
     if (tab === 'secondbrain' || tab === 'second_brain' || tab === 'personal-assistant') return 'second-brain';
     if (tab === 'tools-policy') return 'tools';
+    if (tab === 'capabilities' || tab === 'capability-candidates' || tab === 'learning-queue') return 'capability-review';
     if (tab === 'policy' || tab === 'settings') return 'security';
     if (tab === 'integrations' || tab === 'system' || tab === 'cloud') return 'integration-system';
     return tab;
@@ -431,6 +434,11 @@ const CONFIG_OVERVIEW_SECTIONS = [
     id: 'tools',
     label: 'Tools',
     detail: 'Tool catalog, execution posture, runtime notices, and recent tool jobs.',
+  },
+  {
+    id: 'capability-review',
+    label: 'Capability Review',
+    detail: 'Quarantined improvement candidates from maintenance review before any promotion.',
   },
   {
     id: 'security',
@@ -712,6 +720,309 @@ function renderToolsPolicyTab(panel) {
   const policyPanel = document.createElement('div');
   panel.appendChild(policyPanel);
   void renderPolicyTab(policyPanel);
+}
+
+function renderCapabilityReviewTab(panel) {
+  const state = {
+    status: 'active',
+    kind: '',
+  };
+
+  const load = async () => {
+    panel.innerHTML = '<div class="loading">Loading capability candidates...</div>';
+    try {
+      const response = await api.capabilityCandidates({
+        status: state.status,
+        kind: state.kind,
+        limit: 100,
+      });
+      renderCapabilityReviewShell(panel, response, state, load);
+    } catch (err) {
+      panel.innerHTML = `<div class="loading">Error: ${esc(err.message || String(err))}</div>`;
+    }
+  };
+
+  void load();
+}
+
+function renderCapabilityReviewShell(panel, response, state, reload) {
+  const summary = response?.summary || {};
+  const candidates = Array.isArray(response?.candidates) ? response.candidates : [];
+  const activeCount = Number(summary.active || 0);
+
+  panel.innerHTML = `
+    ${renderGuidancePanel({
+      kicker: 'Capability Review',
+      compact: true,
+      whatItIs: 'This tab is the review queue for quarantined improvement candidates identified by bounded maintenance review.',
+      whatSeeing: 'You are seeing candidate memory updates, workflow ideas, skill proposals, and future tool-adapter proposals with evidence and lifecycle state.',
+      whatCanDo: 'Approve candidates for manual implementation, reject noisy ideas, archive stale items, or reopen an inactive candidate when the evidence is still useful.',
+      howLinks: 'Memory hygiene can identify candidates here, but promotion remains separate from runtime execution and tool policy.',
+    })}
+
+    <section class="table-container capability-review-section">
+      <div class="table-header">
+        <h3>Identified Potential Improvements</h3>
+        <span class="cfg-header-note">${esc(String(activeCount))} active candidate${activeCount === 1 ? '' : 's'}</span>
+      </div>
+      <div class="policy-overview">
+        <div class="status-card ${summary.quarantined > 0 ? 'warning' : 'accent'}">
+          <div class="card-title">Quarantined</div>
+          <div class="card-value">${esc(String(summary.quarantined || 0))}</div>
+          <div class="card-subtitle">Awaiting review</div>
+        </div>
+        <div class="status-card accent">
+          <div class="card-title">Approved</div>
+          <div class="card-value">${esc(String(summary.approved || 0))}</div>
+          <div class="card-subtitle">Ready for curated work</div>
+        </div>
+        <div class="status-card">
+          <div class="card-title">Memory</div>
+          <div class="card-value">${esc(String(summary.byKind?.memory_update || 0))}</div>
+          <div class="card-subtitle">Memory review candidates</div>
+        </div>
+        <div class="status-card">
+          <div class="card-title">Workflow</div>
+          <div class="card-value">${esc(String(summary.byKind?.workflow || 0))}</div>
+          <div class="card-subtitle">Reusable process candidates</div>
+        </div>
+      </div>
+      <div class="cfg-actions" style="justify-content:space-between;align-items:flex-end;">
+        <div class="cfg-form-grid" style="flex:1 1 auto;margin:0;">
+          <div class="cfg-field">
+            <label for="capability-review-status">Status</label>
+            <select id="capability-review-status">
+              ${renderCapabilityReviewStatusOptions(state.status)}
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label for="capability-review-kind">Kind</label>
+            <select id="capability-review-kind">
+              ${renderCapabilityReviewKindOptions(state.kind)}
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-secondary" type="button" data-capability-review-refresh>Refresh</button>
+      </div>
+    </section>
+
+    <section class="table-container capability-review-section">
+      <div class="table-header">
+        <h3>Candidate Queue</h3>
+        <span class="cfg-header-note">${esc(formatCapabilityReviewGeneratedAt(response?.generatedAt))}</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Candidate</th>
+              <th>Kind</th>
+              <th>Status</th>
+              <th>Risk</th>
+              <th>Evidence</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${candidates.length === 0
+              ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No candidates match this filter.</td></tr>'
+              : candidates.map(renderCapabilityCandidateRow).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div id="capability-review-feedback" class="cfg-save-status" style="display:block;margin-top:0.75rem;"></div>
+    </section>
+  `;
+
+  const statusSelect = panel.querySelector('#capability-review-status');
+  const kindSelect = panel.querySelector('#capability-review-kind');
+  statusSelect?.addEventListener('change', () => {
+    state.status = statusSelect.value || 'active';
+    void reload();
+  });
+  kindSelect?.addEventListener('change', () => {
+    state.kind = kindSelect.value || '';
+    void reload();
+  });
+  panel.querySelector('[data-capability-review-refresh]')?.addEventListener('click', () => {
+    void reload();
+  });
+  panel.querySelectorAll('[data-capability-candidate-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const candidateId = button.getAttribute('data-candidate-id');
+      const action = button.getAttribute('data-capability-candidate-action');
+      if (!candidateId || !action) return;
+      const feedback = panel.querySelector('#capability-review-feedback');
+      if (feedback) {
+        feedback.textContent = 'Updating candidate...';
+        feedback.style.color = 'var(--text-muted)';
+      }
+      try {
+        const result = await api.capabilityCandidateAction({
+          candidateId,
+          action,
+          actor: 'web-user',
+        });
+        if (feedback) {
+          feedback.textContent = result.message || 'Candidate updated.';
+          feedback.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+        }
+        await reload();
+      } catch (err) {
+        if (feedback) {
+          feedback.textContent = err.message || 'Failed to update candidate.';
+          feedback.style.color = 'var(--error)';
+        } else {
+          alert(err.message || 'Failed to update candidate.');
+        }
+      }
+    });
+  });
+
+  enhanceSectionHelp(
+    panel,
+    {
+      'Identified Potential Improvements': {
+        whatItIs: 'This section summarizes the quarantined learning queue populated by idle maintenance jobs.',
+        whatSeeing: 'You are seeing counts by lifecycle state and candidate kind, plus filters for the queue below.',
+        whatCanDo: 'Filter the queue to focus on active, approved, rejected, expired, or specific candidate kinds.',
+        howLinks: 'The maintenance loop can add candidates here, while curated promotion stays a separate operator decision.',
+      },
+      'Candidate Queue': {
+        whatItIs: 'This table is the canonical review surface for proposed capability improvements.',
+        whatSeeing: 'Each row shows the proposal, evidence, risk, lifecycle state, and review actions.',
+        whatCanDo: 'Approve, reject, archive, or reopen candidates without granting runtime authority directly.',
+        howLinks: 'Approved rows are handoff items for curated skill, workflow, memory, or tool work; they do not execute by themselves.',
+      },
+    },
+    createGenericHelpFactory('Configuration Capability Review'),
+  );
+  activateContextHelp(panel);
+}
+
+function renderCapabilityReviewStatusOptions(selected) {
+  return [
+    ['active', 'Active'],
+    ['quarantined', 'Quarantined'],
+    ['approved', 'Approved'],
+    ['rejected', 'Rejected'],
+    ['expired', 'Expired'],
+    ['archived', 'Archived'],
+    ['all', 'All'],
+  ].map(([value, label]) => `<option value="${escAttr(value)}" ${selected === value ? 'selected' : ''}>${esc(label)}</option>`).join('');
+}
+
+function renderCapabilityReviewKindOptions(selected) {
+  return [
+    ['', 'All kinds'],
+    ['memory_update', 'Memory update'],
+    ['workflow', 'Workflow'],
+    ['skill_create', 'Skill create'],
+    ['skill_patch', 'Skill patch'],
+    ['tool_adapter', 'Tool adapter'],
+  ].map(([value, label]) => `<option value="${escAttr(value)}" ${selected === value ? 'selected' : ''}>${esc(label)}</option>`).join('');
+}
+
+function renderCapabilityCandidateRow(candidate) {
+  const evidence = Array.isArray(candidate.evidence) ? candidate.evidence : [];
+  const actions = renderCapabilityCandidateActions(candidate);
+  return `
+    <tr>
+      <td>
+        <strong>${esc(candidate.title || 'Untitled candidate')}</strong>
+        <div class="table-muted">${esc(candidate.summary || '')}</div>
+        ${candidate.scope?.label || candidate.scope?.scopeId
+          ? `<div class="table-muted">${esc(candidate.scope.label || candidate.scope.scopeId)}</div>`
+          : ''}
+      </td>
+      <td>${esc(formatCapabilityKind(candidate.kind))}</td>
+      <td><span class="badge ${capabilityStatusBadgeClass(candidate.status)}">${esc(formatCapabilityStatus(candidate.status))}</span></td>
+      <td><span class="badge ${capabilityRiskBadgeClass(candidate.risk)}">${esc(candidate.risk || 'low')}</span></td>
+      <td>
+        ${evidence.length === 0
+          ? '<span class="table-muted">No evidence attached</span>'
+          : `<ul class="capability-evidence-list">${evidence.slice(0, 3).map((entry) => `
+              <li>
+                <span>${esc(entry.title || entry.type || 'Evidence')}</span>
+                ${entry.entryId ? `<code>${esc(entry.entryId)}</code>` : ''}
+              </li>
+            `).join('')}</ul>`}
+      </td>
+      <td>
+        <div>${esc(formatCapabilityDate(candidate.updatedAt))}</div>
+        ${candidate.expiresAt ? `<div class="table-muted">expires ${esc(formatCapabilityDate(candidate.expiresAt))}</div>` : ''}
+      </td>
+      <td><div class="cfg-actions" style="margin:0;gap:0.35rem;">${actions}</div></td>
+    </tr>
+  `;
+}
+
+function renderCapabilityCandidateActions(candidate) {
+  const id = escAttr(candidate.id || '');
+  const status = candidate.status || 'quarantined';
+  if (status === 'quarantined' || status === 'needs_review') {
+    return [
+      `<button class="btn btn-secondary btn-sm" type="button" data-candidate-id="${id}" data-capability-candidate-action="approve">Approve</button>`,
+      `<button class="btn btn-secondary btn-sm" type="button" data-candidate-id="${id}" data-capability-candidate-action="reject">Reject</button>`,
+      `<button class="btn btn-secondary btn-sm" type="button" data-candidate-id="${id}" data-capability-candidate-action="archive">Archive</button>`,
+    ].join('');
+  }
+  if (status === 'approved') {
+    return [
+      `<button class="btn btn-secondary btn-sm" type="button" data-candidate-id="${id}" data-capability-candidate-action="promote">Mark Promoted</button>`,
+      `<button class="btn btn-secondary btn-sm" type="button" data-candidate-id="${id}" data-capability-candidate-action="archive">Archive</button>`,
+    ].join('');
+  }
+  return `<button class="btn btn-secondary btn-sm" type="button" data-candidate-id="${id}" data-capability-candidate-action="reopen">Reopen</button>`;
+}
+
+function formatCapabilityKind(kind) {
+  const labels = {
+    memory_update: 'Memory update',
+    workflow: 'Workflow',
+    skill_create: 'Skill create',
+    skill_patch: 'Skill patch',
+    tool_adapter: 'Tool adapter',
+  };
+  return labels[kind] || kind || '-';
+}
+
+function formatCapabilityStatus(status) {
+  const labels = {
+    quarantined: 'Quarantined',
+    needs_review: 'Needs review',
+    approved: 'Approved',
+    rejected: 'Rejected',
+    expired: 'Expired',
+    archived: 'Archived',
+    promoted: 'Promoted',
+  };
+  return labels[status] || status || '-';
+}
+
+function capabilityStatusBadgeClass(status) {
+  if (status === 'approved' || status === 'promoted') return 'badge-ok';
+  if (status === 'rejected' || status === 'expired') return 'badge-error';
+  if (status === 'archived') return 'badge-muted';
+  return 'badge-warning';
+}
+
+function capabilityRiskBadgeClass(risk) {
+  if (risk === 'critical' || risk === 'high') return 'badge-error';
+  if (risk === 'medium') return 'badge-warning';
+  return 'badge-muted';
+}
+
+function formatCapabilityDate(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString();
+}
+
+function formatCapabilityReviewGeneratedAt(value) {
+  const formatted = formatCapabilityDate(value);
+  return formatted === '-' ? 'Not refreshed yet' : `Refreshed ${formatted}`;
 }
 
 function renderIntegrationsTab(panel) {

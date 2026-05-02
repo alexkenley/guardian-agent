@@ -667,6 +667,38 @@ export interface AssistantMaintenanceMemoryHygieneConfig {
   minIntervalMs: number;
 }
 
+/** Runtime-owned learning-review candidate generation settings. */
+export interface AssistantMaintenanceLearningReviewConfig {
+  /** Enable deterministic improvement candidate detection during idle sweeps. */
+  enabled: boolean;
+  /** Include the primary global memory scope in learning review. */
+  includeGlobalScope: boolean;
+  /** Include idle code-session memory scopes in learning review. */
+  includeCodeSessions: boolean;
+  /** Maximum number of improvement candidates proposed in one sweep. */
+  maxCandidatesPerSweep: number;
+  /** Minimum delay before the same scope is reviewed again. */
+  minIntervalMs: number;
+  /** Minimum system context-flush entries before suggesting curation. */
+  minContextFlushEntries: number;
+  /** Maximum memory entries attached as evidence to one candidate. */
+  maxEvidenceEntries: number;
+  /** Days before unreviewed candidates expire. */
+  candidateExpiresAfterDays: number;
+}
+
+/** Runtime-owned capability candidate lifecycle hygiene settings. */
+export interface AssistantMaintenanceCapabilityCandidateHygieneConfig {
+  /** Enable idle-time expiry of old capability candidates. */
+  enabled: boolean;
+  /** Minimum delay between candidate lifecycle sweeps. */
+  minIntervalMs: number;
+  /** Days before unreviewed candidates expire. */
+  expireAfterDays: number;
+  /** Maximum candidates reviewed in one lifecycle sweep. */
+  maxCandidatesPerSweep: number;
+}
+
 /** Runtime-owned automated maintenance settings. */
 export interface AssistantMaintenanceConfig {
   /** Enable server-owned automated maintenance. */
@@ -678,6 +710,8 @@ export interface AssistantMaintenanceConfig {
   /** Initial maintenance job controls. */
   jobs: {
     memoryHygiene: AssistantMaintenanceMemoryHygieneConfig;
+    learningReview: AssistantMaintenanceLearningReviewConfig;
+    capabilityCandidateHygiene: AssistantMaintenanceCapabilityCandidateHygieneConfig;
   };
 }
 
@@ -1864,6 +1898,22 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
           includeCodeSessions: true,
           maxScopesPerSweep: 4,
           minIntervalMs: 21_600_000,
+        },
+        learningReview: {
+          enabled: true,
+          includeGlobalScope: true,
+          includeCodeSessions: true,
+          maxCandidatesPerSweep: 5,
+          minIntervalMs: 21_600_000,
+          minContextFlushEntries: 3,
+          maxEvidenceEntries: 5,
+          candidateExpiresAfterDays: 30,
+        },
+        capabilityCandidateHygiene: {
+          enabled: true,
+          minIntervalMs: 21_600_000,
+          expireAfterDays: 30,
+          maxCandidatesPerSweep: 50,
         },
       },
     },

@@ -972,6 +972,42 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/capability-candidates') {
+    if (!dashboard.onCapabilityCandidates) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limitRaw = Number(url.searchParams.get('limit') ?? '');
+    sendJSON(res, 200, dashboard.onCapabilityCandidates({
+      status: trimOptionalString(url.searchParams.get('status')) as import('./web-types.js').DashboardCapabilityCandidatesInput['status'],
+      kind: trimOptionalString(url.searchParams.get('kind')) as import('./web-types.js').DashboardCapabilityCandidatesInput['kind'],
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/capability-candidates/action') {
+    if (!dashboard.onCapabilityCandidateAction) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onCapabilityCandidateAction({
+        candidateId: trimOptionalString(parsed.candidateId) ?? '',
+        action: trimOptionalString(parsed.action) as 'approve' | 'reject' | 'archive' | 'reopen' | 'promote',
+        actor: trimOptionalString(parsed.actor),
+        reason: trimOptionalString(parsed.reason),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['config', 'capability-candidates'], 'capability-candidates.action', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/setup/status') {
     if (!dashboard.onSetupStatus) {
       sendJSON(res, 404, { error: 'Not available' });

@@ -143,6 +143,22 @@ describe('validateConfig', () => {
           maxScopesPerSweep: 4,
           minIntervalMs: 21600000,
         },
+        learningReview: {
+          enabled: true,
+          includeGlobalScope: true,
+          includeCodeSessions: true,
+          maxCandidatesPerSweep: 5,
+          minIntervalMs: 21600000,
+          minContextFlushEntries: 3,
+          maxEvidenceEntries: 5,
+          candidateExpiresAfterDays: 30,
+        },
+        capabilityCandidateHygiene: {
+          enabled: true,
+          minIntervalMs: 21600000,
+          expireAfterDays: 30,
+          maxCandidatesPerSweep: 50,
+        },
       },
     });
   });
@@ -212,6 +228,22 @@ describe('validateConfig', () => {
               maxScopesPerSweep: 0,
               minIntervalMs: 1000,
             },
+            learningReview: {
+              enabled: true,
+              includeGlobalScope: true,
+              includeCodeSessions: true,
+              maxCandidatesPerSweep: 0,
+              minIntervalMs: 1000,
+              minContextFlushEntries: 0,
+              maxEvidenceEntries: 0,
+              candidateExpiresAfterDays: 0,
+            },
+            capabilityCandidateHygiene: {
+              enabled: true,
+              minIntervalMs: 1000,
+              expireAfterDays: 0,
+              maxCandidatesPerSweep: 0,
+            },
           },
         },
       },
@@ -222,6 +254,14 @@ describe('validateConfig', () => {
     expect(errors).toContain('assistant.maintenance.idleAfterMs must be >= 10000');
     expect(errors).toContain('assistant.maintenance.jobs.memoryHygiene.maxScopesPerSweep must be >= 1');
     expect(errors).toContain('assistant.maintenance.jobs.memoryHygiene.minIntervalMs must be >= 60000');
+    expect(errors).toContain('assistant.maintenance.jobs.learningReview.maxCandidatesPerSweep must be >= 1');
+    expect(errors).toContain('assistant.maintenance.jobs.learningReview.minIntervalMs must be >= 60000');
+    expect(errors).toContain('assistant.maintenance.jobs.learningReview.minContextFlushEntries must be >= 1');
+    expect(errors).toContain('assistant.maintenance.jobs.learningReview.maxEvidenceEntries must be >= 1');
+    expect(errors).toContain('assistant.maintenance.jobs.learningReview.candidateExpiresAfterDays must be >= 1');
+    expect(errors).toContain('assistant.maintenance.jobs.capabilityCandidateHygiene.minIntervalMs must be >= 60000');
+    expect(errors).toContain('assistant.maintenance.jobs.capabilityCandidateHygiene.expireAfterDays must be >= 1');
+    expect(errors).toContain('assistant.maintenance.jobs.capabilityCandidateHygiene.maxCandidatesPerSweep must be >= 1');
   });
 
   it('should reject invalid playbook evidence grounding settings', () => {

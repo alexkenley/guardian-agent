@@ -342,7 +342,7 @@ const routes = {
     render: renderConfig,
     update: updateConfig,
     name: 'config',
-    invalidateTags: ['config', 'providers', 'tools', 'skills', 'security'],
+    invalidateTags: ['config', 'providers', 'tools', 'skills', 'security', 'capability-candidates'],
   },
   '/reference': { render: renderReference, name: 'reference' },
 };
