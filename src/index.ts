@@ -1506,6 +1506,9 @@ function buildDashboardCallbacks(
     secretStore,
     isLocalProviderEndpoint,
   });
+  void buildProviderInfo(true).catch((err) => {
+    log.warn({ err }, 'Initial AI provider health check failed');
+  });
   const operationsDashboard = createOperationsDashboardCallbacks({
     configRef,
     connectors,

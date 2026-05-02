@@ -13,9 +13,12 @@ interface ProviderConfigHelperOptions {
 }
 
 export function createProviderConfigHelpers(options: ProviderConfigHelperOptions) {
+  const providerHealth = new Map<string, Pick<DashboardProviderInfo, 'connected' | 'healthChecked' | 'healthCheckedAt' | 'availableModels'>>();
+
   const describeProvider = (name: string, provider: LLMProvider): DashboardProviderInfo => {
     const llmConfig = options.configRef.current.llm[name];
     const isLocal = options.isLocalProviderEndpoint(llmConfig?.baseUrl, provider.name);
+    const health = providerHealth.get(name);
     return {
       name,
       type: provider.name,
@@ -23,7 +26,10 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
       baseUrl: llmConfig?.baseUrl,
       locality: isLocal ? 'local' : 'external',
       tier: getProviderTier(provider.name) ?? (isLocal ? 'local' : 'frontier'),
-      connected: false,
+      connected: health?.connected ?? false,
+      ...(health?.healthChecked ? { healthChecked: true } : {}),
+      ...(typeof health?.healthCheckedAt === 'number' ? { healthCheckedAt: health.healthCheckedAt } : {}),
+      ...(health?.availableModels ? { availableModels: health.availableModels } : {}),
     };
   };
 
@@ -43,15 +49,27 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
     const results: DashboardProviderInfo[] = [];
     for (const [name, provider] of options.runtimeProviders) {
       const info = describeProvider(name, provider);
+      const checkedAt = Date.now();
       try {
         const models = await provider.listModels();
         info.connected = true;
+        info.healthChecked = true;
+        info.healthCheckedAt = checkedAt;
         if (models.length > 0) {
           info.availableModels = models.map((model) => model.id);
         }
       } catch {
         info.connected = false;
+        info.healthChecked = true;
+        info.healthCheckedAt = checkedAt;
+        delete info.availableModels;
       }
+      providerHealth.set(name, {
+        connected: info.connected,
+        healthChecked: true,
+        healthCheckedAt: checkedAt,
+        ...(info.availableModels ? { availableModels: info.availableModels } : {}),
+      });
       results.push(info);
     }
     return results;

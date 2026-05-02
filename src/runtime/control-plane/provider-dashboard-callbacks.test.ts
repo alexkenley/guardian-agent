@@ -87,7 +87,7 @@ describe('createProviderConfigHelpers', () => {
     ]);
 
     await expect(helpers.buildProviderInfo(true)).resolves.toEqual([
-      {
+      expect.objectContaining({
         name: 'primary',
         type: 'openai',
         model: 'gpt-4o',
@@ -95,9 +95,11 @@ describe('createProviderConfigHelpers', () => {
         locality: 'external',
         tier: 'frontier',
         connected: true,
+        healthChecked: true,
+        healthCheckedAt: expect.any(Number),
         availableModels: ['gpt-4o'],
-      },
-      {
+      }),
+      expect.objectContaining({
         name: 'local',
         type: 'ollama',
         model: 'gpt-oss:120b',
@@ -105,7 +107,22 @@ describe('createProviderConfigHelpers', () => {
         locality: 'local',
         tier: 'local',
         connected: false,
-      },
+        healthChecked: true,
+        healthCheckedAt: expect.any(Number),
+      }),
+    ]);
+    expect(helpers.getProviderInfoSnapshot()).toEqual([
+      expect.objectContaining({
+        name: 'primary',
+        connected: true,
+        healthChecked: true,
+        availableModels: ['gpt-4o'],
+      }),
+      expect.objectContaining({
+        name: 'local',
+        connected: false,
+        healthChecked: true,
+      }),
     ]);
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', undefined)).toBe('resolved-secret');
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', '  direct-key  ')).toBe('direct-key');

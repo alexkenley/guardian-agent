@@ -902,6 +902,10 @@ export interface DashboardProviderInfo {
   tier?: 'local' | 'managed_cloud' | 'frontier';
   /** Whether the provider is currently reachable. */
   connected: boolean;
+  /** Whether the connected value came from a live health probe. */
+  healthChecked?: boolean;
+  /** Epoch timestamp for the most recent health probe. */
+  healthCheckedAt?: number;
   /** Available models discovered from the provider when supported. */
   availableModels?: string[];
 }

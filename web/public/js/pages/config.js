@@ -380,6 +380,7 @@ function loadDeferredConfigStatus(options = {}) {
   sharedDeferredStatusPromise = Promise.all([
     api.providersStatus().then((providers) => {
       if (Array.isArray(providers)) sharedProviders = providers;
+      rerenderActiveConfigTab('ai-providers');
     }).catch(() => null),
     api.setupStatus().then((setupStatus) => {
       sharedSetupStatus = setupStatus;
@@ -389,6 +390,13 @@ function loadDeferredConfigStatus(options = {}) {
   });
 
   return sharedDeferredStatusPromise;
+}
+
+function rerenderActiveConfigTab(tabId) {
+  if (!currentContainer || !currentContainer.isConnected) return;
+  const activeTab = normalizeConfigTab(currentContainer.dataset.activeTab || '');
+  if (activeTab !== tabId) return;
+  renderConfig(currentContainer, { tab: activeTab });
 }
 
 function notifyProviderProfilesChanged() {
@@ -1057,6 +1065,64 @@ function renderProvidersTab(panel) {
   applyInputTooltips(panel);
 }
 
+function resolveProviderHealthState(live, enabled = true) {
+  if (!enabled) {
+    return {
+      state: 'disabled',
+      connected: false,
+      checked: true,
+      ready: false,
+      label: 'Disabled',
+      badgeClass: 'badge-errored',
+    };
+  }
+  if (!live || live.healthChecked !== true) {
+    return {
+      state: 'configured',
+      connected: false,
+      checked: false,
+      ready: false,
+      label: 'Configured',
+      badgeClass: 'badge-warn',
+    };
+  }
+  if (live.connected !== false) {
+    return {
+      state: 'ok',
+      connected: true,
+      checked: true,
+      ready: true,
+      label: 'OK',
+      badgeClass: 'badge-idle',
+    };
+  }
+  return {
+    state: 'check_failed',
+    connected: false,
+    checked: true,
+    ready: false,
+    label: 'Check failed',
+    badgeClass: 'badge-errored',
+  };
+}
+
+function getProviderHealthTooltip(health, live) {
+  if (health.state === 'ok') {
+    return live?.healthCheckedAt
+      ? `Health check passed at ${new Date(live.healthCheckedAt).toLocaleString()}`
+      : 'Health check passed.';
+  }
+  if (health.state === 'check_failed') {
+    return live?.healthCheckedAt
+      ? `Last health check failed at ${new Date(live.healthCheckedAt).toLocaleString()}`
+      : 'Last health check failed.';
+  }
+  if (health.state === 'configured') {
+    return 'Configured; waiting for the startup health check.';
+  }
+  return 'Provider is disabled.';
+}
+
 function createProviderPanel(config, providers, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
@@ -1075,11 +1141,14 @@ function createProviderPanel(config, providers, panel) {
   const providerMap = Object.entries(config.llm || {}).reduce((acc, [name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const typeMeta = getProviderTypeMeta(cfg.provider);
+    const health = resolveProviderHealthState(live, cfg.enabled !== false);
     acc[name] = {
       ...cfg,
       locality: live?.locality || typeMeta?.locality || 'external',
       tier: live?.tier || typeMeta?.tier || 'frontier',
-      connected: cfg.enabled === false ? false : (live?.connected ?? false),
+      connected: health.ready,
+      healthState: health.state,
+      healthChecked: health.checked,
       availableModels: live?.availableModels || [],
     };
     return acc;
@@ -1730,7 +1799,11 @@ function createProviderPanel(config, providers, panel) {
         const info = providerMap[name];
         const isActive = selectedProfile === name;
         const isEnabled = isProviderConfigEnabled(info);
-        const tone = !isEnabled ? 'badge-queued' : info.connected === false ? 'badge-errored' : 'badge-idle';
+        const health = resolveProviderHealthState(
+          sharedProviders.find((provider) => provider.name === name),
+          isEnabled,
+        );
+        const tone = health.badgeClass;
         const tierLabel = getProviderTierLabel(info.tier);
         const roleBadges = getProfileRoleBadges(name, info);
         const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
@@ -1751,7 +1824,7 @@ function createProviderPanel(config, providers, panel) {
                 <span style="font-size: 0.65rem; color: var(--text-muted);">${esc(info.provider)} • ${esc(tierLabel)}${badgeLabel ? ` • ${esc(badgeLabel.trim())}` : ''}</span>
               </div>
             </div>
-            <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;">${!isEnabled ? 'disabled' : info.connected === false ? 'offline' : 'online'}</span>
+            <span class="badge ${tone}" style="font-size:0.6rem; padding: 0.15rem 0.3rem;" title="${escAttr(getProviderHealthTooltip(health, sharedProviders.find((provider) => provider.name === name)))}">${esc(health.label.toLowerCase())}</span>
           </div>
         `;
     }
@@ -1780,7 +1853,7 @@ function createProviderPanel(config, providers, panel) {
           const shouldDefaultCollapsed = providerType !== preferredManagedCloudType && !hasSelectedProfile;
           const isCollapsed = userCollapsed === undefined ? shouldDefaultCollapsed : userCollapsed;
           const enabledCount = groupNames.filter((name) => isProviderConfigEnabled(providerMap[name])).length;
-          const onlineCount = groupNames.filter((name) => isProviderConfigEnabled(providerMap[name]) && providerMap[name].connected !== false).length;
+          const okCount = groupNames.filter((name) => isProviderConfigEnabled(providerMap[name]) && providerMap[name].connected).length;
           const familyBindings = getManagedCloudRoleBindingsForProviderType(providerMap, managedCloudRoleRouting, providerType);
           const boundRoles = [
             familyBindings.general ? 'general' : '',
@@ -1799,14 +1872,14 @@ function createProviderPanel(config, providers, panel) {
                 type="button"
                 data-provider-group-toggle="${escAttr(stateKey)}"
                 aria-expanded="${isCollapsed ? 'false' : 'true'}"
-                title="${escAttr(`${providerDisplay}: ${groupNames.length} profile${groupNames.length === 1 ? '' : 's'}, ${onlineCount} online`)}"
+                title="${escAttr(`${providerDisplay}: ${groupNames.length} profile${groupNames.length === 1 ? '' : 's'}, ${okCount} OK`)}"
               >
                 <span class="cfg-provider-family-main">
                   <span class="cfg-provider-family-caret" aria-hidden="true">›</span>
                   ${renderProviderLogo(providerType, 'sm')}
                   <span class="cfg-provider-family-text">
                     <strong>${esc(providerDisplay)}</strong>
-                    <span>${esc(groupNames.length)} profile${groupNames.length === 1 ? '' : 's'} • ${esc(onlineCount)}/${esc(enabledCount)} online</span>
+                    <span>${esc(groupNames.length)} profile${groupNames.length === 1 ? '' : 's'} • ${esc(okCount)}/${esc(enabledCount)} OK</span>
                   </span>
                 </span>
                 <span class="cfg-provider-family-meta">
@@ -2128,11 +2201,13 @@ function createProviderPanel(config, providers, panel) {
         const latest = await api.providersStatus();
         const found = latest.find(p => p.name === providerName);
         if (!found) { statusEl.textContent = `'${providerName}' not in runtime (save first).`; statusEl.style.color = 'var(--warning)'; return; }
-        if (found.connected === false) { statusEl.textContent = `${providerName}: disconnected.`; statusEl.style.color = 'var(--error)'; }
+        if (found.connected === false) { statusEl.textContent = `${providerName}: health check failed.`; statusEl.style.color = 'var(--error)'; }
         else {
           const count = found.availableModels?.length || 0;
-          statusEl.textContent = `${providerName}: connected (${count} model${count === 1 ? '' : 's'}).`;
+          statusEl.textContent = `${providerName}: OK (${count} model${count === 1 ? '' : 's'}).`;
           statusEl.style.color = 'var(--success)';
+          sharedProviders = latest;
+          rerenderActiveConfigTab('ai-providers');
           // Refresh model dropdown with live models
           if (found.availableModels?.length) {
             const currentModel = modelSelectEl.style.display !== 'none' ? modelSelectEl.value : modelInputEl.value;
@@ -2640,11 +2715,14 @@ function createProviderStatusTable(config, providers, panel) {
   const providerMap = providerEntries.reduce((acc, [name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const typeMeta = getProviderTypeMeta(cfg.provider);
+    const health = resolveProviderHealthState(live, cfg.enabled !== false);
     acc[name] = {
       ...cfg,
       locality: live?.locality || typeMeta?.locality || 'external',
       tier: live?.tier || typeMeta?.tier || 'frontier',
-      connected: cfg.enabled === false ? false : (live?.connected ?? false),
+      connected: health.ready,
+      healthState: health.state,
+      healthChecked: health.checked,
       availableModels: live?.availableModels || [],
     };
     return acc;
@@ -2655,7 +2733,8 @@ function createProviderStatusTable(config, providers, panel) {
   const configuredRows = sortConfiguredProviders(providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const enabled = isProviderConfigEnabled(cfg);
-    const connected = enabled ? (live ? (live.connected !== false) : false) : false;
+    const health = resolveProviderHealthState(live, enabled);
+    const connected = health.ready;
     const typeMeta = getProviderTypeMeta(cfg.provider);
     const locality = live?.locality || typeMeta?.locality || 'external';
     const tier = live?.tier || typeMeta?.tier || 'frontier';
@@ -2667,8 +2746,8 @@ function createProviderStatusTable(config, providers, panel) {
         : preferredFrontier === name;
     const preferredBucketLabel = getPreferredProviderBucketLabel(preferredBucket);
     const statusBadge = enabled
-      ? '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>'
-      : '<span class="badge badge-queued">Disabled</span>';
+      ? '<span class="badge ' + health.badgeClass + '" title="' + escAttr(getProviderHealthTooltip(health, live)) + '">' + esc(health.label) + '</span>'
+      : '<span class="badge badge-errored">Disabled</span>';
     const modelList = live?.availableModels?.slice(0, 5).join(', ') || '-';
     const defaultBadges = [
       isPreferredBucket ? ` <span class="badge badge-running">${esc(preferredBucketLabel.toLowerCase())} default</span>` : '',
@@ -2809,7 +2888,7 @@ function createProviderStatusTable(config, providers, panel) {
         const isCurrentFamily = providerType === preferredManagedCloudType;
         const isCollapsed = userCollapsed === undefined ? !isCurrentFamily : userCollapsed;
         const enabledCount = entries.filter((entry) => entry.enabled).length;
-        const onlineCount = entries.filter((entry) => entry.enabled && entry.connected).length;
+        const okCount = entries.filter((entry) => entry.enabled && entry.connected).length;
         const roleSummary = getConfiguredProviderFamilyRoles(providerType).join(' / ') || 'unbound';
         const currentBadge = isCurrentFamily
           ? '<span class="cfg-provider-family-badge">current</span>'
@@ -2822,13 +2901,13 @@ function createProviderStatusTable(config, providers, panel) {
                 type="button"
                 data-config-provider-group-toggle="${escAttr(stateKey)}"
                 aria-expanded="${isCollapsed ? 'false' : 'true'}"
-                title="${escAttr(`${providerDisplay}: ${entries.length} profile${entries.length === 1 ? '' : 's'}, ${onlineCount} online`)}"
+                title="${escAttr(`${providerDisplay}: ${entries.length} profile${entries.length === 1 ? '' : 's'}, ${okCount} OK`)}"
               >
                 <span class="cfg-provider-family-caret" aria-hidden="true">›</span>
                 ${renderProviderLogo(providerType, 'sm')}
                 <span class="config-provider-family-text">
                   <strong>${esc(providerDisplay)}</strong>
-                  <span>${esc(entries.length)} profile${entries.length === 1 ? '' : 's'} • ${esc(onlineCount)}/${esc(enabledCount)} online</span>
+                  <span>${esc(entries.length)} profile${entries.length === 1 ? '' : 's'} • ${esc(okCount)}/${esc(enabledCount)} OK</span>
                 </span>
               </button>
               <span class="config-provider-family-meta">
@@ -4927,8 +5006,15 @@ function createOverview(config, providers, setupStatus) {
   const cards = document.createElement('div');
   cards.className = 'cfg-overview-grid';
   const defaultProvider = providers.find(p => p.name === config.defaultProvider);
-  const connectedText = defaultProvider ? (defaultProvider.connected === false ? 'Disconnected' : 'Connected') : 'Unknown';
-  const connectedTone = defaultProvider && defaultProvider.connected === false ? 'error' : 'success';
+  const defaultHealth = resolveProviderHealthState(defaultProvider, !!defaultProvider);
+  const connectedText = defaultProvider ? defaultHealth.label : 'Unknown';
+  const connectedTone = defaultProvider
+    ? defaultHealth.state === 'check_failed'
+      ? 'error'
+      : defaultHealth.state === 'configured'
+        ? 'warning'
+        : 'success'
+    : 'warning';
   const cloud = config.assistant?.tools?.cloud;
 
   cards.appendChild(createMiniCard('Readiness', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'Baseline saved' : 'Configuration pending', setupStatus?.ready ? 'success' : 'warning'));
