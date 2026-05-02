@@ -1333,6 +1333,7 @@ interface DegradedDirectIntentResponseInput {
         message,
         activeSkills: preResolvedSkills,
         surfaceId: pendingActionSurfaceId,
+        pendingAction,
       }, {
         enabledManagedProviders: this.enabledManagedProviders,
         buildImmediateResponseMetadata: (activeSkills, userId, channel, surfaceId, options) => this.buildImmediateResponseMetadata(
@@ -1416,6 +1417,12 @@ interface DegradedDirectIntentResponseInput {
         continuityThread: continuityThreadForContext,
         activeExecution,
       });
+      const resolvedPendingSearchSurface = Boolean(
+        pendingAction?.blocker.kind === 'clarification'
+          && pendingAction.blocker.field === 'search_surface'
+          && resolvedGatewayContent
+          && resolvedGatewayContent !== groundedScopedMessage.content,
+      );
       if (resolvedGatewayContent && resolvedGatewayContent !== groundedScopedMessage.content) {
         routedScopedMessage = {
           ...groundedScopedMessage,
@@ -1443,7 +1450,10 @@ interface DegradedDirectIntentResponseInput {
         codeSessionId: effectiveCodeContext?.sessionId,
       });
       refreshContinuityContextForGateway(earlyGateway);
-      if (pendingAction && shouldClearPendingActionAfterTurnHelper(earlyGateway?.decision, pendingAction)) {
+      if (pendingAction && (
+        resolvedPendingSearchSurface
+        || shouldClearPendingActionAfterTurnHelper(earlyGateway?.decision, pendingAction)
+      )) {
         this.completePendingAction(pendingAction.id);
       }
 

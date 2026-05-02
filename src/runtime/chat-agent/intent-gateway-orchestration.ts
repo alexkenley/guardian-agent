@@ -61,6 +61,7 @@ export interface IntentGatewayClarificationResponseInput {
   message: UserMessage;
   activeSkills: ResolvedSkill[];
   surfaceId?: string;
+  pendingAction?: PendingActionRecord | null;
 }
 
 export interface IntentGatewayClarificationResponseDeps {
@@ -108,6 +109,9 @@ export function buildGatewayClarificationResponse(
 ): AgentResponse | null {
   const decision = input.gateway?.decision;
   if (!decision) return null;
+  if (resolveSearchSurfaceSelection(input.pendingAction, input.message.content)) {
+    return null;
+  }
 
   const missingFields = new Set(decision.missingFields);
   const needsIntentRouteClarification = decision.resolution === 'needs_clarification'
@@ -381,6 +385,19 @@ export function resolveIntentGatewayContent(input: {
     return decision.resolvedContent.trim();
   }
 
+  const searchSurfaceSelection = resolveSearchSurfaceSelection(input.pendingAction, input.currentContent);
+  if (searchSurfaceSelection) {
+    const originalContent = input.pendingAction?.intent.originalUserContent;
+    if (!originalContent) return null;
+    if (searchSurfaceSelection === 'configured_documents') {
+      return `Search the configured document search source for this request: ${originalContent}`;
+    }
+    if (searchSurfaceSelection === 'workspace') {
+      return `Search the current workspace/repo files for this request: ${originalContent}`;
+    }
+    return `Use web search for this request: ${originalContent}`;
+  }
+
   if (input.pendingAction?.blocker.kind === 'clarification'
     && input.pendingAction.blocker.field === 'email_provider'
     && decision.entities.emailProvider) {
@@ -478,6 +495,7 @@ function pendingActionAppliesToClassificationTurn(
   if (pendingAction.blocker.kind !== 'clarification') return false;
   const normalized = stripLeadingContextPrefix(content).trim().toLowerCase();
   if (!normalized || normalized.length > 120) return false;
+  if (resolveSearchSurfaceSelection(pendingAction, content)) return true;
   const options = pendingAction.blocker.options ?? [];
   return options.some((option) => {
     const value = option.value.trim().toLowerCase();
@@ -487,6 +505,92 @@ function pendingActionAppliesToClassificationTurn(
       || (normalized.length >= 3 && label.includes(normalized));
   });
 }
+
+type SearchSurfaceSelection = 'configured_documents' | 'workspace' | 'web';
+
+function resolveSearchSurfaceSelection(
+  pendingAction: PendingActionRecord | null | undefined,
+  content: string,
+): SearchSurfaceSelection | null {
+  if (pendingAction?.blocker.kind !== 'clarification'
+    || pendingAction.blocker.field !== 'search_surface') {
+    return null;
+  }
+  const normalized = normalizeSearchSurfaceAnswer(content);
+  if (!normalized || normalized.length > 80) return null;
+
+  const options = pendingAction.blocker.options ?? [];
+  for (const option of options) {
+    const value = normalizeSearchSurfaceAnswer(option.value);
+    const label = normalizeSearchSurfaceAnswer(option.label);
+    if (normalized === value || normalized === label) {
+      return coerceSearchSurfaceSelection(option.value) ?? coerceSearchSurfaceSelection(option.label);
+    }
+  }
+
+  if (CONFIGURED_DOCUMENT_SURFACE_ALIASES.has(normalized)) {
+    return 'configured_documents';
+  }
+  if (WORKSPACE_SURFACE_ALIASES.has(normalized)) {
+    return 'workspace';
+  }
+  if (WEB_SURFACE_ALIASES.has(normalized)) {
+    return 'web';
+  }
+  return null;
+}
+
+function normalizeSearchSurfaceAnswer(content: string): string {
+  return stripLeadingContextPrefix(content)
+    .trim()
+    .toLowerCase()
+    .replace(/[_/\\-]+/g, ' ')
+    .replace(/[^a-z0-9\s]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function coerceSearchSurfaceSelection(value: string): SearchSurfaceSelection | null {
+  const normalized = normalizeSearchSurfaceAnswer(value);
+  if (normalized === 'configured documents') return 'configured_documents';
+  if (normalized === 'workspace') return 'workspace';
+  if (normalized === 'web') return 'web';
+  return null;
+}
+
+const CONFIGURED_DOCUMENT_SURFACE_ALIASES = new Set([
+  'configured documents',
+  'configured document search source',
+  'configure document search source',
+  'configured document source',
+  'configure document source',
+  'document search source',
+  'document source',
+  'documents',
+  'docs',
+  'configured source',
+  'search providers',
+]);
+
+const WORKSPACE_SURFACE_ALIASES = new Set([
+  'workspace',
+  'current workspace',
+  'current workspace repo files',
+  'workspace repo files',
+  'workspace files',
+  'repo',
+  'repository',
+  'repo files',
+  'repository files',
+  'code',
+]);
+
+const WEB_SURFACE_ALIASES = new Set([
+  'web',
+  'web search',
+  'internet',
+  'online',
+]);
 
 export function resolvePendingActionContinuationContent(
   content: string,

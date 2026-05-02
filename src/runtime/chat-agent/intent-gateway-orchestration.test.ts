@@ -548,6 +548,137 @@ describe('intent-gateway-orchestration', () => {
     expect(context.contextSuppressed).toBe(false);
   });
 
+  it('keeps search-surface clarification context for UI option aliases', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'search_surface',
+        options: [
+          { value: 'configured_documents', label: 'Configured document search source' },
+          { value: 'workspace', label: 'Current workspace/repo files' },
+          { value: 'web', label: 'Web search' },
+        ],
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Search documents for any JSON files and list them out',
+      },
+    });
+    const continuityThread = makeContinuityThread();
+
+    const context = filterIntentGatewayClassificationContext({
+      content: 'Configure Document Search Source',
+      pendingAction,
+      continuityThread,
+    });
+
+    expect(context.pendingAction).toBe(pendingAction);
+    expect(context.continuityThread).toBe(continuityThread);
+    expect(context.contextSuppressed).toBe(false);
+  });
+
+  it('rewrites search-surface clarification answers to the selected source', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'search_surface',
+        options: [
+          { value: 'configured_documents', label: 'Configured document search source' },
+          { value: 'workspace', label: 'Current workspace/repo files' },
+          { value: 'web', label: 'Web search' },
+        ],
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Search documents for any JSON files and list them out',
+      },
+    });
+
+    expect(resolveIntentGatewayContent({
+      gateway: makeGatewayRecord({
+        route: 'search_task',
+        turnRelation: 'new_request',
+      }),
+      currentContent: 'Configure Document Search Source',
+      pendingAction,
+      priorHistory: [],
+    })).toBe(
+      'Search the configured document search source for this request: Search documents for any JSON files and list them out',
+    );
+
+    expect(resolveIntentGatewayContent({
+      gateway: makeGatewayRecord({
+        route: 'search_task',
+        turnRelation: 'new_request',
+      }),
+      currentContent: 'Current workspace/repo files',
+      pendingAction,
+      priorHistory: [],
+    })).toBe(
+      'Search the current workspace/repo files for this request: Search documents for any JSON files and list them out',
+    );
+
+    expect(resolveIntentGatewayContent({
+      gateway: makeGatewayRecord({
+        route: 'search_task',
+        turnRelation: 'new_request',
+      }),
+      currentContent: 'web search',
+      pendingAction,
+      priorHistory: [],
+    })).toBe(
+      'Use web search for this request: Search documents for any JSON files and list them out',
+    );
+  });
+
+  it('does not create a duplicate search-surface clarification for UI option aliases', () => {
+    const setClarificationPendingAction = vi.fn(() => ({}));
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'search_surface',
+        options: [
+          { value: 'configured_documents', label: 'Configured document search source' },
+          { value: 'workspace', label: 'Current workspace/repo files' },
+          { value: 'web', label: 'Web search' },
+        ],
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Search documents for any JSON files and list them out',
+      },
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway: makeGatewayRecord({
+          route: 'search_task',
+          operation: 'search',
+          resolution: 'needs_clarification',
+          missingFields: ['search_surface'],
+        }),
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'web-guardian-chat',
+        message: makeMessage('Configure Document Search Source'),
+        activeSkills: [],
+        pendingAction,
+      },
+      {
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction,
+        recordIntentRoutingTrace: () => undefined,
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response).toBeNull();
+    expect(setClarificationPendingAction).not.toHaveBeenCalled();
+  });
+
   it('does not rewrite new-request coding-backend follow-ups even when an active execution exists', () => {
     const gateway = makeGatewayRecord({
       route: 'coding_task',
