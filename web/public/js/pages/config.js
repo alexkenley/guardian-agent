@@ -25,10 +25,13 @@ import {
 // Shared state loaded once and passed to tabs
 let currentContainer = null;
 let sharedConfig = null;
-let sharedProviders = null;
+let sharedProviders = [];
 let sharedSetupStatus = null;
 let sharedAuthStatus = null;
 let sharedProviderTypes = null;
+let sharedConfigLoadPromise = null;
+let sharedConfigLoadError = null;
+let sharedDeferredStatusPromise = null;
 const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
 const configUiState = {
   selectedProviderProfiles: {
@@ -57,6 +60,23 @@ const FALLBACK_PROVIDER_TYPES = [
   { name: 'together', displayName: 'Together AI', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.together.xyz/v1' },
   { name: 'xai', displayName: 'xAI (Grok)', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://api.x.ai/v1' },
   { name: 'google', displayName: 'Google Gemini', compatible: true, locality: 'external', tier: 'frontier', requiresCredential: true, defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+];
+const CONFIG_TAB_IDS = [
+  'overview',
+  'ai-providers',
+  'search-providers',
+  'second-brain',
+  'tools',
+  'security',
+  'integration-system',
+  'appearance',
+];
+const SEARCH_GLOB_PRESETS = [
+  { id: 'documents', label: 'Documents', globs: ['**/*.md', '**/*.txt', '**/*.pdf', '**/*.docx', '**/*.html', '**/*.htm', '**/*.rst'] },
+  { id: 'notes', label: 'Notes and text', globs: ['**/*.md', '**/*.txt', '**/*.rst'] },
+  { id: 'data', label: 'Data files', globs: ['**/*.json', '**/*.yaml', '**/*.yml', '**/*.csv', '**/*.tsv', '**/*.xml'] },
+  { id: 'code', label: 'Code and docs', globs: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.py', '**/*.ps1', '**/*.sh', '**/*.md', '**/*.json', '**/*.yaml', '**/*.yml'] },
+  { id: 'all-supported', label: 'All supported text/doc types', globs: ['**/*.txt', '**/*.md', '**/*.markdown', '**/*.html', '**/*.htm', '**/*.pdf', '**/*.docx', '**/*.json', '**/*.yaml', '**/*.yml', '**/*.xml', '**/*.csv', '**/*.tsv', '**/*.rst', '**/*.tex', '**/*.ts', '**/*.js', '**/*.py', '**/*.rb', '**/*.go', '**/*.rs', '**/*.java', '**/*.c', '**/*.cpp', '**/*.h', '**/*.sh'] },
 ];
 const SIMPLE_ICON_BASE_URL = 'https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/';
 const PROVIDER_LOGO_META = {
@@ -255,47 +275,118 @@ const CONFIG_HELP = {
 
 export async function renderConfig(container, options = {}) {
   currentContainer = container;
-  container.innerHTML = '<div class="loading">Loading...</div>';
+  const activeTab = normalizeConfigTab(options?.tab);
+  const hadSharedData = hasSharedConfigData();
+  const hadSharedLoadError = sharedConfigLoadError !== null;
 
-  try {
-    [sharedConfig, sharedProviders, sharedSetupStatus, sharedAuthStatus, sharedProviderTypes] = await Promise.all([
-      api.config(),
-      api.providersStatus().catch(() => api.providers().catch(() => [])),
-      api.setupStatus().catch(() => null),
-      api.authStatus().catch(() => null),
-      api.providerTypes().catch(() => FALLBACK_PROVIDER_TYPES),
-    ]);
+  container.innerHTML = '';
+  createTabs(container, getConfigTabs(), activeTab);
 
-    container.innerHTML = `
-      ${renderGuidancePanel({
-        kicker: 'Configuration Guide',
-        title: 'Product setup and policy ownership',
-        whatItIs: 'Configuration is the home for product setup, Second Brain preferences, tool policy, security controls, integrations, system controls, and appearance.',
-        whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, Second Brain preferences, live tool operations, security boundaries, integration-system controls, and visual preferences.',
-        whatCanDo: 'Use this page to configure how GuardianAgent behaves, connects, authenticates, and notifies.',
-        howLinks: 'This page defines setup and policy. Operational investigation, monitoring, and workflow execution stay on their owner pages.',
-      })}
-    `;
-
-    createTabs(container, [
-      { id: 'ai-providers', label: 'AI Providers', render: renderAiProvidersTab },
-      { id: 'search-providers', label: 'Search Providers', render: renderSearchProvidersTab },
-      { id: 'second-brain', label: 'Second Brain', render: renderSecondBrainTab },
-      { id: 'tools', label: 'Tools', render: renderToolsOnlyTab },
-      { id: 'security', label: 'Security', render: renderSecurityTab },
-      { id: 'integration-system', label: 'Integration System', render: renderIntegrationSystemTab },
-      { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
-    ], normalizeConfigTab(options?.tab));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    container.innerHTML = `<div class="loading">Error: ${esc(message)}</div>`;
+  const loadPromise = loadSharedConfig();
+  if (!hadSharedData && !hadSharedLoadError) {
+    void loadPromise.then(() => {
+      if (currentContainer !== container || !container.isConnected) return;
+      const nextActiveTab = normalizeConfigTab(container.dataset.activeTab || activeTab);
+      if (requiresSharedConfig(nextActiveTab)) {
+        renderConfig(container, { tab: nextActiveTab });
+      }
+    }).catch(() => {
+      if (currentContainer !== container || !container.isConnected) return;
+      const nextActiveTab = normalizeConfigTab(container.dataset.activeTab || activeTab);
+      if (requiresSharedConfig(nextActiveTab)) {
+        renderConfig(container, { tab: nextActiveTab });
+      }
+    });
   }
 }
 
 export async function updateConfig() {
   if (!currentContainer) return;
   const activeTab = currentContainer.dataset.activeTab;
+  await loadSharedConfig({ force: true }).catch(() => null);
   await renderConfig(currentContainer, activeTab ? { tab: activeTab } : {});
+}
+
+function getConfigTabs() {
+  return [
+    { id: 'overview', label: 'Overview', render: renderConfigOverviewTab },
+    { id: 'ai-providers', label: 'AI Providers', render: withSharedConfig(renderAiProvidersTab) },
+    { id: 'search-providers', label: 'Search Providers', render: withSharedConfig(renderSearchProvidersTab) },
+    { id: 'second-brain', label: 'Second Brain', render: withSharedConfig(renderSecondBrainTab) },
+    { id: 'tools', label: 'Tools', render: renderToolsOnlyTab },
+    { id: 'security', label: 'Security', render: withSharedConfig(renderSecurityTab) },
+    { id: 'integration-system', label: 'Integration System', render: withSharedConfig(renderIntegrationSystemTab) },
+    { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
+  ];
+}
+
+function hasSharedConfigData() {
+  return sharedConfig !== null;
+}
+
+function requiresSharedConfig(tabId) {
+  return !['overview', 'appearance', 'tools'].includes(tabId);
+}
+
+function withSharedConfig(render) {
+  return (panel) => {
+    if (hasSharedConfigData()) {
+      render(panel);
+      return;
+    }
+    const message = sharedConfigLoadError
+      ? `Error: ${sharedConfigLoadError instanceof Error ? sharedConfigLoadError.message : String(sharedConfigLoadError)}`
+      : 'Loading configuration...';
+    panel.innerHTML = `<div class="loading">${esc(message)}</div>`;
+  };
+}
+
+function loadSharedConfig(options = {}) {
+  const force = options.force === true;
+  if (!force && sharedConfigLoadPromise) return sharedConfigLoadPromise;
+  if (!force && hasSharedConfigData()) return Promise.resolve(sharedConfig);
+
+  sharedConfigLoadError = null;
+  sharedConfigLoadPromise = Promise.all([
+    api.config(),
+    api.providers().catch(() => []),
+    api.authStatus().catch(() => null),
+    api.providerTypes().catch(() => FALLBACK_PROVIDER_TYPES),
+  ]).then(([config, providers, authStatus, providerTypes]) => {
+    sharedConfig = config || {};
+    sharedProviders = Array.isArray(providers) ? providers : [];
+    sharedAuthStatus = authStatus;
+    sharedProviderTypes = Array.isArray(providerTypes) && providerTypes.length > 0
+      ? providerTypes
+      : FALLBACK_PROVIDER_TYPES;
+    void loadDeferredConfigStatus({ force });
+    return sharedConfig;
+  }).catch((err) => {
+    sharedConfigLoadError = err;
+    throw err;
+  }).finally(() => {
+    sharedConfigLoadPromise = null;
+  });
+
+  return sharedConfigLoadPromise;
+}
+
+function loadDeferredConfigStatus(options = {}) {
+  const force = options.force === true;
+  if (!force && sharedDeferredStatusPromise) return sharedDeferredStatusPromise;
+
+  sharedDeferredStatusPromise = Promise.all([
+    api.providersStatus().then((providers) => {
+      if (Array.isArray(providers)) sharedProviders = providers;
+    }).catch(() => null),
+    api.setupStatus().then((setupStatus) => {
+      sharedSetupStatus = setupStatus;
+    }).catch(() => null),
+  ]).finally(() => {
+    sharedDeferredStatusPromise = null;
+  });
+
+  return sharedDeferredStatusPromise;
 }
 
 function notifyProviderProfilesChanged() {
@@ -306,14 +397,105 @@ function notifyProviderProfilesChanged() {
 }
 
 function normalizeConfigTab(tab) {
-  if (!tab) return 'ai-providers';
-  if (tab === 'providers' || tab === 'ai-search') return 'ai-providers';
-  if (tab === 'search-sources') return 'search-providers';
-  if (tab === 'secondbrain' || tab === 'second_brain' || tab === 'personal-assistant') return 'second-brain';
-  if (tab === 'tools-policy') return 'tools';
-  if (tab === 'policy' || tab === 'settings') return 'security';
-  if (tab === 'integrations' || tab === 'system' || tab === 'cloud') return 'integration-system';
-  return tab;
+  if (!tab) return 'overview';
+  if (tab === 'home' || tab === 'summary') return 'overview';
+  const normalized = (() => {
+    if (tab === 'providers' || tab === 'ai-search') return 'ai-providers';
+    if (tab === 'search-sources') return 'search-providers';
+    if (tab === 'secondbrain' || tab === 'second_brain' || tab === 'personal-assistant') return 'second-brain';
+    if (tab === 'tools-policy') return 'tools';
+    if (tab === 'policy' || tab === 'settings') return 'security';
+    if (tab === 'integrations' || tab === 'system' || tab === 'cloud') return 'integration-system';
+    return tab;
+  })();
+  return CONFIG_TAB_IDS.includes(normalized) ? normalized : 'overview';
+}
+
+const CONFIG_OVERVIEW_SECTIONS = [
+  {
+    id: 'ai-providers',
+    label: 'AI Providers',
+    detail: 'Model profiles, connection checks, credentials, and provider tier routing.',
+  },
+  {
+    id: 'search-providers',
+    label: 'Search Providers',
+    detail: 'Web search, fallback behavior, and document source indexing.',
+  },
+  {
+    id: 'second-brain',
+    label: 'Second Brain',
+    detail: 'Assistant home behavior, delivery defaults, memory posture, and personal workspace settings.',
+  },
+  {
+    id: 'tools',
+    label: 'Tools',
+    detail: 'Tool catalog, execution posture, runtime notices, and recent tool jobs.',
+  },
+  {
+    id: 'security',
+    label: 'Security',
+    detail: 'Sandbox boundaries, web auth, Guardian review, containment, alerts, and trust presets.',
+  },
+  {
+    id: 'integration-system',
+    label: 'Integration System',
+    detail: 'Operator channels, browser automation, Google Workspace, and coding assistant backends.',
+  },
+  {
+    id: 'appearance',
+    label: 'Appearance',
+    detail: 'Classic Layer versus Web Browser Layer, theme bundle, text scale, and motion preferences.',
+  },
+];
+
+function renderConfigOverviewTab(panel) {
+  panel.innerHTML = `
+    ${renderGuidancePanel({
+      kicker: 'Configuration Guide',
+      compact: true,
+      title: 'Product setup and policy ownership',
+      whatItIs: 'Configuration is the home for product setup, Second Brain preferences, tool policy, security controls, integrations, system controls, and appearance.',
+      whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, Second Brain preferences, live tool operations, security boundaries, integration-system controls, and visual preferences.',
+      whatCanDo: 'Use this page to configure how GuardianAgent behaves, connects, authenticates, and notifies.',
+      howLinks: 'This page defines setup and policy. Operational investigation, monitoring, and workflow execution stay on their owner pages.',
+    })}
+    <div class="table-container config-overview-panel">
+      <div class="table-header">
+        <h3>Configuration Areas</h3>
+        <span class="cfg-header-note">Choose a subsection</span>
+      </div>
+      <div class="config-overview-grid">
+        ${CONFIG_OVERVIEW_SECTIONS.map((section) => `
+          <button type="button" class="config-overview-card" data-config-tab-target="${escAttr(section.id)}">
+            <span class="config-overview-card__title">${esc(section.label)}</span>
+            <span class="config-overview-card__detail">${esc(section.detail)}</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  panel.querySelectorAll('[data-config-tab-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = button.dataset.configTabTarget;
+      currentContainer?.querySelector(`.tab-btn[data-tab-id="${target}"]`)?.click();
+    });
+  });
+
+  enhanceSectionHelp(
+    panel,
+    {
+      'Configuration Areas': {
+        whatItIs: 'This is the overview launcher for the setup and policy subsections in Configuration.',
+        whatSeeing: 'You are seeing each subsection with a short description of the setup area it owns.',
+        whatCanDo: 'Open the subsection you need without guessing which tab contains the setting.',
+        howLinks: 'These cards switch the same Configuration tabs shown at the top of the page.',
+      },
+    },
+    createGenericHelpFactory('Configuration Overview'),
+  );
+  activateContextHelp(panel);
 }
 
 function pickHelpSections(source, keys) {
@@ -3191,6 +3373,7 @@ function renderSearchSourcesTab(panel) {
     status: null,
     sources: Array.isArray(searchCfg.sources) ? [...searchCfg.sources] : [],
     filter: '',
+    editingSourceId: null,
   };
 
   panel.innerHTML = `
@@ -3223,7 +3406,7 @@ function renderSearchSourcesTab(panel) {
     </div>
 
     <div class="table-container search-add-form-wrap" id="search-add-form-wrap" hidden>
-      <div class="table-header"><h3>Add Source</h3></div>
+      <div class="table-header"><h3 id="search-source-form-title">Add Source</h3></div>
       <div class="cfg-center-body">
         <form id="search-add-form" class="search-add-form-grid">
           <div class="cfg-field"><label>ID (collection)</label><input name="id" required placeholder="my-notes"></div>
@@ -3246,6 +3429,16 @@ function renderSearchSourcesTab(panel) {
             <div class="search-muted" id="search-path-picker-note" hidden>Opens the local Windows path picker on this machine.</div>
           </div>
           <div class="cfg-field" data-search-field="globs">
+            <label>File Types</label>
+            <select name="globPreset">
+              <option value="documents">Documents</option>
+              ${SEARCH_GLOB_PRESETS.filter((preset) => preset.id !== 'documents').map((preset) => (
+    `<option value="${escAttr(preset.id)}">${esc(preset.label)}</option>`
+  )).join('')}
+              <option value="custom">Custom patterns</option>
+            </select>
+          </div>
+          <div class="cfg-field" data-search-field="globs">
             <label>Globs</label>
             <input name="globs" placeholder="**/*.md, **/*.txt">
           </div>
@@ -3258,7 +3451,7 @@ function renderSearchSourcesTab(panel) {
             <input name="description" placeholder="Optional description">
           </div>
           <div class="cfg-actions search-form-span-2">
-            <button class="btn btn-primary" type="submit">Add Source</button>
+            <button class="btn btn-primary" type="submit" id="search-source-submit">Add Source</button>
             <button class="btn btn-secondary" type="button" id="search-add-cancel">Cancel</button>
           </div>
         </form>
@@ -3282,8 +3475,13 @@ function renderSearchSourcesTab(panel) {
   const addBtn = panel.querySelector('#search-add-source');
   const addWrap = panel.querySelector('#search-add-form-wrap');
   const addForm = panel.querySelector('#search-add-form');
+  const sourceFormTitle = panel.querySelector('#search-source-form-title');
+  const sourceSubmitBtn = panel.querySelector('#search-source-submit');
   const addCancelBtn = panel.querySelector('#search-add-cancel');
+  const sourceIdInput = addForm.querySelector('input[name="id"]');
   const pathInput = addForm.querySelector('input[name="path"]');
+  const globsInput = addForm.querySelector('input[name="globs"]');
+  const globPresetSelect = addForm.querySelector('select[name="globPreset"]');
   const pathBrowseBtn = addForm.querySelector('#search-path-browse');
   const pathPickerNote = addForm.querySelector('#search-path-picker-note');
   const refreshBtn = panel.querySelector('#search-refresh');
@@ -3374,6 +3572,70 @@ function renderSearchSourcesTab(panel) {
     }
   }
 
+  function splitGlobInput(value) {
+    return String(value || '').split(',').map((glob) => glob.trim()).filter(Boolean);
+  }
+
+  function sameGlobList(left, right) {
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+  }
+
+  function findGlobPresetId(globs) {
+    const normalized = Array.isArray(globs) ? globs : [];
+    return SEARCH_GLOB_PRESETS.find((preset) => sameGlobList(preset.globs, normalized))?.id ?? 'custom';
+  }
+
+  function resolveSelectedGlobs(formData, supportsGlobs) {
+    if (!supportsGlobs) return undefined;
+
+    const presetId = String(formData.get('globPreset') || globPresetSelect?.value || 'documents');
+    if (presetId !== 'custom') {
+      const preset = SEARCH_GLOB_PRESETS.find((entry) => entry.id === presetId) ?? SEARCH_GLOB_PRESETS[0];
+      if (globsInput) {
+        globsInput.value = preset.globs.join(', ');
+      }
+      return [...preset.globs];
+    }
+
+    const customGlobs = splitGlobInput(formData.get('globs'));
+    return customGlobs.length > 0 ? customGlobs : undefined;
+  }
+
+  function resetSourceForm() {
+    state.editingSourceId = null;
+    addForm.reset();
+    if (sourceIdInput) sourceIdInput.disabled = false;
+    if (sourceFormTitle) sourceFormTitle.textContent = 'Add Source';
+    if (sourceSubmitBtn) sourceSubmitBtn.textContent = 'Add Source';
+    syncAddFormFields();
+  }
+
+  function editSource(sourceId) {
+    const source = state.sources.find((item) => item.id === sourceId);
+    if (!source) {
+      setFeedback(`Source '${sourceId}' was not found.`, 'error');
+      return;
+    }
+
+    state.editingSourceId = source.id;
+    addForm.elements.namedItem('id').value = source.id;
+    addForm.elements.namedItem('name').value = source.name || '';
+    addForm.elements.namedItem('type').value = source.type || 'directory';
+    addForm.elements.namedItem('path').value = source.path || '';
+    addForm.elements.namedItem('globs').value = Array.isArray(source.globs) ? source.globs.join(', ') : '';
+    addForm.elements.namedItem('branch').value = source.branch || '';
+    addForm.elements.namedItem('description').value = source.description || '';
+    if (globPresetSelect) {
+      globPresetSelect.value = findGlobPresetId(source.globs);
+    }
+    if (sourceIdInput) sourceIdInput.disabled = true;
+    if (sourceFormTitle) sourceFormTitle.textContent = `Edit ${source.name || source.id}`;
+    if (sourceSubmitBtn) sourceSubmitBtn.textContent = 'Save Source';
+    syncAddFormFields();
+    toggleAddForm(true);
+  }
+
   function syncAddFormFields() {
     const type = addForm.querySelector('select[name="type"]')?.value || 'directory';
     const globsField = addForm.querySelector('[data-search-field="globs"]');
@@ -3396,6 +3658,64 @@ function renderSearchSourcesTab(panel) {
           : type === 'file'
             ? 'S:\\Development\\notes\\README.md'
             : 'S:\\Development';
+    }
+    if (showGlobs && globPresetSelect && globsInput && !globsInput.value.trim()) {
+      const preset = SEARCH_GLOB_PRESETS.find((entry) => entry.id === globPresetSelect.value)
+        ?? SEARCH_GLOB_PRESETS[0];
+      globsInput.value = preset.globs.join(', ');
+    }
+  }
+
+  function readPersistedSources() {
+    return Array.isArray(sharedConfig?.assistant?.tools?.search?.sources)
+      ? [...sharedConfig.assistant.tools.search.sources]
+      : [];
+  }
+
+  function updateSharedSearchSources(nextSources) {
+    if (!sharedConfig) return;
+    sharedConfig.assistant = sharedConfig.assistant || {};
+    sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+    sharedConfig.assistant.tools.search = sharedConfig.assistant.tools.search || {};
+    sharedConfig.assistant.tools.search.sources = nextSources;
+  }
+
+  async function persistSearchSources(nextSources, fallbackMessage) {
+    const configResult = await api.updateConfig({
+      assistant: {
+        tools: {
+          search: { enabled: state.enabled, sources: nextSources },
+        },
+      },
+    });
+
+    if (!configResult.success) {
+      throw new Error(configResult.message || fallbackMessage);
+    }
+    updateSharedSearchSources(nextSources);
+  }
+
+  async function syncRuntimeSource(source, previousSourceId = source.id) {
+    if (!state.runtimeAvailable) return false;
+
+    try {
+      if (previousSourceId) {
+        const removeResult = await api.searchSourceRemove(previousSourceId);
+        if (removeResult?.success === false && !/not found/i.test(removeResult.message || '')) {
+          throw new Error(removeResult.message || 'Failed to update the live search runtime.');
+        }
+      }
+      const addResult = await api.searchSourceAdd(source);
+      if (addResult?.success === false) {
+        throw new Error(addResult.message || 'Failed to update the live search runtime.');
+      }
+      return true;
+    } catch (err) {
+      if (isUnavailableError(err)) {
+        state.runtimeAvailable = false;
+        return false;
+      }
+      throw err;
     }
   }
 
@@ -3465,6 +3785,7 @@ function renderSearchSourcesTab(panel) {
                     </label>
                   </td>
                   <td class="search-actions-cell">
+                    <button class="btn btn-secondary btn-sm search-action" data-action="edit" data-source-id="${escAttr(source.id)}">Edit</button>
                     <button class="btn btn-secondary btn-sm search-action" data-action="reindex" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Reindex</button>
                     <button class="btn btn-danger btn-sm search-action" data-action="remove" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Remove</button>
                   </td>
@@ -3576,12 +3897,14 @@ function renderSearchSourcesTab(panel) {
       setFeedback('Document Search is disabled in configuration. Enable it first to manage sources.', 'warning');
       return;
     }
+    if (addWrap.hidden) {
+      resetSourceForm();
+    }
     toggleAddForm(addWrap.hidden);
   });
 
   addCancelBtn.addEventListener('click', () => {
-    addForm.reset();
-    syncAddFormFields();
+    resetSourceForm();
     toggleAddForm(false);
   });
 
@@ -3608,6 +3931,17 @@ function renderSearchSourcesTab(panel) {
   });
 
   addForm.querySelector('select[name="type"]')?.addEventListener('change', syncAddFormFields);
+  globPresetSelect?.addEventListener('change', () => {
+    if (!globsInput || !globPresetSelect) return;
+    if (globPresetSelect.value === 'custom') {
+      globsInput.focus();
+      return;
+    }
+    const preset = SEARCH_GLOB_PRESETS.find((entry) => entry.id === globPresetSelect.value);
+    if (preset) {
+      globsInput.value = preset.globs.join(', ');
+    }
+  });
 
   addForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -3621,7 +3955,8 @@ function renderSearchSourcesTab(panel) {
     submitBtn.textContent = 'Adding...';
     try {
       const formData = new FormData(addForm);
-      const sourceId = String(formData.get('id') || '').trim();
+      const editingSourceId = state.editingSourceId;
+      const sourceId = editingSourceId || String(formData.get('id') || '').trim();
       const sourceType = String(formData.get('type') || 'directory').trim();
       const sourcePath = String(formData.get('path') || '').trim();
       const sourceName = String(formData.get('name') || '').trim();
@@ -3632,15 +3967,13 @@ function renderSearchSourcesTab(panel) {
       if (!sourcePath) throw new Error('Path / URL is required.');
 
       const supportsGlobs = sourceType === 'directory' || sourceType === 'git';
-      const globsRaw = String(formData.get('globs') || '').trim();
+      const selectedGlobs = resolveSelectedGlobs(formData, supportsGlobs);
       const source = {
         id: sourceId,
         name: sourceName,
         type: sourceType,
         path: sourcePath,
-        globs: supportsGlobs && globsRaw
-          ? globsRaw.split(',').map((glob) => glob.trim()).filter(Boolean)
-          : undefined,
+        globs: selectedGlobs,
         branch: sourceType === 'git'
           ? (String(formData.get('branch') || '').trim() || undefined)
           : undefined,
@@ -3648,68 +3981,43 @@ function renderSearchSourcesTab(panel) {
         enabled: true,
       };
 
-      // 1. If runtime is available, add to live store. If the runtime routes
-      // are unavailable, fall back to config-only persistence.
       let runtimeUpdated = false;
-      if (state.runtimeAvailable) {
-        try {
-          const result = await api.searchSourceAdd(source);
-          if (result?.success === false) {
-            throw new Error(result.message || 'Failed to add source to the live search runtime.');
-          }
-          runtimeUpdated = true;
-        } catch (err) {
-          if (isUnavailableError(err)) {
-            state.runtimeAvailable = false;
-          } else {
-            throw err;
-          }
+      if (editingSourceId) {
+        runtimeUpdated = await syncRuntimeSource(source, editingSourceId);
+      } else if (state.runtimeAvailable) {
+        const result = await api.searchSourceAdd(source);
+        if (result?.success === false) {
+          throw new Error(result.message || 'Failed to add source to the live search runtime.');
         }
+        runtimeUpdated = true;
       }
 
-      // 2. Persist to config so it survives restart
-      const currentSources = Array.isArray(sharedConfig?.assistant?.tools?.search?.sources)
-        ? [...sharedConfig.assistant.tools.search.sources]
-        : [];
-      
-      // Upsert
-      const existingIdx = currentSources.findIndex(s => s.id === source.id);
+      const currentSources = readPersistedSources();
+
+      const existingIdx = currentSources.findIndex(s => s.id === (editingSourceId || source.id));
       if (existingIdx >= 0) {
         currentSources[existingIdx] = source;
       } else {
         currentSources.push(source);
       }
 
-      const configResult = await api.updateConfig({
-        assistant: {
-          tools: {
-            search: { sources: currentSources },
-          },
-        },
-      });
-
-      if (!configResult.success) {
-        throw new Error(configResult.message || 'Failed to persist source to config.');
-      }
+      await persistSearchSources(currentSources, 'Failed to persist source to config.');
 
       // Update local state
       state.sources = currentSources;
-      if (sharedConfig) {
-        sharedConfig.assistant = sharedConfig.assistant || {};
-        sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
-        sharedConfig.assistant.tools.search = sharedConfig.assistant.tools.search || {};
-        sharedConfig.assistant.tools.search.sources = currentSources;
-      }
 
       toggleAddForm(false);
-      addForm.reset();
-      syncAddFormFields();
+      resetSourceForm();
       renderSources();
       
       setFeedback(
-        runtimeUpdated
-          ? `Source '${source.id}' added and hot-reloaded.`
-          : `Source '${source.id}' saved to config. Search runtime is currently unavailable, so it will load once search becomes active.`,
+        editingSourceId
+          ? (runtimeUpdated
+            ? `Source '${source.id}' updated and hot-reloaded.`
+            : `Source '${source.id}' updated in config. Search runtime is currently unavailable, so it will load once search becomes active.`)
+          : (runtimeUpdated
+            ? `Source '${source.id}' added and hot-reloaded.`
+            : `Source '${source.id}' saved to config. Search runtime is currently unavailable, so it will load once search becomes active.`),
         runtimeUpdated ? 'success' : 'warning',
       );
       void refreshAll();
@@ -3764,6 +4072,11 @@ function renderSearchSourcesTab(panel) {
     try {
       const result = await api.searchSourceToggle(sourceId, target.checked);
       if (!result.success) throw new Error(result.message || 'Unable to update source status.');
+      const nextSources = readPersistedSources().map((source) => (
+        source.id === sourceId ? { ...source, enabled: target.checked } : source
+      ));
+      await persistSearchSources(nextSources, 'Failed to persist source status to config.');
+      state.sources = nextSources;
       const item = state.sources.find((source) => source.id === sourceId);
       if (item) item.enabled = target.checked;
       setFeedback(`Source '${sourceId}' ${target.checked ? 'enabled' : 'disabled'}.`, 'success');
@@ -3781,11 +4094,16 @@ function renderSearchSourcesTab(panel) {
       ? event.target.closest('.search-action')
       : null;
     if (!(button instanceof HTMLButtonElement)) return;
-    if (!canManageSources()) return;
-
     const action = button.dataset.action;
     const sourceId = button.dataset.sourceId;
     if (!action || !sourceId) return;
+
+    if (action === 'edit') {
+      editSource(sourceId);
+      return;
+    }
+
+    if (!canManageSources()) return;
 
     button.disabled = true;
     const originalLabel = button.textContent || '';
@@ -3800,7 +4118,9 @@ function renderSearchSourcesTab(panel) {
         button.textContent = 'Removing...';
         const result = await api.searchSourceRemove(sourceId);
         if (!result.success) throw new Error(result.message || `Failed to remove '${sourceId}'.`);
-        state.sources = state.sources.filter((source) => source.id !== sourceId);
+        const nextSources = readPersistedSources().filter((source) => source.id !== sourceId);
+        await persistSearchSources(nextSources, `Failed to persist removal of '${sourceId}' to config.`);
+        state.sources = nextSources;
         setFeedback(`Removed source '${sourceId}'.`, 'success');
         renderSources();
         renderSummary();
@@ -6329,18 +6649,31 @@ function renderAppearanceTab(panel) {
   const currentFontPreset = getSavedFontPreset();
   const currentReduceMotion = getSavedReduceMotion();
   const currentFontPresetEntry = fontPresets.find((preset) => preset.id === currentFontPreset) || fontPresets[0];
+  const currentShellLayer = localStorage.getItem('guardianagent_workstation_mode') === 'true'
+    ? 'web-browser'
+    : 'classic';
 
   panel.innerHTML = `
     ${renderGuidancePanel({
       kicker: 'Appearance',
       compact: true,
-      whatItIs: 'This tab controls the visual theme bundles and lightweight accessibility settings of the Web UI and the embedded IDE.',
-      whatSeeing: 'You are seeing bundle filters, preview cards, search, and app-wide typography and motion controls.',
-      whatCanDo: 'Pick a built-in or curated bundle, search by visual family, let typography follow the selected theme, or reduce UI motion without changing runtime behavior.',
-      howLinks: 'Appearance only changes presentation. It does not affect monitoring, policy, workflow behavior, or page layout ownership.',
+      whatItIs: 'This tab controls the Web UI shell layer, color bundle, typography, text scale, motion, and editor alignment.',
+      whatSeeing: 'You are seeing shell-layer controls, display controls, bundle filters, preview cards, and search.',
+      whatCanDo: 'Switch between the classic layer and web browser layer, pick a bundle, tune text scale, or reduce UI motion.',
+      howLinks: 'Appearance changes presentation only. It does not change monitoring, policy, or workflow behavior.',
     })}
+    <div class="table-container">
+      <div class="table-header"><h3>Shell Layer</h3></div>
+      <div class="cfg-center-body">
+        <div class="cfg-mode-toggle" role="group" aria-label="Shell layer">
+          <button class="cfg-mode-btn ${currentShellLayer === 'classic' ? 'active' : ''}" type="button" data-shell-layer="classic">Classic Layer</button>
+          <button class="cfg-mode-btn ${currentShellLayer === 'web-browser' ? 'active' : ''}" type="button" data-shell-layer="web-browser">Web Browser Layer</button>
+        </div>
+        <div class="ops-task-sub">Choose which shell opens by default in this browser.</div>
+      </div>
+    </div>
     <div class="cfg-center-body" style="margin-bottom:1rem">
-      <div class="table-header"><h3>Accessibility</h3></div>
+      <div class="table-header"><h3>Display Controls</h3></div>
       <div class="cfg-form-grid">
         <div class="cfg-field">
           <label>Font Size</label>
@@ -6363,7 +6696,7 @@ function renderAppearanceTab(panel) {
             <input id="appearance-reduce-motion" type="checkbox" ${currentReduceMotion ? 'checked' : ''}>
             <span>Reduce Motion</span>
           </label>
-          <div class="ops-task-sub">Cuts transition and animation time across the app.</div>
+          <div class="ops-task-sub">Cuts transition and animation time across the app while preserving state changes and focus affordances.</div>
         </div>
       </div>
       <div class="cfg-actions">
@@ -6383,10 +6716,12 @@ function renderAppearanceTab(panel) {
       <button class="theme-filter-btn active" data-filter="all">All</button>
       <button class="theme-filter-btn" data-filter="dark">Dark</button>
       <button class="theme-filter-btn" data-filter="light">Light</button>
+      <button class="theme-filter-btn" data-filter="workstation">Traditional Workstation</button>
     </div>
     <div class="theme-filter-bar" data-theme-collection-bar>
       <button class="theme-filter-btn active" data-collection="all">All Sources</button>
       <button class="theme-filter-btn" data-collection="built-in">Built-In</button>
+      <button class="theme-filter-btn" data-collection="workstation">Workstation</button>
       <button class="theme-filter-btn" data-collection="curated">Curated</button>
     </div>
     <div class="theme-grid"></div>
@@ -6402,6 +6737,7 @@ function renderAppearanceTab(panel) {
   const fontFamilyDesc = panel.querySelector('#appearance-font-family-desc');
   const reduceMotionCheck = panel.querySelector('#appearance-reduce-motion');
   const resetButton = panel.querySelector('#appearance-reset');
+  const shellLayerButtons = panel.querySelectorAll('[data-shell-layer]');
 
   function matchesSearch(theme, query) {
     if (!query) return true;
@@ -6416,6 +6752,18 @@ function renderAppearanceTab(panel) {
       .join(' ')
       .toLowerCase();
     return haystack.includes(query);
+  }
+
+  function formatThemeCollection(collection) {
+    if (collection === 'built-in') return 'built-in';
+    if (collection === 'workstation') return 'workstation';
+    if (collection === 'curated') return 'curated';
+    return collection || 'built-in';
+  }
+
+  function formatThemeCategory(category) {
+    if (category === 'workstation') return 'traditional';
+    return category || 'theme';
   }
 
   function renderCards() {
@@ -6450,8 +6798,8 @@ function renderAppearanceTab(panel) {
           <div class="theme-card-name">${esc(theme.name)}</div>
           <div class="theme-card-desc">${esc(theme.description)}</div>
           <div class="theme-card-meta">
-            <span class="theme-card-badge ${theme.category}">${theme.category}</span>
-            <span class="theme-card-badge collection">${theme.collection === 'curated' ? 'curated' : 'built-in'}</span>
+            <span class="theme-card-badge ${theme.category}">${esc(formatThemeCategory(theme.category))}</span>
+            <span class="theme-card-badge collection">${esc(formatThemeCollection(theme.collection))}</span>
             ${theme.sourceName ? `<span class="theme-card-badge source">${esc(theme.sourceName)}</span>` : ''}
           </div>
         </div>
@@ -6508,6 +6856,20 @@ function renderAppearanceTab(panel) {
 
   reduceMotionCheck?.addEventListener('change', () => {
     applyReduceMotion(reduceMotionCheck.checked);
+  });
+
+  shellLayerButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextLayer = button.getAttribute('data-shell-layer') || 'classic';
+      const active = nextLayer === 'web-browser';
+      localStorage.setItem('guardianagent_workstation_mode', String(active));
+      shellLayerButtons.forEach((candidate) => {
+        candidate.classList.toggle('active', candidate === button);
+      });
+      window.dispatchEvent(new CustomEvent('guardianagent:workstation-mode-change', {
+        detail: { active },
+      }));
+    });
   });
 
   resetButton?.addEventListener('click', () => {

@@ -960,6 +960,7 @@ function isToolBackedEvidenceCategory(category: string): boolean {
   return isAutomationToolCategory(normalized)
     || isMemoryToolCategory(normalized)
     || isRepoEvidenceCategory(normalized)
+    || isDocumentSearchEvidenceCategory(normalized)
     || isWebEvidenceCategory(normalized)
     || normalized === 'second_brain'
     || normalized.startsWith('second_brain_');
@@ -999,6 +1000,15 @@ function isWebEvidenceCategory(category: string): boolean {
     || normalized === 'web_search'
     || normalized === 'web_fetch'
     || normalized.startsWith('browser_');
+}
+
+function isDocumentSearchEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'doc_search'
+    || normalized === 'doc_search_list'
+    || normalized === 'doc_search_status'
+    || normalized === 'document_search'
+    || normalized === 'document_sources';
 }
 
 function inferSecondBrainReadToolCategories(

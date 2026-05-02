@@ -440,6 +440,56 @@ describe('task plan receipt accounting', () => {
     ]);
   });
 
+  it('matches document search tools to search-task evidence steps', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'search_task',
+      operation: 'search',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      confidence: 'high',
+      summary: 'List indexed JSON document files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'List indexed JSON document files.',
+          expectedToolCategories: ['doc_search_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return the matching file paths.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      kind: 'general_answer',
+      route: 'search_task',
+      operation: 'search',
+      summary: 'List indexed JSON document files.',
+    });
+
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'doc_search_list',
+      args: { extension: 'json' },
+    })).toBe('step_1');
+    expect(matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'memory_search',
+      args: { query: 'json' },
+    })).toBeUndefined();
+  });
+
   it('preserves additional tool latitude when retrying a runtime-evidence fallback plan', () => {
     const plannedTask = buildPlannedTask({
       route: 'general_assistant',

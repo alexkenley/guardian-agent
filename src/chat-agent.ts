@@ -51,6 +51,7 @@ import {
   buildCodeWorkspaceWorkingSetSync,
   shouldRefreshCodeWorkspaceMap,
 } from './runtime/code-workspace-map.js';
+import { buildIntentGatewaySearchSourceSummaries } from './runtime/intent/search-source-context.js';
 import {
   assessCodeWorkspaceTrustSync,
   getEffectiveCodeWorkspaceTrustState,
@@ -1063,6 +1064,12 @@ interface DegradedDirectIntentResponseInput {
           : {}),
         ...(options?.gateway?.decision.entities.uiSurface
           ? { uiSurface: options.gateway.decision.entities.uiSurface }
+          : {}),
+        ...(options?.gateway?.decision.entities.searchSourceId
+          ? { searchSourceId: options.gateway.decision.entities.searchSourceId }
+          : {}),
+        ...(options?.gateway?.decision.entities.searchSourceType
+          ? { searchSourceType: options.gateway.decision.entities.searchSourceType }
           : {}),
       },
       pendingActionKind: options?.pendingAction?.blocker.kind,
@@ -3647,6 +3654,7 @@ interface DegradedDirectIntentResponseInput {
       continuity: summarizeContinuityThreadForGateway(gatewayContext.continuityThread),
       enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
       availableCodingBackends: this.tools?.listEnabledCodingBackends?.() ?? [],
+      configuredSearchSources: buildIntentGatewaySearchSourceSummaries(this.readConfig?.()),
     };
     const fallbackProviderOrder = readSelectedExecutionProfileMetadata(message.metadata)?.fallbackProviderOrder;
     const classified = await this.intentGateway.classify(

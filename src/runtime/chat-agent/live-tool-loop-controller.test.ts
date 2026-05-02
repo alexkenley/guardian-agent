@@ -251,4 +251,154 @@ describe('runLiveToolLoopController', () => {
     expect(chatWithRoutingMetadata.mock.calls[0]?.[2]?.tools).not.toEqual([]);
     expect(executeModelTool.mock.calls.map((call) => call[0])).toEqual(['find_tools', 'code_edit']);
   });
+
+  it('eagerly exposes planned document search tools to tool-loop orchestration', async () => {
+    const msg = message('Search documents for JSON files and list them out');
+    const findToolsDefinition = {
+      name: 'find_tools',
+      description: 'Search available tools.',
+      risk: 'read_only',
+      category: 'system',
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+    };
+    const docSearchDefinition = {
+      name: 'doc_search',
+      description: 'Search indexed document collections.',
+      risk: 'read_only',
+      category: 'search',
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+    };
+    const docSearchListDefinition = {
+      name: 'doc_search_list',
+      description: 'List indexed document files.',
+      risk: 'read_only',
+      category: 'search',
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+    };
+    const responses: Array<{ content: string; toolCalls?: ToolCall[] }> = [
+      {
+        content: '',
+        toolCalls: [{
+          id: 'docs-1',
+          name: 'doc_search_list',
+          arguments: JSON.stringify({ extension: 'json' }),
+        }],
+      },
+      { content: 'C:\\Users\\kenle\\Documents\\report.json' },
+    ];
+    const chatWithRoutingMetadata = vi.fn(async (_ctx, _messages: ChatMessage[], options?: ChatOptions) => {
+      if (responses.length === 2) {
+        expect(options?.tools?.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+          'find_tools',
+          'doc_search',
+          'doc_search_list',
+        ]));
+      }
+      const response = responses.shift() ?? { content: '' };
+      return {
+        response: {
+          content: response.content,
+          model: 'test-model',
+          finishReason: response.toolCalls?.length ? 'tool_calls' as const : 'stop' as const,
+          ...(response.toolCalls ? { toolCalls: response.toolCalls } : {}),
+        },
+        providerName: 'local',
+        providerLocality: 'local' as const,
+        usedFallback: false,
+        durationMs: 5,
+      };
+    });
+    const executeModelTool = vi.fn(async (toolName: string) => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        documents: [{
+          filepath: 'C:\\Users\\kenle\\Documents\\report.json',
+        }],
+        totalResults: 1,
+      },
+      toolName,
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listAlwaysLoadedDefinitions: vi.fn(() => [findToolsDefinition]),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+      listToolDefinitions: vi.fn(() => []),
+      getToolDefinition: vi.fn((name: string) => (
+        name === 'find_tools' ? findToolsDefinition
+          : name === 'doc_search' ? docSearchDefinition
+            : name === 'doc_search_list' ? docSearchListDefinition
+              : undefined
+      )),
+      executeModelTool,
+    };
+
+    const result = await runLiveToolLoopController({
+      agentId: 'default',
+      ctx: { llm: { name: 'local' } },
+      message: msg,
+      llmMessages: [{ role: 'user', content: msg.content }],
+      tools,
+      qualityFallbackEnabled: false,
+      directIntentDecision: directDecision({
+        route: 'search_task',
+        operation: 'search',
+        summary: 'Search documents for JSON files and list them out.',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search indexed document files.',
+            expectedToolCategories: ['doc_search'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return file paths.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      directBrowserIntent: false,
+      hasResolvedCodeSession: false,
+      activeSkills: [],
+      requestIntentContent: msg.content,
+      routedScopedMessage: msg,
+      conversationUserId: 'owner',
+      conversationChannel: 'web',
+      allowModelMemoryMutation: false,
+      defaultToolResultProviderKind: 'local',
+      maxToolRounds: 4,
+      contextBudget: 24_000,
+      pendingActionUserId: 'owner',
+      pendingActionChannel: 'web',
+      pendingActionUserKey: 'owner:web',
+      log: { info: vi.fn(), warn: vi.fn() },
+      chatWithRoutingMetadata,
+      resolveToolResultProviderKind: vi.fn(() => 'local' as const),
+      sanitizeToolResultForLlm: vi.fn((_toolName, result) => ({
+        sanitized: result,
+        threats: [],
+        trustLevel: 'trusted' as const,
+        taintReasons: [],
+      })),
+      resolveStoredToolLoopExecutionProfile: vi.fn(() => null),
+      lacksUsableAssistantContent: vi.fn((content?: string) => !content?.trim()),
+      looksLikeOngoingWorkResponse: vi.fn(() => false),
+      getPendingApprovalIds: vi.fn(() => []),
+      setPendingApprovals: vi.fn(),
+      setPendingApprovalAction: vi.fn(() => ({ action: null })),
+      setChatContinuationGraphPendingApprovalActionForRequest: vi.fn(() => ({ action: null })),
+    } as never);
+
+    expect(result.finalContent).toBe('C:\\Users\\kenle\\Documents\\report.json');
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'doc_search_list',
+      { extension: 'json' },
+      expect.objectContaining({ origin: 'assistant' }),
+    );
+  });
 });

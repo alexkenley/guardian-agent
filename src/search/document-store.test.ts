@@ -50,13 +50,43 @@ describeSQLite('DocumentStore', () => {
     expect(store.getSource('nonexistent')).toBeNull();
   });
 
+  it('updates source configuration by id', () => {
+    store.addSource({ id: 'src', name: 'Source', type: 'directory', path: '/old', globs: ['**/*.md'], enabled: true });
+
+    expect(store.updateSource({
+      id: 'src',
+      name: 'Source Updated',
+      type: 'directory',
+      path: '/new',
+      globs: ['**/*.txt'],
+      enabled: false,
+      description: 'Updated source',
+    })).toBe(true);
+
+    expect(store.getSource('src')).toEqual({
+      id: 'src',
+      name: 'Source Updated',
+      type: 'directory',
+      path: '/new',
+      globs: ['**/*.txt'],
+      branch: undefined,
+      enabled: false,
+      description: 'Updated source',
+    });
+    expect(store.updateSource({ id: 'missing', name: 'Missing', type: 'file', path: '/missing', enabled: true })).toBe(false);
+  });
+
   it('removes sources and their documents', () => {
     store.addSource({ id: 'rm-test', name: 'RM', type: 'directory', path: '/rm', enabled: true });
     const doc = store.upsertDocument('rm-test', '/rm/file.txt', 'Title', 'hash1', 'text/plain', 100);
     store.insertChunk(doc.id, null, 'chunk content', 0, 13, 2, 'parent');
 
-    store.removeSource('rm-test');
+    expect(store.removeSource('rm-test')).toBe(true);
     expect(store.getSource('rm-test')).toBeNull();
+  });
+
+  it('returns false when removing a missing source', () => {
+    expect(store.removeSource('missing')).toBe(false);
   });
 
   it('toggles source enabled state', () => {
@@ -117,6 +147,21 @@ describeSQLite('DocumentStore', () => {
     const removed = store.removeStaleDocuments('s4', new Set(['/s4/keep.md']));
     expect(removed).toEqual(['/s4/remove.md']);
     expect(store.getDocumentsBySource('s4')).toHaveLength(1);
+  });
+
+  it('lists indexed documents by source and extension', () => {
+    store.addSource({ id: 'list-a', name: 'List A', type: 'directory', path: '/list-a', enabled: true });
+    store.addSource({ id: 'list-b', name: 'List B', type: 'directory', path: '/list-b', enabled: true });
+    store.upsertDocument('list-a', '/list-a/a.json', 'A', 'h1', 'application/json', 10);
+    store.upsertDocument('list-a', '/list-a/b.txt', 'B', 'h2', 'text/plain', 20);
+    store.upsertDocument('list-b', '/list-b/c.json', 'C', 'h3', 'application/json', 30);
+
+    const docs = store.listDocuments({ collection: 'list-a', extension: 'json' });
+    expect(docs.map((doc) => doc.filepath)).toEqual(['/list-a/a.json']);
+    expect(store.listDocuments({ extension: '.json' }).map((doc) => doc.filepath)).toEqual([
+      '/list-a/a.json',
+      '/list-b/c.json',
+    ]);
   });
 
   // ─── Chunk CRUD ─────────────────────────────────────────

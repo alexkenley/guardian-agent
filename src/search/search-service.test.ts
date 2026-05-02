@@ -66,6 +66,57 @@ describeSQLite('SearchService', () => {
     svc.close();
   });
 
+  it('updates existing persisted source configuration on init', () => {
+    const dbPath = join(tmpDir, 'search.sqlite');
+    const svc = new SearchService(makeConfig(tmpDir, {
+      sqlitePath: dbPath,
+      sources: [
+        { id: 'docs', name: 'Docs', type: 'directory', path: contentDir, globs: ['**/*.md'], enabled: true },
+      ],
+    }));
+    svc.close();
+
+    const nextDir = join(tmpDir, 'next-content');
+    mkdirSync(nextDir, { recursive: true });
+    const reloaded = new SearchService(makeConfig(tmpDir, {
+      sqlitePath: dbPath,
+      sources: [
+        { id: 'docs', name: 'Docs Updated', type: 'directory', path: nextDir, globs: ['**/*.txt'], enabled: false },
+      ],
+    }));
+
+    expect(reloaded.getSources()[0]).toMatchObject({
+      id: 'docs',
+      name: 'Docs Updated',
+      path: nextDir,
+      globs: ['**/*.txt'],
+      enabled: false,
+    });
+    reloaded.close();
+  });
+
+  it('removes persisted sources that are no longer in config on init', () => {
+    const dbPath = join(tmpDir, 'search.sqlite');
+    const svc = new SearchService(makeConfig(tmpDir, {
+      sqlitePath: dbPath,
+      sources: [
+        { id: 'keep', name: 'Keep', type: 'directory', path: contentDir, enabled: true },
+        { id: 'drop', name: 'Drop', type: 'directory', path: contentDir, enabled: true },
+      ],
+    }));
+    svc.close();
+
+    const reloaded = new SearchService(makeConfig(tmpDir, {
+      sqlitePath: dbPath,
+      sources: [
+        { id: 'keep', name: 'Keep', type: 'directory', path: contentDir, enabled: true },
+      ],
+    }));
+
+    expect(reloaded.getSources().map((source) => source.id)).toEqual(['keep']);
+    reloaded.close();
+  });
+
   it('adds and removes sources at runtime', () => {
     const svc = new SearchService(makeConfig(tmpDir));
     svc.addSource({ id: 'rt', name: 'Runtime', type: 'file', path: '/f.txt', enabled: true });
@@ -92,6 +143,23 @@ describeSQLite('SearchService', () => {
 
     const svc = new SearchService(makeConfig(tmpDir, {
       sources: [{ id: 'docs', name: 'Docs', type: 'directory', path: contentDir, enabled: true }],
+    }));
+
+    const result = await svc.indexSource('docs');
+    expect(result.indexed).toBe(2);
+    expect(result.errors).toHaveLength(0);
+    svc.close();
+  });
+
+  it('matches globstar globs against root-level files', async () => {
+    const nestedDir = join(contentDir, 'nested');
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(join(contentDir, 'readme.md'), '# Root Guide\n\nRoot markdown content.');
+    writeFileSync(join(nestedDir, 'guide.md'), '# Nested Guide\n\nNested markdown content.');
+    writeFileSync(join(contentDir, 'notes.txt'), 'Plain text content.');
+
+    const svc = new SearchService(makeConfig(tmpDir, {
+      sources: [{ id: 'docs', name: 'Docs', type: 'directory', path: contentDir, globs: ['**/*.md'], enabled: true }],
     }));
 
     const result = await svc.indexSource('docs');
@@ -200,6 +268,21 @@ describeSQLite('SearchService', () => {
     const filtered = await svc.search({ query: 'alpha', mode: 'keyword', collection: 'src-a' });
     expect(filtered.results.length).toBeGreaterThanOrEqual(1);
     expect(filtered.results.some(r => r.snippet.includes('bravo'))).toBe(true);
+    svc.close();
+  });
+
+  it('lists indexed documents by extension', async () => {
+    writeFileSync(join(contentDir, 'report.json'), '{"name":"report"}');
+    writeFileSync(join(contentDir, 'notes.txt'), 'notes');
+
+    const svc = new SearchService(makeConfig(tmpDir, {
+      sources: [{ id: 'docs', name: 'Docs', type: 'directory', path: contentDir, enabled: true }],
+    }));
+
+    await svc.indexSource('docs');
+    const listed = svc.listDocuments({ collection: 'docs', extension: 'json' });
+    expect(listed.documents.map((doc) => doc.filepath)).toEqual([join(contentDir, 'report.json')]);
+    expect(listed.totalResults).toBe(1);
     svc.close();
   });
 

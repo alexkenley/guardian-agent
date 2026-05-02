@@ -443,6 +443,52 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.gatewayDirected).toBe(true);
   });
 
+  it('does not default low-confidence search tasks to direct web search', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'search_task', operation: 'search', confidence: 'low' }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('defers document-search answer plans to tool orchestration instead of memory or web direct routing', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'search_task',
+        operation: 'search',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'List indexed JSON document files.',
+            expectedToolCategories: ['doc_search_list'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return the matching file paths.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('keeps explicit memory search on memory_read', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'memory_task', operation: 'search' }),
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual(['memory_read']);
+  });
+
   it('keeps browser-only action plans on the direct browser candidate', () => {
     const result = resolveDirectIntentRoutingCandidates(
       mockGateway({

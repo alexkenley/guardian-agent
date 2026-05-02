@@ -18,6 +18,9 @@ const READ_OR_SEARCH_TOOL_CATEGORIES = new Set([
   'code_symbol_search',
   'web_search',
   'web_fetch',
+  'doc_search',
+  'doc_search_list',
+  'doc_search_status',
 ]);
 
 const GENERIC_TOOL_PLAN_CATEGORIES = new Set([

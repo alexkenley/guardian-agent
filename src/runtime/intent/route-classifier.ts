@@ -219,6 +219,16 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       command: {
         type: 'string',
       },
+      searchSourceId: {
+        type: 'string',
+      },
+      searchSourceName: {
+        type: 'string',
+      },
+      searchSourceType: {
+        type: 'string',
+        enum: ['directory', 'file', 'git', 'url'],
+      },
     },
     required: ['route', 'confidence', 'operation', 'summary'],
   },
@@ -234,7 +244,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   '- personal_assistant_task: personal productivity work in Second Brain such as notes, tasks, reminders, calendar planning, meeting prep, contact context, routines, briefs, and personal retrieval across messages, docs, events, and notes.',
   '- workspace_task: explicit provider CRUD or administration in managed Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Calendar object edits, OneDrive, SharePoint, or Teams. Use this when the provider object or provider surface itself is the target, not Second Brain synthesis.',
   '- email_task: direct mailbox work in Gmail or Outlook such as checking inbox contents, reading mail, composing, drafting, sending, replying, or forwarding email.',
-  '- search_task: generic web or document search and result retrieval.',
+  '- search_task: generic web search or search/list retrieval from configured indexed document sources.',
   '- memory_task: durable memory operations such as remember/save, recall, or search memory.',
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
   '- coding_task: code execution, code generation, debugging, repo inspection, code review, implementation planning, or programming work within a coding workspace. NOT session management.',
@@ -281,6 +291,9 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Prefer workspace_task for explicit provider CRUD or administration such as listing Drive files, creating a Google Sheet, editing a SharePoint document, browsing OneDrive, or mutating an event directly in Google Calendar or Outlook Calendar.',
   'Prefer email_task for direct inbox work in Gmail or Outlook, but not for meeting prep, follow-up drafting, or broader Second Brain synthesis.',
   'Prefer search_task over browser_task for generic web search.',
+  'Prefer search_task over memory_task when the user asks to search documents, indexed docs, configured document sources, document collections, or doc_search. Memory_task is only for explicit durable-memory recall/search requests.',
+  'For document-source content search, use planned_steps with expectedToolCategories=["doc_search"]. For listing indexed document files by type or extension, use expectedToolCategories=["doc_search_list"]. For web search, use expectedToolCategories=["web_search"].',
+  'Configured document sources are named indexed collections. Do not classify a URL or GitHub repo as document search unless it clearly names a configured source with indexedSearchAvailable=true; otherwise use browser_task, coding_task, or filesystem_task.',
   'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
   'Do not use automation_control for explicit built-in tool execution requests, cloud-hosting status checks, or direct tool names such as whm_status, vercel_status, aws_status, gcp_status, azure_status, or cf_status.',
@@ -410,7 +423,7 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   '- personal_assistant_task: Second Brain notes, tasks, routines, briefs, contacts, calendar planning, meeting prep, and personal retrieval.',
   '- workspace_task: explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Google Calendar, OneDrive, SharePoint, Teams, or Outlook Calendar.',
   '- email_task: direct Gmail or Outlook mailbox work.',
-  '- search_task: generic web or document search.',
+  '- search_task: generic web search or configured indexed document-source search/list retrieval.',
   '- memory_task: explicit remember, recall, or memory search requests.',
   '- filesystem_task: filesystem lookup or read/write operations.',
   '- coding_task: code work inside a workspace, including explicit backend delegation and remote sandbox command execution.',
@@ -433,6 +446,8 @@ const INTENT_GATEWAY_COMPACT_INSTRUCTION_LINES = [
   'Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks. Prefer general_assistant with uiSurface=config and provider/tool orchestration workload metadata for those requests.',
   'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task refusal/analysis turns, not filesystem_task, even when the user names local paths or config files.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct provider CRUD. Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, or personal retrieval across email/docs/calendar/notes.',
+  'Prefer search_task over memory_task when the user asks to search indexed documents, configured document sources, document collections, or doc_search. Use planned_steps with expectedToolCategories=["doc_search"] for content search and ["doc_search_list"] for listing indexed files by type or extension.',
+  'Configured document sources are named indexed collections. Populate searchSourceId/searchSourceType only when the request refers to a configured source; do not treat any URL or GitHub repo mention as document search by default.',
   'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with route=personal_assistant_task, personalItemType=calendar, and calendarTarget=local.',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
   'For automation_control read/inspect requests, set automationReadView=count when the user asks only for the number/count/how many automations; otherwise set automationReadView=catalog.',
@@ -489,7 +504,9 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'complex_planning_task means the user explicitly wants Guardian\'s complex-planning / DAG planner path. Do not use it for ordinary filesystem or coding work unless the user directly asks for the planner path itself.',
   'memory_task means explicit remember, save, recall, or search memory requests.',
   'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, direct Google Calendar or Outlook Calendar event edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, contact context, briefs, and personal retrieval across messages, docs, events, and notes.',
-  'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
+  'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search or indexed document search.',
+  'Prefer search_task over memory_task when the user asks to search documents, indexed docs, configured document sources, document collections, or doc_search. Use planned_steps with expectedToolCategories=["doc_search"] for document content search and ["doc_search_list"] for listing indexed files by type or extension. Use memory_task only for explicit persistent-memory search or recall.',
+  'Configured document sources are named indexed collections. Use document search only when the request points at a configured source with indexedSearchAvailable=true; route ordinary URLs/GitHub repos through browser or coding routes.',
   'Guardian AI provider profile inventory, model catalogs, model routing policy, and AI provider configuration work are not personal_assistant_task. Prefer general_assistant with uiSurface="config" and provider/tool orchestration workload metadata for those requests.',
   'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task refusal/analysis turns, not filesystem_task, even when the user names local paths or config files. For raw-secret disclosure requests, prefer executionClass="security_analysis", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", simpleVsComplex="simple", and preferredAnswerPath="direct".',
   'Generic planning or advice prompts such as "Give me a concise plan for organizing my week" are general_assistant, not personal_assistant_task, unless the user explicitly asks to inspect, summarize, or update their actual Second Brain tasks, notes, calendar, routines, or Today view.',
@@ -564,6 +581,8 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Show me the newest five emails in Gmail." -> route="email_task", operation="read", emailProvider="gws", mailboxReadMode="latest".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
   'Examples: "Search the repo for ollama_cloud and tell me which files define its routing." -> route="coding_task", operation="search", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=false, expectedContextPressure="medium", preferredAnswerPath="direct".',
+  'Examples: "Search documents for JSON files and list them out." -> route="search_task", operation="search", executionClass="tool_orchestration", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", planned_steps=[{"kind":"search","summary":"List indexed JSON document files.","expectedToolCategories":["doc_search_list"],"required":true},{"kind":"answer","summary":"Return the matching file paths.","required":true,"dependsOn":["step_1"]}].',
+  'Examples: "Search test-docs for threat model reports." -> route="search_task", operation="search", executionClass="tool_orchestration", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", planned_steps=[{"kind":"search","summary":"Search indexed document content in test-docs.","expectedToolCategories":["doc_search"],"required":true},{"kind":"answer","summary":"Summarize the matching document results.","required":true,"dependsOn":["step_1"]}].',
   'Examples: "Inspect src/runtime/intent-gateway.ts and review the uplift for regressions." -> route="coding_task", operation="inspect", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
   'Examples: "Use your complex-planning path for this request. Create three files and synthesize them into a summary." -> route="complex_planning_task", operation="run", executionClass="tool_orchestration", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
   'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", mailboxReadMode="unread".',
@@ -597,6 +616,9 @@ const INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT = [
   'Prefer personal_assistant_task for Second Brain notes, tasks, calendar planning, briefs, contacts, routines, and personal retrieval.',
   'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, or Outlook Calendar CRUD.',
   'Prefer general_assistant for direct advice, explanation, or provider/model configuration work.',
+  'Prefer search_task over memory_task when the user asks to search indexed documents, configured document sources, document collections, or doc_search. Include planned_steps using expectedToolCategories=["doc_search"] for document content search or ["doc_search_list"] for listing indexed files by type or extension.',
+  'A configured document source is an indexed collection, not merely any URL, local path, or GitHub repo mentioned in the prompt. If the request names a configured source id/name and asks to search, read, or list indexed contents from that source, choose search_task and populate searchSourceId plus searchSourceType. If a URL or GitHub repo is not clearly a configured indexed source, route it to browser_task, coding_task, or filesystem_task as appropriate.',
+  'Configured search sources with indexedSearchAvailable=false are known targets but not currently searchable through doc_search. Do not route those to document search unless the user is asking to configure/reindex them; use the underlying browser/coding/filesystem route or ask a clarification question.',
   'Requests to reveal, print, extract, dump, or exfiltrate raw API keys, bearer tokens, Telegram bot tokens, provider credentials, environment secrets, Guardian config secrets, credential-store values, or files under .guardianagent are security_task, not filesystem_task, even when the user names local paths or config files.',
 ].join(' ');
 
@@ -755,10 +777,27 @@ export function buildIntentGatewayContextSections(input: IntentGatewayInput): st
   const codingBackendSection = input.availableCodingBackends && input.availableCodingBackends.length > 0
     ? `Available coding backends: ${input.availableCodingBackends.join(', ')}\n`
     : '';
+  const configuredSearchSources = (input.configuredSearchSources ?? [])
+    .filter((source) => source.id.trim() && source.name.trim())
+    .slice(0, 20);
+  const searchSourcesSection = configuredSearchSources.length > 0
+    ? [
+        'Configured document search sources:',
+        ...configuredSearchSources.map((source) => {
+          const stats = [
+            typeof source.documentCount === 'number' ? `documents=${source.documentCount}` : undefined,
+            typeof source.chunkCount === 'number' ? `chunks=${source.chunkCount}` : undefined,
+          ].filter(Boolean).join('; ');
+          return `- id=${source.id}; name=${source.name}; type=${source.type}; enabled=${source.enabled}; indexedSearchAvailable=${source.indexedSearchAvailable}${stats ? `; ${stats}` : ''}`;
+        }),
+        '',
+      ].join('\n')
+    : '';
   return [
     `Channel: ${channelLabel}`,
     providerSection.trimEnd(),
     codingBackendSection.trimEnd(),
+    searchSourcesSection.trimEnd(),
     'Classify this request.',
     '',
     normalizedRequest && normalizedRequest !== rawRequest

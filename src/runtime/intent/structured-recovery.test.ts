@@ -880,6 +880,55 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.preferredAnswerPath).toBe('tool_loop');
   });
 
+  it('preserves document-search evidence plans as search-task tool orchestration', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'List indexed JSON document files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'List indexed JSON document files.',
+          expectedToolCategories: ['doc_search_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return the matching file paths.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Search documents for JSON files and list them out.',
+    });
+
+    expect(decision.route).toBe('search_task');
+    expect(decision.plannedSteps).toEqual([
+      expect.objectContaining({
+        kind: 'search',
+        expectedToolCategories: ['doc_search_list'],
+      }),
+      expect.objectContaining({
+        kind: 'answer',
+        dependsOn: ['step_1'],
+      }),
+    ]);
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('repairs collapsed comma-separated web, repo, and memory search plans', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'search_task',

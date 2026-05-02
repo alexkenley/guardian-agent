@@ -132,6 +132,19 @@ export interface IntentGatewayEntities {
   toolName?: string;
   profileId?: string;
   command?: string;
+  searchSourceId?: string;
+  searchSourceName?: string;
+  searchSourceType?: 'directory' | 'file' | 'git' | 'url';
+}
+
+export interface IntentGatewaySearchSourceSummary {
+  id: string;
+  name: string;
+  type: 'directory' | 'file' | 'git' | 'url';
+  enabled: boolean;
+  indexedSearchAvailable: boolean;
+  documentCount?: number;
+  chunkCount?: number;
 }
 
 export interface IntentGatewayDecisionProvenance {
@@ -221,6 +234,7 @@ export interface IntentGatewayInput {
   } | null;
   enabledManagedProviders?: string[];
   availableCodingBackends?: string[];
+  configuredSearchSources?: IntentGatewaySearchSourceSummary[];
 }
 
 export interface IntentGatewayRepairContext {

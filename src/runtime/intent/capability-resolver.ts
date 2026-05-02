@@ -69,7 +69,7 @@ function preferredCandidatesForDecision(
         ? ['workspace_write', 'workspace_read']
         : ['workspace_read', 'workspace_write'];
     case 'search_task':
-      return ['web_search'];
+      return shouldUseDirectWebSearchCandidate(decision) ? ['web_search'] : [];
     case 'security_task':
       return ['security_guardrail'];
     case 'memory_task':
@@ -98,6 +98,17 @@ function preferredCandidatesForDecision(
     default:
       return [];
   }
+}
+
+function shouldUseDirectWebSearchCandidate(decision: IntentGatewayDecision): boolean {
+  if (decision.confidence === 'low') return false;
+  if (decision.requiresToolSynthesis === true || decision.preferredAnswerPath === 'tool_loop') return false;
+  const nonAnswerSteps = requiredPlannedSteps(decision).filter((step) => step.kind !== 'answer');
+  if (nonAnswerSteps.length <= 0) return true;
+  return nonAnswerSteps.every((step) => {
+    const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
+    return categories.length > 0 && categories.every((category) => isWebSearchDirectCategory(category));
+  });
 }
 
 function requiredPlannedSteps(decision: IntentGatewayDecision) {

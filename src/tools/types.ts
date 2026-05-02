@@ -234,7 +234,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'second_brain_routine_delete',
     'second_brain_usage',
   ],
-  search: ['doc_search', 'doc_search_status', 'doc_search_reindex'],
+  search: ['doc_search', 'doc_search_list', 'doc_search_status', 'doc_search_reindex'],
 };
 
 export interface ToolDefinition {

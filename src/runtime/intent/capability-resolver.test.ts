@@ -307,6 +307,42 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['filesystem']);
   });
 
+  it('defers document-search answer plans for tool-loop orchestration', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'search_task',
+        operation: 'search',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'List indexed JSON document files.',
+            expectedToolCategories: ['doc_search_list'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return the matching file paths.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
+  it('does not map low-confidence search tasks to direct web search', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'search_task',
+        operation: 'search',
+        confidence: 'low',
+      }),
+    )).toEqual([]);
+  });
+
   it('maps email drafts to write-first workspace candidates', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

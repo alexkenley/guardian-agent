@@ -36,6 +36,7 @@ import {
 } from './intent/gateway-plan-repair.js';
 import { attachExecutionIdentityMetadata } from './execution-identity.js';
 import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
+import { buildIntentGatewaySearchSourceSummaries } from './intent/search-source-context.js';
 import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
 import { resolveConversationHistoryChannel } from './channel-surface-ids.js';
 import {
@@ -328,6 +329,7 @@ export function createIncomingDispatchPreparer(args: {
       continuity: continuitySummary,
       enabledManagedProviders: args.enabledManagedProviders ? [...args.enabledManagedProviders] : [],
       availableCodingBackends,
+      configuredSearchSources: buildIntentGatewaySearchSourceSummaries(currentConfig),
     };
     const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
       if (!providerName) return null;

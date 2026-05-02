@@ -3834,9 +3834,9 @@ async function main(): Promise<void> {
           docSearch = undefined;
           toolExecutor.setDocSearch(undefined);
         }
-        if (searchConfig?.enabled) {
+        if (searchConfig && searchConfig.enabled !== false) {
           const { SearchService } = await import('./search/search-service.js');
-          docSearch = new SearchService(searchConfig);
+          docSearch = new SearchService({ ...searchConfig, enabled: true });
           if (docSearch.isAvailable()) {
             log.info('Native document search engine (re)initialized');
             toolExecutor.setDocSearch(docSearch);
@@ -6661,51 +6661,59 @@ async function main(): Promise<void> {
   // ─── Document Search callbacks ──────────────────────────
   dashboardCallbacks.onSearchStatus = () => {
     const runtimeStatus = docSearch?.status();
+    const configuredSources = (configRef.current.assistant.tools.search?.sources ?? []).map((source) => ({
+      id: source.id,
+      name: source.name,
+      type: source.type,
+      path: source.path,
+      enabled: source.enabled,
+    }));
     return {
       installed: docSearch?.isAvailable() === true,
       available: runtimeStatus?.available ?? false,
       version: 'native',
       collections: runtimeStatus?.collections ?? [],
-      configuredSources: runtimeStatus?.configuredSources ?? (
-        configRef.current.assistant.tools.search?.sources ?? []
-      ).map((source) => ({
-        id: source.id,
-        name: source.name,
-        type: source.type,
-        path: source.path,
-        enabled: source.enabled,
-      })),
+      configuredSources,
       vectorSearchAvailable: runtimeStatus?.vectorSearchAvailable ?? false,
     };
   };
-  dashboardCallbacks.onSearchSources = () => docSearch
-    ? docSearch.getSources()
-    : (configRef.current.assistant.tools.search?.sources ?? []);
+  dashboardCallbacks.onSearchSources = () => configRef.current.assistant.tools.search?.sources ?? [];
   dashboardCallbacks.onSearchPickPath = ({ kind }) => pickNativeSearchPath(kind);
 
-  if (docSearch) {
-    dashboardCallbacks.onSearchSourceAdd = (source: any) => {
-      try {
-        docSearch!.addSource(source);
-        return { success: true, message: `Source '${source.id}' added.` };
-      } catch (err: any) {
-        return { success: false, message: err.message ?? String(err) };
-      }
-    };
-    dashboardCallbacks.onSearchSourceRemove = (id: string) => {
-      const removed = docSearch!.removeSource(id);
-      return removed
-        ? { success: true, message: `Source '${id}' removed.` }
-        : { success: false, message: `Source '${id}' not found.` };
-    };
-    dashboardCallbacks.onSearchSourceToggle = (id: string, enabled: boolean) => {
-      const toggled = docSearch!.toggleSource(id, enabled);
-      return toggled
-        ? { success: true, message: `Source '${id}' ${enabled ? 'enabled' : 'disabled'}.` }
-        : { success: false, message: `Source '${id}' not found.` };
-    };
-    dashboardCallbacks.onSearchReindex = (collection?: string) => docSearch!.reindex(collection);
-  }
+  dashboardCallbacks.onSearchSourceAdd = (source: any) => {
+    if (!docSearch?.isAvailable()) {
+      return { success: false, message: 'Document Search runtime is not available.' };
+    }
+    try {
+      docSearch.addSource(source);
+      return { success: true, message: `Source '${source.id}' added.` };
+    } catch (err: any) {
+      return { success: false, message: err.message ?? String(err) };
+    }
+  };
+  dashboardCallbacks.onSearchSourceRemove = (id: string) => {
+    if (!docSearch?.isAvailable()) {
+      return { success: false, message: 'Document Search runtime is not available.' };
+    }
+    const removed = docSearch.removeSource(id);
+    return removed
+      ? { success: true, message: `Source '${id}' removed.` }
+      : { success: false, message: `Source '${id}' not found.` };
+  };
+  dashboardCallbacks.onSearchSourceToggle = (id: string, enabled: boolean) => {
+    if (!docSearch?.isAvailable()) {
+      return { success: false, message: 'Document Search runtime is not available.' };
+    }
+    const toggled = docSearch.toggleSource(id, enabled);
+    return toggled
+      ? { success: true, message: `Source '${id}' ${enabled ? 'enabled' : 'disabled'}.` }
+      : { success: false, message: `Source '${id}' not found.` };
+  };
+  dashboardCallbacks.onSearchReindex = (collection?: string) => (
+    docSearch?.isAvailable()
+      ? docSearch.reindex(collection)
+      : Promise.resolve({ success: false, message: 'Document Search runtime is not available.' })
+  );
 
   const autoScanMinutes = config.assistant.threatIntel.autoScanIntervalMinutes;
   let autoScanInFlight = false;

@@ -161,6 +161,70 @@ function createBaseArgs(overrides: Partial<Parameters<typeof createIncomingDispa
 }
 
 describe('createIncomingDispatchPreparer', () => {
+  it('passes configured document sources into gateway routing context', async () => {
+    const args = createBaseArgs();
+    args.configRef.current.assistant.tools.search = {
+      enabled: true,
+      sources: [
+        {
+          id: 'product-docs',
+          name: 'Product Docs',
+          type: 'directory',
+          path: 'C:\\Users\\alex\\Documents',
+          enabled: true,
+        },
+        {
+          id: 'upstream-repo',
+          name: 'Upstream Repo',
+          type: 'git',
+          path: 'https://github.com/example/repo.git',
+          enabled: true,
+        },
+      ],
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: IntentGatewayInput) => {
+        expect(input.configuredSearchSources).toEqual([
+          {
+            id: 'product-docs',
+            name: 'Product Docs',
+            type: 'directory',
+            enabled: true,
+            indexedSearchAvailable: true,
+          },
+          {
+            id: 'upstream-repo',
+            name: 'Upstream Repo',
+            type: 'git',
+            enabled: true,
+            indexedSearchAvailable: false,
+          },
+        ]);
+        return createGatewayRecord({
+          route: 'search_task',
+          operation: 'search',
+          summary: 'Search configured document source.',
+          entities: {
+            searchSourceId: 'product-docs',
+            searchSourceType: 'directory',
+          },
+        });
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer({
+      ...args,
+      routingIntentGateway,
+    });
+
+    await prepareIncomingDispatch(undefined, {
+      content: 'Search product-docs for billing JSON files.',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
   it('routes explicit coding sessions through the gateway instead of honoring stored agent pins', async () => {
     const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
     const codeSessionStore = {

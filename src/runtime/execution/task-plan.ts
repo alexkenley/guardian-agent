@@ -884,7 +884,7 @@ function inferSearchToolCategories(
     return ['second_brain'];
   }
   if (contract.route === 'browser_task' || contract.route === 'search_task') {
-    return ['web_search', 'fs_search', 'code_symbol_search'];
+    return ['web_search', 'doc_search', 'doc_search_list', 'fs_search', 'code_symbol_search'];
   }
   return ['fs_search', 'code_symbol_search'];
 }
@@ -909,7 +909,7 @@ function inferReadToolCategories(
     return ['second_brain'];
   }
   if (contract.route === 'browser_task' || contract.route === 'search_task') {
-    return ['web_fetch', 'fs_read', 'fs_list'];
+    return ['web_fetch', 'doc_search_status', 'doc_search_list', 'fs_read', 'fs_list'];
   }
   return ['fs_read', 'fs_list'];
 }
@@ -956,6 +956,26 @@ function inferSemanticEvidenceToolCategories(summary: string | undefined): strin
     'https://',
   ])) {
     categories.push('web');
+  }
+  if (containsAny(normalized, [
+    'indexed document',
+    'indexed documents',
+    'document source',
+    'document sources',
+    'document collection',
+    'document collections',
+    'doc_search',
+  ])) {
+    categories.push('doc_search');
+  }
+  if (containsAny(normalized, [
+    'list indexed',
+    'indexed files',
+    'document files',
+    'file extension',
+    'json files',
+  ])) {
+    categories.push('doc_search_list');
   }
   if (containsAny(normalized, ['automation', 'automations', 'workflow', 'workflows'])) {
     categories.push('automation_list');

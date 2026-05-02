@@ -1415,6 +1415,9 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           }
           if (Array.isArray(searchUpdate.sources)) {
             rawSearch.sources = searchUpdate.sources;
+            if (rawSearch.enabled === undefined) {
+              rawSearch.enabled = true;
+            }
           }
         }
 

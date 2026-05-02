@@ -10146,7 +10146,7 @@ describe('ToolExecutor', () => {
       const info = executor.getCategoryInfo();
       const search = info.find((c) => c.category === 'search');
       expect(search).toBeDefined();
-      expect(search!.toolCount).toBe(3);
+      expect(search!.toolCount).toBe(4);
     });
 
     it('doc_search returns error when service not injected', async () => {
@@ -10163,6 +10163,47 @@ describe('ToolExecutor', () => {
       });
       expect(result.success).toBe(false);
       expect(result.message).toContain('not configured');
+    });
+
+    it('doc_search_list returns indexed document paths from injected service', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        docSearch: {
+          listDocuments: vi.fn(() => ({
+            documents: [
+              {
+                id: 'doc-1',
+                sourceId: 'test-docs',
+                filepath: 'C:\\Users\\kenle\\Documents\\report.json',
+                title: 'report',
+                mimeType: 'application/json',
+                sizeBytes: 42,
+                updatedAt: 123,
+              },
+            ],
+            collection: 'test-docs',
+            extension: 'json',
+            totalResults: 1,
+          })),
+        } as unknown as import('./../search/search-service.js').SearchService,
+      });
+      const result = await executor.runTool({
+        toolName: 'doc_search_list',
+        args: { collection: 'test-docs', extension: 'json' },
+        origin: 'cli',
+      });
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        totalResults: 1,
+        documents: [
+          expect.objectContaining({
+            filepath: 'C:\\Users\\kenle\\Documents\\report.json',
+          }),
+        ],
+      });
     });
   });
 

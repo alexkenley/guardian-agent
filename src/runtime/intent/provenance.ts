@@ -30,6 +30,9 @@ const ENTITY_KEYS = [
   'toolName',
   'profileId',
   'command',
+  'searchSourceId',
+  'searchSourceName',
+  'searchSourceType',
 ] as const satisfies ReadonlyArray<keyof IntentGatewayEntities>;
 
 export function classifierProvenanceSourceForMode(

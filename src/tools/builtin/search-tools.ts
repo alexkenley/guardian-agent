@@ -13,7 +13,7 @@ export function registerBuiltinSearchTools(context: SearchToolRegistrarContext):
   context.registry.register(
     {
       name: 'doc_search',
-      description: 'Search indexed document collections using hybrid search (BM25 keyword + vector similarity). Returns ranked results with file path, title, matched snippet, and surrounding context.',
+      description: 'Search configured indexed document-source collections using hybrid search (BM25 keyword + vector similarity). Use the source ID as collection when the routed intent includes searchSourceId. Returns ranked results with file path, title, matched snippet, and surrounding context.',
       shortDescription: 'Search indexed document collections using hybrid search.',
       risk: 'read_only',
       category: 'search',
@@ -27,7 +27,7 @@ export function registerBuiltinSearchTools(context: SearchToolRegistrarContext):
         properties: {
           query: { type: 'string', description: 'Search query text.' },
           mode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'], description: "Search mode: 'keyword' (BM25), 'semantic' (vector), 'hybrid' (both, merged via RRF). Default: hybrid." },
-          collection: { type: 'string', description: 'Source collection ID to search within. Omit to search all.' },
+          collection: { type: 'string', description: 'Configured document source ID to search within. Omit to search all indexed sources.' },
           limit: { type: 'number', description: 'Maximum results (1-100, default 20).' },
           includeBody: { type: 'boolean', description: 'Include full document body in results.' },
         },
@@ -71,6 +71,43 @@ export function registerBuiltinSearchTools(context: SearchToolRegistrarContext):
       try {
         const status = docSearch.status();
         return { success: true, output: status };
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'doc_search_list',
+      description: 'List indexed documents from configured document-source collections. Use this when the user asks which files are indexed, asks to list documents by type or extension, or asks for document-source file paths rather than searching inside file contents. Use the routed searchSourceId as collection when present.',
+      shortDescription: 'List indexed document files and paths.',
+      risk: 'read_only',
+      category: 'search',
+      deferLoading: true,
+      examples: [
+        { input: { collection: 'docs', extension: 'json', limit: 50 }, description: 'List indexed JSON files in a document collection' },
+        { input: { extension: '.md' }, description: 'List indexed Markdown files across all collections' },
+      ],
+      parameters: {
+        type: 'object',
+        properties: {
+          collection: { type: 'string', description: 'Configured document source ID to list from. Omit to list all indexed sources.' },
+          extension: { type: 'string', description: 'Optional file extension filter, such as json, .json, md, or txt.' },
+          limit: { type: 'number', description: 'Maximum documents to return (1-1000, default 100).' },
+        },
+      },
+    },
+    async (args) => {
+      const docSearch = context.getDocSearch();
+      if (!docSearch) return { success: false, error: 'Document search not configured.' };
+      try {
+        const result = docSearch.listDocuments({
+          collection: args.collection ? context.asString(args.collection) : undefined,
+          extension: args.extension ? context.asString(args.extension) : undefined,
+          limit: args.limit ? context.asNumber(args.limit, 100) : undefined,
+        });
+        return { success: true, output: result };
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }

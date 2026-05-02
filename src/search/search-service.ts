@@ -21,6 +21,7 @@ import { chunkText } from './chunker.js';
 import type {
   SearchConfig, SearchOptions, SearchResponse,
   SearchSourceConfig, SearchStatusResponse, SearchMode, EmbeddingProvider,
+  SearchDocumentListOptions, SearchDocumentListResponse,
 } from './types.js';
 
 export class SearchService {
@@ -58,13 +59,22 @@ export class SearchService {
     this.syncConfigSources();
   }
 
-  /** Sync config sources into the database (add new, skip existing). */
+  /** Sync config sources into the database (add new, update changed existing, remove stale). */
   private syncConfigSources(): void {
     if (!this.store) return;
-    const existingIds = new Set(this.store.getSources().map(s => s.id));
+    const existingSources = new Map(this.store.getSources().map(s => [s.id, s]));
+    const configuredIds = new Set(this.config.sources.map(s => s.id));
     for (const source of this.config.sources) {
-      if (!existingIds.has(source.id)) {
+      const existing = existingSources.get(source.id);
+      if (!existing) {
         this.store.addSource(source);
+      } else if (!sameSearchSource(existing, source)) {
+        this.store.updateSource(source);
+      }
+    }
+    for (const existing of existingSources.values()) {
+      if (!configuredIds.has(existing.id)) {
+        this.store.removeSource(existing.id);
       }
     }
   }
@@ -111,6 +121,24 @@ export class SearchService {
       collection: options.collection,
       totalResults: results.length,
       durationMs: Date.now() - start,
+    };
+  }
+
+  listDocuments(options: SearchDocumentListOptions = {}): SearchDocumentListResponse {
+    if (!this.available || !this.store) {
+      return {
+        documents: [],
+        collection: options.collection,
+        extension: options.extension,
+        totalResults: 0,
+      };
+    }
+    const documents = this.store.listDocuments(options);
+    return {
+      documents,
+      collection: options.collection,
+      extension: options.extension,
+      totalResults: documents.length,
     };
   }
 
@@ -436,19 +464,51 @@ export class SearchService {
 
 // ─── Glob Matching ────────────────────────────────────────
 
-/** Simple glob matcher supporting * (one segment) and ** (multiple segments). */
+/** Simple glob matcher supporting * (one segment) and ** (zero or more segments). */
 function matchGlob(path: string, glob: string): boolean {
-  // Normalize separators
-  const normPath = path.replace(/\\/g, '/');
-  const normGlob = glob.replace(/\\/g, '/');
+  const pathSegments = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  const globSegments = glob.replace(/\\/g, '/').split('/').filter(Boolean);
+  const memo = new Map<string, boolean>();
 
-  // Convert glob to regex
-  const regexStr = normGlob
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')  // escape regex chars (except * and ?)
-    .replace(/\*\*/g, '{{GLOBSTAR}}')
+  const matches = (pathIndex: number, globIndex: number): boolean => {
+    const key = `${pathIndex}:${globIndex}`;
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+
+    let result: boolean;
+    if (globIndex === globSegments.length) {
+      result = pathIndex === pathSegments.length;
+    } else if (globSegments[globIndex] === '**') {
+      result = matches(pathIndex, globIndex + 1)
+        || (pathIndex < pathSegments.length && matches(pathIndex + 1, globIndex));
+    } else {
+      result = pathIndex < pathSegments.length
+        && matchGlobSegment(pathSegments[pathIndex], globSegments[globIndex])
+        && matches(pathIndex + 1, globIndex + 1);
+    }
+
+    memo.set(key, result);
+    return result;
+  };
+
+  return matches(0, 0);
+}
+
+function matchGlobSegment(value: string, glob: string): boolean {
+  const regexStr = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/\{\{GLOBSTAR\}\}/g, '.*');
+    .replace(/\?/g, '[^/]');
+  return new RegExp(`^${regexStr}$`).test(value);
+}
 
-  return new RegExp(`^${regexStr}$`).test(normPath);
+function sameSearchSource(left: SearchSourceConfig, right: SearchSourceConfig): boolean {
+  return left.id === right.id
+    && left.name === right.name
+    && left.type === right.type
+    && left.path === right.path
+    && JSON.stringify(left.globs ?? []) === JSON.stringify(right.globs ?? [])
+    && (left.branch ?? '') === (right.branch ?? '')
+    && left.enabled === right.enabled
+    && (left.description ?? '') === (right.description ?? '');
 }

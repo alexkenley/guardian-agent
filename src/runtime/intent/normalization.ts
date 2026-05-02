@@ -366,6 +366,30 @@ export function normalizeCodingBackend(value: unknown): string | undefined {
   }
 }
 
+export function normalizeSearchSourceType(
+  value: unknown,
+): IntentGatewayEntities['searchSourceType'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  switch (value.trim().toLowerCase()) {
+    case 'directory':
+    case 'folder':
+      return 'directory';
+    case 'file':
+      return 'file';
+    case 'git':
+    case 'repo':
+    case 'repository':
+    case 'github':
+      return 'git';
+    case 'url':
+    case 'web':
+    case 'website':
+      return 'url';
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeExecutionClass(
   value: unknown,
 ): IntentGatewayExecutionClass | undefined {

@@ -13,7 +13,7 @@ import {
 } from '../../chat-agent-helpers.js';
 import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider } from '../../llm/types.js';
 import type { ToolExecutor } from '../../tools/executor.js';
-import type { ContentTrustLevel } from '../../tools/types.js';
+import type { ContentTrustLevel, ToolDefinition } from '../../tools/types.js';
 import { isDirectMemorySaveRequest } from '../../util/memory-intent.js';
 import {
   buildAnswerFirstSkillCorrectionPrompt,
@@ -294,6 +294,7 @@ export async function runLiveToolLoopController(
       : [];
     const allToolDefs = [
       ...baseToolDefs,
+      ...listIntentPlannedEagerToolDefinitions(input.directIntentDecision, tools, baseToolDefs),
       ...(input.hasResolvedCodeSession
         ? tools.listCodeSessionEagerToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))
         : []),
@@ -974,6 +975,48 @@ function recoverResponseToolCalls(response: ChatResponse, llmToolDefs: LlmToolDe
     toolCalls: recoveredToolCalls.toolCalls,
     finishReason: 'tool_calls',
   };
+}
+
+function listIntentPlannedEagerToolDefinitions(
+  decision: IntentGatewayDecision | undefined,
+  tools: ToolExecutor,
+  existing: readonly ToolDefinition[],
+): ToolDefinition[] {
+  const existingNames = new Set(existing.map((definition) => definition.name));
+  const names = new Set<string>();
+  if (decision?.route === 'search_task') {
+    for (const name of ['web_search', 'doc_search', 'doc_search_list']) {
+      names.add(name);
+    }
+  }
+  for (const step of decision?.plannedSteps ?? []) {
+    for (const category of step.expectedToolCategories ?? []) {
+      for (const toolName of eagerToolNamesForPlannedCategory(category)) {
+        names.add(toolName);
+      }
+    }
+  }
+
+  const definitions: ToolDefinition[] = [];
+  for (const name of names) {
+    if (existingNames.has(name)) continue;
+    const definition = tools.getToolDefinition(name);
+    if (!definition) continue;
+    existingNames.add(name);
+    definitions.push(definition);
+  }
+  return definitions;
+}
+
+function eagerToolNamesForPlannedCategory(category: string): string[] {
+  const normalized = category.trim();
+  if (normalized === 'doc_search') {
+    return ['doc_search', 'doc_search_list'];
+  }
+  if (normalized === 'doc_search_list' || normalized === 'doc_search_status') {
+    return [normalized];
+  }
+  return [];
 }
 
 function shouldRetryTerminalResultCorrection(

@@ -34,6 +34,7 @@ import {
   normalizeCodeSessionResource,
   normalizeEmailProvider,
   normalizeMailboxReadMode,
+  normalizeSearchSourceType,
   normalizeUiSurface,
 } from './normalization.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
@@ -298,6 +299,18 @@ export function resolveIntentGatewayEntities(
       ? classifierSource
       : 'resolver.coding';
   }
+  const searchSourceId = route === 'search_task' && typeof parsed.searchSourceId === 'string' && parsed.searchSourceId.trim()
+    ? parsed.searchSourceId.trim()
+    : undefined;
+  if (searchSourceId) provenance.searchSourceId = classifierSource;
+  const searchSourceName = route === 'search_task' && typeof parsed.searchSourceName === 'string' && parsed.searchSourceName.trim()
+    ? parsed.searchSourceName.trim()
+    : undefined;
+  if (searchSourceName) provenance.searchSourceName = classifierSource;
+  const searchSourceType = route === 'search_task'
+    ? normalizeSearchSourceType(parsed.searchSourceType)
+    : undefined;
+  if (searchSourceType) provenance.searchSourceType = classifierSource;
 
   const entities = {
     ...(automationName ? { automationName } : {}),
@@ -325,6 +338,9 @@ export function resolveIntentGatewayEntities(
     ...(toolName ? { toolName } : {}),
     ...(profileId ? { profileId } : {}),
     ...(command ? { command } : {}),
+    ...(searchSourceId ? { searchSourceId } : {}),
+    ...(searchSourceName ? { searchSourceName } : {}),
+    ...(searchSourceType ? { searchSourceType } : {}),
   } satisfies IntentGatewayEntities;
 
   return {

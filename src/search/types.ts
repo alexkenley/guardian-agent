@@ -53,6 +53,29 @@ export interface SearchResponse {
   durationMs: number;
 }
 
+export interface SearchDocumentListOptions {
+  collection?: string;
+  extension?: string;
+  limit?: number;
+}
+
+export interface SearchDocumentListEntry {
+  id: string;
+  sourceId: string;
+  filepath: string;
+  title: string | null;
+  mimeType: string | null;
+  sizeBytes: number;
+  updatedAt: number;
+}
+
+export interface SearchDocumentListResponse {
+  documents: SearchDocumentListEntry[];
+  collection?: string;
+  extension?: string;
+  totalResults: number;
+}
+
 // ─── Document & Chunk Records ─────────────────────────────
 
 export interface DocumentRecord {

@@ -9,7 +9,14 @@
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import type { SQLiteDatabase } from '../runtime/sqlite-driver.js';
-import type { SearchSourceConfig, DocumentRecord, ChunkRecord, CollectionInfo } from './types.js';
+import type {
+  SearchSourceConfig,
+  DocumentRecord,
+  ChunkRecord,
+  CollectionInfo,
+  SearchDocumentListEntry,
+  SearchDocumentListOptions,
+} from './types.js';
 
 export class DocumentStore {
   constructor(private readonly db: SQLiteDatabase) {
@@ -111,9 +118,9 @@ export class DocumentStore {
       type: r.type as SearchSourceConfig['type'],
       path: r.path as string,
       globs: r.globs ? JSON.parse(r.globs as string) : undefined,
-      branch: r.branch as string | undefined,
+      branch: typeof r.branch === 'string' ? r.branch : undefined,
       enabled: (r.enabled as number) === 1,
-      description: r.description as string | undefined,
+      description: typeof r.description === 'string' ? r.description : undefined,
     }));
   }
 
@@ -126,9 +133,9 @@ export class DocumentStore {
       type: row.type as SearchSourceConfig['type'],
       path: row.path as string,
       globs: row.globs ? JSON.parse(row.globs as string) : undefined,
-      branch: row.branch as string | undefined,
+      branch: typeof row.branch === 'string' ? row.branch : undefined,
       enabled: (row.enabled as number) === 1,
-      description: row.description as string | undefined,
+      description: typeof row.description === 'string' ? row.description : undefined,
     };
   }
 
@@ -150,14 +157,39 @@ export class DocumentStore {
     );
   }
 
+  updateSource(source: SearchSourceConfig): boolean {
+    const existing = this.db.prepare('SELECT id FROM search_sources WHERE id = ?').get(source.id);
+    if (!existing) return false;
+
+    this.db.prepare(`
+      UPDATE search_sources
+      SET name = ?, type = ?, path = ?, globs = ?, branch = ?, enabled = ?, description = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      source.name,
+      source.type,
+      source.path,
+      source.globs ? JSON.stringify(source.globs) : null,
+      source.branch ?? null,
+      source.enabled ? 1 : 0,
+      source.description ?? null,
+      Date.now(),
+      source.id,
+    );
+    return true;
+  }
+
   removeSource(id: string): boolean {
+    const existing = this.db.prepare('SELECT id FROM search_sources WHERE id = ?').get(id);
+    if (!existing) return false;
+
     // Delete all documents and their chunks for this source first
     const docs = this.db.prepare('SELECT id FROM documents WHERE source_id = ?').all(id) as Array<{ id: string }>;
     for (const doc of docs) {
       this.deleteDocument(doc.id);
     }
     this.db.prepare('DELETE FROM search_sources WHERE id = ?').run(id);
-    return docs.length >= 0; // Source existed or not, we cleaned up
+    return true;
   }
 
   toggleSource(id: string, enabled: boolean): boolean {
@@ -186,6 +218,30 @@ export class DocumentStore {
   getDocumentsBySource(sourceId: string): DocumentRecord[] {
     const rows = this.db.prepare('SELECT * FROM documents WHERE source_id = ?').all(sourceId) as Array<Record<string, unknown>>;
     return rows.map(r => this.mapDocumentRow(r));
+  }
+
+  listDocuments(options: SearchDocumentListOptions = {}): SearchDocumentListEntry[] {
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 1000);
+    const extension = normalizeExtension(options.extension);
+    const extensionLike = extension ? `%${extension}` : undefined;
+    const rows = options.collection && extensionLike
+      ? this.db.prepare('SELECT * FROM documents WHERE source_id = ? AND lower(filepath) LIKE ? ORDER BY filepath LIMIT ?').all(options.collection, extensionLike, limit) as Array<Record<string, unknown>>
+      : options.collection
+        ? this.db.prepare('SELECT * FROM documents WHERE source_id = ? ORDER BY filepath LIMIT ?').all(options.collection, limit) as Array<Record<string, unknown>>
+        : extensionLike
+          ? this.db.prepare('SELECT * FROM documents WHERE lower(filepath) LIKE ? ORDER BY source_id, filepath LIMIT ?').all(extensionLike, limit) as Array<Record<string, unknown>>
+          : this.db.prepare('SELECT * FROM documents ORDER BY source_id, filepath LIMIT ?').all(limit) as Array<Record<string, unknown>>;
+    return rows
+      .map(r => this.mapDocumentRow(r))
+      .map((doc) => ({
+        id: doc.id,
+        sourceId: doc.sourceId,
+        filepath: doc.filepath,
+        title: doc.title,
+        mimeType: doc.mimeType,
+        sizeBytes: doc.sizeBytes,
+        updatedAt: doc.updatedAt,
+      }));
   }
 
   upsertDocument(sourceId: string, filepath: string, title: string | null, contentHash: string, mimeType: string | null, sizeBytes: number): DocumentRecord {
@@ -377,4 +433,10 @@ export class DocumentStore {
       chunkType: row.chunk_type as 'parent' | 'child',
     };
   }
+}
+
+function normalizeExtension(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  return trimmed.startsWith('.') ? trimmed : `.${trimmed}`;
 }

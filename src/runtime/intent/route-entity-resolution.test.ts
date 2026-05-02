@@ -273,6 +273,48 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('preserves configured document source entities for search-task requests', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        searchSourceId: 'product-docs',
+        searchSourceName: 'Product Docs',
+        searchSourceType: 'directory',
+      },
+      { sourceContent: 'Search product-docs for billing JSON files.' },
+      'search_task',
+      'search',
+      'classifier.primary',
+    );
+
+    expect(result.entities).toMatchObject({
+      searchSourceId: 'product-docs',
+      searchSourceName: 'Product Docs',
+      searchSourceType: 'directory',
+    });
+    expect(result.provenance).toMatchObject({
+      searchSourceId: 'classifier.primary',
+      searchSourceName: 'classifier.primary',
+      searchSourceType: 'classifier.primary',
+    });
+  });
+
+  it('drops document source entities when the route is not document search', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        searchSourceId: 'guardian-repo',
+        searchSourceName: 'Guardian Repo',
+        searchSourceType: 'git',
+      },
+      { sourceContent: 'Inspect the Guardian GitHub repo.' },
+      'coding_task',
+      'inspect',
+      'classifier.primary',
+    );
+
+    expect(result.entities.searchSourceId).toBeUndefined();
+    expect(result.entities.searchSourceType).toBeUndefined();
+  });
+
   it('infers routine filters for personal-assistant reads', () => {
     expect(resolveIntentGatewayEntities(
       {},
