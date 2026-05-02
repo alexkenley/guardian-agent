@@ -978,11 +978,11 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       return true;
     }
     const limitRaw = Number(url.searchParams.get('limit') ?? '');
-    sendJSON(res, 200, dashboard.onCapabilityCandidates({
+    sendJSON(res, 200, redactWebResponse(dashboard.onCapabilityCandidates({
       status: trimOptionalString(url.searchParams.get('status')) as import('./web-types.js').DashboardCapabilityCandidatesInput['status'],
       kind: trimOptionalString(url.searchParams.get('kind')) as import('./web-types.js').DashboardCapabilityCandidatesInput['kind'],
       limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
-    }));
+    })));
     return true;
   }
 
@@ -999,7 +999,7 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         actor: trimOptionalString(parsed.actor),
         reason: trimOptionalString(parsed.reason),
       });
-      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), redactWebResponse(result));
       context.maybeEmitUIInvalidation(result, ['config', 'capability-candidates'], 'capability-candidates.action', url.pathname);
       return true;
     } catch (err) {

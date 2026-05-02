@@ -4396,7 +4396,11 @@ describe('WebChannel', () => {
                 summary: 'Repeated context flushes suggest a reviewable workflow.',
                 purpose: 'operator_review',
                 source: 'learning_review',
-                evidence: [],
+                evidence: [{
+                  type: 'memory_entry',
+                  title: 'Context flush signal',
+                  detail: 'Saw apiKey=sk-test-capabilitycandidate-route-secret12345 in source memory.',
+                }],
                 tags: ['learning-review'],
                 dedupeKey: 'workflow:global:repeat',
                 createdAt: '2026-05-02T10:00:00.000Z',
@@ -4412,6 +4416,8 @@ describe('WebChannel', () => {
       expect(res.status).toBe(200);
       const body = await res.json() as { candidates: Array<{ id: string; kind: string }>; summary: { quarantined: number } };
       expect(body.candidates).toEqual([expect.objectContaining({ id: 'candidate-1', kind: 'workflow' })]);
+      expect(JSON.stringify(body)).not.toContain('sk-test-capabilitycandidate-route-secret12345');
+      expect(JSON.stringify(body)).toContain('[REDACTED]');
       expect(body.summary.quarantined).toBe(1);
       expect(receivedArgs).toEqual({ status: 'active', kind: 'workflow', limit: 7 });
     });
@@ -4427,7 +4433,7 @@ describe('WebChannel', () => {
             receivedArgs = { ...input };
             return {
               success: true,
-              message: 'Candidate approved',
+              message: 'Candidate approved with token=sk-test-capabilitycandidate-action-secret12345',
               candidate: {
                 id: input.candidateId,
                 status: 'approved',
@@ -4452,6 +4458,8 @@ describe('WebChannel', () => {
       const body = await res.json() as { success: boolean; candidate: { id: string; status: string } };
       expect(body.success).toBe(true);
       expect(body.candidate).toEqual({ id: 'candidate-1', status: 'approved' });
+      expect(JSON.stringify(body)).not.toContain('sk-test-capabilitycandidate-action-secret12345');
+      expect(JSON.stringify(body)).toContain('[REDACTED]');
       expect(receivedArgs).toEqual({
         candidateId: 'candidate-1',
         action: 'approve',

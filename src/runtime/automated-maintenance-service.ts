@@ -10,6 +10,7 @@ import type {
   CapabilityCandidateStore,
 } from './capability-candidate-store.js';
 import { createLogger } from '../util/logging.js';
+import { redactSensitiveText } from '../util/crypto-guardrails.js';
 
 const log = createLogger('automated-maintenance');
 
@@ -441,11 +442,11 @@ export class AutomatedMaintenanceService {
     entry: StoredMemoryEntry,
     titlePrefix: string,
   ): CapabilityCandidateEvidence {
-    const title = this.describeMemoryEntry(entry);
+    const title = redactSensitiveText(this.describeMemoryEntry(entry));
     return {
       type: 'memory_entry',
       title: `${titlePrefix}: ${title}`,
-      detail: entry.summary || entry.content.slice(0, 240),
+      detail: redactSensitiveText(entry.summary || entry.content.slice(0, 240)),
       scope: target.scope,
       scopeId: target.scopeId,
       entryId: entry.id,

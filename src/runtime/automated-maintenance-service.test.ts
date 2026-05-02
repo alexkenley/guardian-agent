@@ -409,4 +409,65 @@ describe('AutomatedMaintenanceService', () => {
     expect(candidates[0]?.title).toBe('Curate recurring context in global memory');
     expect(candidates[0]?.evidence).toHaveLength(2);
   });
+
+  it('redacts sensitive memory snippets before storing capability candidate evidence', async () => {
+    const principalMemoryScopeId = 'agent-1';
+    const globalMemoryStore = makeMemoryStore('guardianagent-maint-learning-redaction-global');
+    const codeSessionMemoryStore = makeMemoryStore('guardianagent-maint-learning-redaction-code');
+    const candidateStorePath = join(tmpdir(), `guardianagent-capability-candidates-${randomUUID()}`);
+    createdDirs.push(candidateStorePath);
+    const nowRef = { current: Date.parse('2026-04-10T12:00:00.000Z') };
+    const capabilityCandidateStore = new CapabilityCandidateStore({
+      basePath: candidateStorePath,
+      now: () => nowRef.current,
+    });
+
+    globalMemoryStore.append(principalMemoryScopeId, {
+      content: 'A quarantined note containing apiKey=sk-test-capabilitycandidate-secret12345',
+      summary: 'Use token=sk-test-capabilitycandidate-secret12345 during setup.',
+      createdAt: '2026-04-01',
+      category: 'Review',
+      sourceType: 'remote_tool',
+      trustLevel: 'untrusted',
+      status: 'quarantined',
+      tags: ['review'],
+    });
+
+    const service = new AutomatedMaintenanceService({
+      getConfig: () => makeMaintenanceConfig({
+        jobs: {
+          memoryHygiene: {
+            ...baseMaintenanceConfig().jobs.memoryHygiene,
+            enabled: false,
+          },
+          learningReview: {
+            ...baseMaintenanceConfig().jobs.learningReview,
+            enabled: true,
+            maxEvidenceEntries: 1,
+          },
+        },
+      }),
+      getRuntimeActivity: () => ({
+        queuedCount: 0,
+        runningCount: 0,
+        lastActivityAt: Date.parse('2026-04-10T10:00:00.000Z'),
+      }),
+      getPrincipalMemoryScopeId: () => principalMemoryScopeId,
+      globalMemoryStore,
+      codeSessionMemoryStore,
+      codeSessionStore: makeCodeSessionStore(nowRef),
+      memoryMutationService: {
+        runMaintenanceForScope: vi.fn(),
+      },
+      capabilityCandidateStore,
+      now: () => nowRef.current,
+    });
+
+    await service.runSweep();
+    const candidates = capabilityCandidateStore.list({ status: 'active' });
+    const serialized = JSON.stringify(candidates);
+
+    expect(serialized).not.toContain('sk-test-capabilitycandidate-secret12345');
+    expect(serialized).toContain('[REDACTED]');
+  });
 });
