@@ -466,6 +466,19 @@ This repository is structured for architecture-sensitive changes. Before changin
 | Tool execution is blocked | Review the pending approval, sandbox mode, allowed paths, allowed commands, and tool policy in Configuration. |
 | Coding Workspace cannot access files | Confirm the active code session points at the intended workspace and that the request is bound to that session. |
 
+### Reporting Intent Routing Problems
+
+If GuardianAgent chooses the wrong route, uses the wrong tool, asks for the wrong clarification, or gives a result that does not match the requested surface, open a GitHub issue with:
+
+- the exact user request and the response you saw
+- the channel or surface used, such as Web, CLI, Telegram, or Code
+- the model/provider profile shown in the response header, if available
+- the relevant intent routing trace from `~/.guardianagent/routing/intent-routing.jsonl`
+
+On Windows, the trace is usually at `C:\Users\<your-user>\.guardianagent\routing\intent-routing.jsonl`. Attach only the lines around the failed request if possible. The trace can include prompts, local file paths, provider names, and tool arguments, so review and redact sensitive data before sharing.
+
+GitHub issue comments support drag-and-drop file attachments for logs and JSON data. If GitHub rejects a `.jsonl` file extension, rename the excerpt to `.log` or place it in a `.zip` before attaching. See GitHub's attachment guide: https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files.
+
 ---
 
 ## Disclaimer

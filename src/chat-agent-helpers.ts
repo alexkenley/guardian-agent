@@ -38,6 +38,7 @@ const MAX_TOOL_RESULT_MESSAGE_CHARS = 8_000;
 const MAX_TOOL_RESULT_STRING_CHARS = 1000;
 const MAX_TOOL_RESULT_ARRAY_ITEMS = 50;
 const MAX_TOOL_RESULT_OBJECT_KEYS = 100;
+const DIRECT_FILESYSTEM_SEARCH_RESPONSE_MATCH_CHARS = 6_000;
 const DIRECT_DEFINITION_SEARCH_PATH_LIMIT = 8;
 
 type DirectFilesystemSearchMatch = {
@@ -382,10 +383,21 @@ function formatDirectFilesystemSearchResponse(input: {
     const lines = [
       `I searched "${input.root}" for "${input.query}"${scannedSuffix}.`,
       `Found ${normalizedMatches.length} match${normalizedMatches.length === 1 ? '' : 'es'}:`,
-      ...normalizedMatches.slice(0, 20).map((match) => formatDirectFilesystemSearchMatchLine(match)),
     ];
-    if (normalizedMatches.length > 20) {
-      lines.push(`- ...and ${normalizedMatches.length - 20} more`);
+    let emitted = 0;
+    let emittedChars = 0;
+    for (const match of normalizedMatches) {
+      const line = formatDirectFilesystemSearchMatchLine(match);
+      const nextChars = emittedChars + line.length + 1;
+      if (emitted > 0 && nextChars > DIRECT_FILESYSTEM_SEARCH_RESPONSE_MATCH_CHARS) {
+        break;
+      }
+      lines.push(line);
+      emitted += 1;
+      emittedChars = nextChars;
+    }
+    if (normalizedMatches.length > emitted) {
+      lines.push(`- ...and ${normalizedMatches.length - emitted} more`);
     }
     if (input.truncated) {
       lines.push('Search stopped at configured limits; narrow query or increase maxResults/maxFiles if needed.');

@@ -85,6 +85,13 @@ function preferredCandidatesForDecision(
         return ['coding_backend'];
       }
       if (decision.operation === 'search') {
+        if (
+          decision.executionClass === 'tool_orchestration'
+          || decision.requiresToolSynthesis === true
+          || decision.preferredAnswerPath === 'tool_loop'
+        ) {
+          return [];
+        }
         return ['filesystem'];
       }
       return decision.operation === 'inspect'
@@ -192,6 +199,10 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
     });
   }
 
+  if (decision.route === 'coding_task' && decision.operation === 'search') {
+    return shouldDeferCodingSearchCandidate(requiredSteps);
+  }
+
   if (decision.route === 'security_task') {
     return requiredSteps.length > 0
       || decision.requiresToolSynthesis === true
@@ -200,6 +211,17 @@ function shouldDeferDirectCapabilityCandidates(decision: IntentGatewayDecision):
   }
 
   return false;
+}
+
+function shouldDeferCodingSearchCandidate(requiredSteps: PlannedStep[]): boolean {
+  const nonAnswerSteps = requiredSteps.filter((step) => step.kind !== 'answer');
+  return nonAnswerSteps.some((step) => {
+    if (step.kind !== 'read' && step.kind !== 'search') {
+      return true;
+    }
+    const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
+    return categories.some((category) => !isFilesystemDirectSearchCategory(category));
+  });
 }
 
 function isSecondBrainDirectCategory(category: string): boolean {
@@ -236,6 +258,15 @@ function isWebSearchDirectCategory(category: string): boolean {
     || normalized === 'web_search'
     || normalized === 'web_fetch'
     || normalized.startsWith('browser_');
+}
+
+function isFilesystemDirectSearchCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'search'
+    || normalized === 'read'
+    || normalized === 'filesystem'
+    || normalized === 'fs_search'
+    || normalized === 'fs_list';
 }
 
 function isManagedSandboxStatusCategory(category: string): boolean {

@@ -33,6 +33,7 @@ import {
   normalizeCodeSessionSandboxProvider,
   normalizeCodeSessionResource,
   normalizeEmailProvider,
+  normalizeFileExtension,
   normalizeMailboxReadMode,
   normalizeSearchSourceType,
   normalizeUiSurface,
@@ -136,6 +137,17 @@ export function resolveIntentGatewayEntities(
     ? parsed.path.trim()
     : undefined;
   if (path) provenance.path = classifierSource;
+  const parsedFileExtension = ['coding_task', 'filesystem_task', 'search_task'].includes(route)
+    ? normalizeFileExtension(parsed.fileExtension)
+    : undefined;
+  const inferredFileExtension = parsedFileExtension
+    ?? inferFileExtensionFromSource(rawSourceContent, route, operation);
+  const fileExtension = inferredFileExtension;
+  if (fileExtension) {
+    provenance.fileExtension = parsedFileExtension
+      ? classifierSource
+      : 'resolver.coding';
+  }
   const extractedSessionTarget = rawSourceContent && (route === 'coding_task' || route === 'coding_session_control')
     ? extractCodingWorkspaceTarget(rawSourceContent)
     : undefined;
@@ -323,6 +335,7 @@ export function resolveIntentGatewayEntities(
     ...(urls && urls.length > 0 ? { urls } : {}),
     ...(query ? { query } : {}),
     ...(path ? { path } : {}),
+    ...(fileExtension ? { fileExtension } : {}),
     ...(sessionTarget ? { sessionTarget } : {}),
     ...(codeSessionResource ? { codeSessionResource } : {}),
     ...(codeSessionSandboxProvider ? { codeSessionSandboxProvider } : {}),
@@ -357,4 +370,38 @@ function shouldKeepAutomationEntities(
     || route === 'automation_control'
     || route === 'automation_output_task'
     || (route === 'ui_control' && uiSurface === 'automations');
+}
+
+function inferFileExtensionFromSource(
+  sourceContent: string,
+  route: IntentGatewayDecision['route'],
+  operation: IntentGatewayDecision['operation'],
+): string | undefined {
+  if (!sourceContent || (operation !== 'search' && operation !== 'unknown')) return undefined;
+  if (route !== 'coding_task' && route !== 'filesystem_task' && route !== 'search_task') return undefined;
+  const normalized = sourceContent.toLowerCase();
+  if (!isFileExtensionInventoryRequest(normalized)) return undefined;
+  const explicit = sourceContent.match(/(^|[\s"'`(])(\.[A-Za-z0-9][A-Za-z0-9._+-]{0,31})(?=$|[\s"'`),.;:!?])/);
+  const explicitExtension = normalizeFileExtension(explicit?.[2]);
+  if (explicitExtension) return explicitExtension;
+
+  const knownTypes: Array<[RegExp, string]> = [
+    [/\bjson\s+files\b/, '.json'],
+    [/\b(?:markdown|md)\s+files\b/, '.md'],
+    [/\b(?:text|txt)\s+files\b/, '.txt'],
+    [/\b(?:typescript|ts)\s+files\b/, '.ts'],
+    [/\b(?:javascript|js)\s+files\b/, '.js'],
+    [/\b(?:python|py)\s+files\b/, '.py'],
+    [/\b(?:yaml|yml)\s+files\b/, '.yaml'],
+    [/\btoml\s+files\b/, '.toml'],
+  ];
+  for (const [pattern, extension] of knownTypes) {
+    if (pattern.test(normalized)) return extension;
+  }
+  return undefined;
+}
+
+function isFileExtensionInventoryRequest(normalizedSourceContent: string): boolean {
+  return /\b(?:find|search|list|show)\b.{0,80}\b(?:files?|paths?|extensions?)\b/.test(normalizedSourceContent)
+    || /\b(?:files?|paths?|extensions?)\b.{0,80}\b(?:find|search|list|show)\b/.test(normalizedSourceContent);
 }

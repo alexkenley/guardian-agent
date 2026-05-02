@@ -305,4 +305,117 @@ describe('direct route filesystem runtime', () => {
       expect.objectContaining({ origin: 'assistant' }),
     );
   });
+
+  it('handles workspace file-extension inventory with one direct filename search', async () => {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async () => ({
+        success: true,
+        output: {
+          root: 'S:/Development/GuardianAgent',
+          scannedFiles: 250,
+          truncated: false,
+          matches: [
+            { relativePath: 'package.json', matchType: 'name' },
+            { relativePath: 'skills/weather/skill.json', matchType: 'name' },
+          ],
+        },
+      })),
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({ sandbox: { allowedPaths: ['S:/Development/GuardianAgent'] } })),
+    };
+
+    const result = await tryDirectFilesystemIntent({
+      message: message('Ok, now search the workspace for any JSON files and list them out'),
+      ctx: context(),
+      userKey: 'owner:web',
+      conversationKey: { agentId: 'default', userId: 'owner', channel: 'web' },
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      gatewayDecision: decision({
+        route: 'coding_task',
+        operation: 'search',
+        summary: 'List JSON files in the current workspace.',
+        executionClass: 'repo_grounded',
+        preferredAnswerPath: 'direct',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: false,
+        requireExactFileReferences: true,
+        entities: { fileExtension: '.json' },
+        plannedSteps: [
+          { kind: 'search', summary: 'Search workspace filenames for JSON files.', expectedToolCategories: ['fs_search'], required: true },
+          { kind: 'answer', summary: 'List the matching paths.', required: true, dependsOn: ['step_1'] },
+        ],
+      }),
+      agentId: 'default',
+      tools,
+      conversationService: { getSessionHistory: vi.fn(() => []) },
+      executeStoredFilesystemSave: vi.fn(),
+      setApprovalFollowUp: vi.fn(),
+      getPendingApprovals: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => ''),
+      setPendingApprovalActionForRequest: vi.fn(),
+      buildPendingApprovalBlockedResponse: vi.fn(),
+    });
+
+    expect(typeof result).toBe('string');
+    expect(result).toContain('package.json');
+    expect(result).toContain('skills/weather/skill.json');
+    expect(tools.executeModelTool).toHaveBeenCalledTimes(1);
+    expect(tools.executeModelTool).toHaveBeenCalledWith(
+      'fs_search',
+      expect.objectContaining({
+        path: 'S:/Development/GuardianAgent',
+        query: '.json',
+        mode: 'name',
+        maxResults: 200,
+        maxDepth: 20,
+        maxFiles: 20000,
+      }),
+      expect.objectContaining({ origin: 'assistant' }),
+    );
+  });
+
+  it('does not shortcut mixed coding workflows that mention a file extension', async () => {
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(),
+      getApprovalSummaries: vi.fn(),
+      getPolicy: vi.fn(() => ({ sandbox: { allowedPaths: ['S:/Development/GuardianAgent'] } })),
+    };
+
+    const result = await tryDirectFilesystemIntent({
+      message: message('List and search the scratch folder, create or attach a coding session, show git diff, and create one scratch TypeScript file.'),
+      ctx: context(),
+      userKey: 'owner:web',
+      conversationKey: { agentId: 'default', userId: 'owner', channel: 'web' },
+      codeContext: { workspaceRoot: 'S:/Development/GuardianAgent', sessionId: 'code-1' },
+      gatewayDecision: decision({
+        route: 'coding_task',
+        operation: 'search',
+        summary: 'Coordinate a mixed coding workflow.',
+        executionClass: 'tool_orchestration',
+        preferredAnswerPath: 'tool_loop',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        entities: { fileExtension: '.ts' },
+        plannedSteps: [
+          { kind: 'search', summary: 'Search the scratch folder.', expectedToolCategories: ['fs_search'], required: true },
+          { kind: 'tool_call', summary: 'Create or attach a coding session.', expectedToolCategories: ['code_session_create'], required: true },
+          { kind: 'write', summary: 'Create one scratch TypeScript file.', expectedToolCategories: ['fs_write'], required: true },
+        ],
+      }),
+      agentId: 'default',
+      tools,
+      conversationService: { getSessionHistory: vi.fn(() => []) },
+      executeStoredFilesystemSave: vi.fn(),
+      setApprovalFollowUp: vi.fn(),
+      getPendingApprovals: vi.fn(() => null),
+      formatPendingApprovalPrompt: vi.fn(() => ''),
+      setPendingApprovalActionForRequest: vi.fn(),
+      buildPendingApprovalBlockedResponse: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+  });
 });

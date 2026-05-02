@@ -16,6 +16,7 @@ const ENTITY_KEYS = [
   'urls',
   'query',
   'path',
+  'fileExtension',
   'sessionTarget',
   'codeSessionResource',
   'emailProvider',

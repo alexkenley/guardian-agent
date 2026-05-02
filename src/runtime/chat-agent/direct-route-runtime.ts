@@ -9,6 +9,7 @@ import {
 import type { ToolExecutor } from '../../tools/executor.js';
 import type { ConversationKey, ConversationService } from '../conversation.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
+import { normalizeFileExtension } from '../intent/normalization.js';
 import {
   hasRequiredReadOrSearchPlannedStep,
   hasRequiredReadWritePlan,
@@ -25,6 +26,7 @@ import {
   parseDirectFilesystemSaveIntent,
   parseDirectFileSearchIntent,
 } from '../search-intent.js';
+import type { DirectFileSearchIntent } from '../search-intent.js';
 import {
   normalizeChatContinuationPrincipalRole,
 } from './chat-continuation-payloads.js';
@@ -32,6 +34,9 @@ import type { StoredFilesystemSaveInput } from './filesystem-save-resume.js';
 import type { PendingActionSetResult } from './orchestration-state.js';
 
 const FILESYSTEM_SAVE_TARGET_CLARIFICATION_PROMPT = 'What file name or full path should I use to save the previous assistant output?';
+const DIRECT_FILE_EXTENSION_SEARCH_MAX_RESULTS = 200;
+const DIRECT_FILE_EXTENSION_SEARCH_MAX_DEPTH = 20;
+const DIRECT_FILE_EXTENSION_SEARCH_MAX_FILES = 20_000;
 
 export interface DirectRouteRuntimeResponse {
   content: string;
@@ -139,7 +144,17 @@ export async function tryDirectFilesystemIntent(input: DirectFilesystemIntentInp
 function shouldDeferFilesystemIntentToOrchestration(input: DirectFilesystemIntentInput): boolean {
   const decision = input.gatewayDecision;
   if (!decision) return false;
+  if (isDirectFileExtensionSearchDecision(decision, input.codeContext?.workspaceRoot)) {
+    return false;
+  }
   const hasReadOrSearchStep = hasRequiredReadOrSearchPlannedStep(decision);
+  if (
+    decision.executionClass === 'tool_orchestration'
+    || decision.preferredAnswerPath === 'tool_loop'
+    || decision.requiresToolSynthesis === true
+  ) {
+    return true;
+  }
   if (hasRequiredReadWritePlan(decision)) {
     return true;
   }
@@ -161,6 +176,54 @@ function shouldDeferFilesystemIntentToOrchestration(input: DirectFilesystemInten
     return false;
   }
   return true;
+}
+
+type DirectFilesystemSearchExecutionIntent = DirectFileSearchIntent & {
+  mode?: 'name' | 'content' | 'auto';
+  maxResults?: number;
+  maxDepth?: number;
+  maxFiles?: number;
+};
+
+function isDirectFileExtensionSearchDecision(
+  decision: IntentGatewayDecision,
+  workspaceRoot: string | undefined,
+): boolean {
+  if (!workspaceRoot) return false;
+  if (decision.operation !== 'search') return false;
+  if (decision.route !== 'coding_task' && decision.route !== 'filesystem_task') return false;
+  if (!normalizeFileExtension(decision.entities.fileExtension)) return false;
+  if (!hasOnlyReadSearchAnswerPlan(decision)) return false;
+  return !hasRequiredReadWritePlan(decision);
+}
+
+function hasOnlyReadSearchAnswerPlan(decision: IntentGatewayDecision): boolean {
+  const steps = decision.plannedSteps ?? [];
+  if (steps.length === 0) return true;
+  return steps.every((step) => {
+    if (step.kind !== 'read' && step.kind !== 'search' && step.kind !== 'answer') return false;
+    const categories = step.expectedToolCategories ?? [];
+    return !categories.some((category) => /(?:write|create|update|delete|move|copy|mkdir|session)/i.test(category));
+  });
+}
+
+function buildStructuredDirectFilesystemSearchIntent(
+  input: DirectFilesystemIntentInput,
+): DirectFilesystemSearchExecutionIntent | null {
+  const decision = input.gatewayDecision;
+  if (!decision || !isDirectFileExtensionSearchDecision(decision, input.codeContext?.workspaceRoot)) {
+    return null;
+  }
+  const fileExtension = normalizeFileExtension(decision.entities.fileExtension);
+  if (!fileExtension) return null;
+  return {
+    path: toString(decision.entities.path).trim() || input.codeContext!.workspaceRoot,
+    query: fileExtension,
+    mode: 'name',
+    maxResults: DIRECT_FILE_EXTENSION_SEARCH_MAX_RESULTS,
+    maxDepth: DIRECT_FILE_EXTENSION_SEARCH_MAX_DEPTH,
+    maxFiles: DIRECT_FILE_EXTENSION_SEARCH_MAX_FILES,
+  };
 }
 
 export async function tryDirectFilesystemSave(input: DirectFilesystemIntentInput) {
@@ -245,9 +308,10 @@ function buildMissingFilesystemSaveTargetResponse(input: DirectFilesystemIntentI
 export async function tryDirectFilesystemSearch(input: DirectFilesystemIntentInput) {
   if (!input.tools?.isEnabled()) return null;
 
-  const intent = parseDirectFileSearchIntent(input.message.content, input.tools.getPolicy(), {
-    fallbackPath: input.codeContext?.workspaceRoot,
-  });
+  const intent: DirectFilesystemSearchExecutionIntent | null = buildStructuredDirectFilesystemSearchIntent(input)
+    ?? parseDirectFileSearchIntent(input.message.content, input.tools.getPolicy(), {
+      fallbackPath: input.codeContext?.workspaceRoot,
+    });
   if (!intent) return null;
 
   const toolResult = await input.tools.executeModelTool(
@@ -255,9 +319,10 @@ export async function tryDirectFilesystemSearch(input: DirectFilesystemIntentInp
     {
       path: intent.path,
       query: intent.query,
-      mode: 'auto',
-      maxResults: 50,
-      maxDepth: 20,
+      mode: intent.mode ?? 'auto',
+      maxResults: intent.maxResults ?? 50,
+      maxDepth: intent.maxDepth ?? 20,
+      ...(typeof intent.maxFiles === 'number' ? { maxFiles: intent.maxFiles } : {}),
     },
     {
       origin: 'assistant',

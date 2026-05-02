@@ -104,9 +104,13 @@ export function repairStructuredIntentGatewayRoute(
   if (
     (route === 'coding_session_control'
       || route === 'filesystem_task'
+      || route === 'search_task'
       || route === 'personal_assistant_task')
     && explicitCodingTaskRequest
   ) {
+    return 'coding_task';
+  }
+  if (route === 'search_task' && isExplicitRepoFileExtensionInventoryRequest(normalizedSourceContent)) {
     return 'coding_task';
   }
   if (
@@ -232,6 +236,9 @@ export function repairStructuredIntentGatewayOperation(
       ? 'search'
       : 'inspect';
   }
+  if (route === 'coding_task' && isExplicitRepoFileExtensionInventoryRequest(normalizedSourceContent)) {
+    return 'search';
+  }
   if (route === 'coding_task' && isExplicitRepoPlanningRequest(rawSourceContent)) {
     return 'inspect';
   }
@@ -268,6 +275,16 @@ function mentionsAutomationControlTerms(content: string | undefined): boolean {
   return /\bautomation\b/.test(normalized)
     || /\bworkflow\b/.test(normalized)
     || /\bautomations\b/.test(normalized);
+}
+
+function isExplicitRepoFileExtensionInventoryRequest(normalizedSourceContent: string): boolean {
+  if (!normalizedSourceContent) return false;
+  const hasRepoSurface = /\b(?:repo|repository|workspace|codebase|project)\b/.test(normalizedSourceContent);
+  const hasFileListing = /\b(?:find|search|list|show)\b/.test(normalizedSourceContent)
+    && /\b(?:files?|paths?)\b/.test(normalizedSourceContent);
+  const hasExtension = /(^|[\s"'`(])\.[a-z0-9][a-z0-9._+-]{0,31}(?=$|[\s"'`),.;:!?])/.test(normalizedSourceContent)
+    || /\b(?:json|markdown|text|typescript|javascript|python|yaml|yml|toml)\s+files?\b/.test(normalizedSourceContent);
+  return hasRepoSurface && hasFileListing && hasExtension;
 }
 
 function hasPlannedToolCategory(parsed: Record<string, unknown> | undefined, category: string): boolean {

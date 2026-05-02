@@ -298,6 +298,67 @@ describe('resolveIntentGatewayEntities', () => {
     });
   });
 
+  it('preserves normalized file extensions for coding workspace search requests', () => {
+    const result = resolveIntentGatewayEntities(
+      {
+        fileExtension: 'JSON',
+      },
+      { sourceContent: 'Search the workspace for any JSON files and list them out.' },
+      'coding_task',
+      'search',
+      'classifier.primary',
+    );
+
+    expect(result.entities.fileExtension).toBe('.json');
+    expect(result.provenance).toMatchObject({
+      fileExtension: 'classifier.primary',
+    });
+  });
+
+  it('infers common file extensions for already-classified workspace searches', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'Search the repo for any JSON files and list the paths.' },
+      'coding_task',
+      'search',
+      'classifier.primary',
+    );
+
+    expect(result.entities.fileExtension).toBe('.json');
+    expect(result.provenance).toMatchObject({
+      fileExtension: 'resolver.coding',
+    });
+  });
+
+  it('infers file extensions while operation repair is still unknown', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      { sourceContent: 'Find files with the .json extension in the repo and list the paths.' },
+      'coding_task',
+      'unknown',
+      'classifier.primary',
+    );
+
+    expect(result.entities.fileExtension).toBe('.json');
+    expect(result.provenance).toMatchObject({
+      fileExtension: 'resolver.coding',
+    });
+  });
+
+  it('does not infer file extensions from mixed coding workflows', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      {
+        sourceContent: 'Treat this as a safe scratch coding workflow: list and search the scratch folder, create a coding session, show git diff, and create one scratch TypeScript file.',
+      },
+      'coding_task',
+      'search',
+      'classifier.primary',
+    );
+
+    expect(result.entities.fileExtension).toBeUndefined();
+  });
+
   it('drops document source entities when the route is not document search', () => {
     const result = resolveIntentGatewayEntities(
       {

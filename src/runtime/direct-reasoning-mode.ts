@@ -828,7 +828,7 @@ export async function executeDirectReasoningLoop(input: {
       ? Math.min(DEFAULT_FINAL_RESPONSE_TIMEOUT_MS, remainingMs)
       : DEFAULT_FINAL_RESPONSE_TIMEOUT_MS;
     if (finalTimeoutMs > 1_000) {
-      const synthesisArtifacts = selectDirectReasoningSynthesisArtifacts(artifactState.artifacts, evidence);
+      const synthesisArtifacts = selectDirectReasoningSynthesisArtifacts(artifactState.artifacts, evidence, input.input);
       const sourceArtifactCount = artifactState.artifacts.length;
       const ledgerArtifact = createDirectReasoningEvidenceLedgerArtifact(artifactState, now(), synthesisArtifacts);
       if (ledgerArtifact) {
@@ -2561,6 +2561,9 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
   evidence: DirectReasoningEvidenceEntry[];
   input: DirectReasoningInput;
 }): { content: string; files: string[]; coverageFileCount: number; replaceContent?: boolean } | null {
+  if (directReasoningIsPlainFileExtensionSearch(input.input)) {
+    return null;
+  }
   if (!directReasoningRequiresImplementationFileCoverage(input.input)) {
     return null;
   }
@@ -2619,6 +2622,16 @@ function buildDirectReasoningSynthesisCoverageCompletion(input: {
     files: missing.map((summary) => summary.file),
     coverageFileCount: summaries.length,
   };
+}
+
+function directReasoningIsPlainFileExtensionSearch(input: DirectReasoningInput): boolean {
+  const decision = input.gateway?.decision;
+  if (!decision) return false;
+  return decision.operation === 'search'
+    && (decision.route === 'coding_task' || decision.route === 'filesystem_task')
+    && typeof decision.entities.fileExtension === 'string'
+    && decision.entities.fileExtension.trim().length > 0
+    && !hasRequiredWritePlannedStep(decision);
 }
 
 function buildDirectReasoningDefinitionCallSiteCompletion(input: {
@@ -2983,6 +2996,7 @@ function summarizeDirectReasoningEvidenceCoverage(evidence: DirectReasoningEvide
 function selectDirectReasoningSynthesisArtifacts(
   artifacts: ExecutionArtifact[],
   evidence: DirectReasoningEvidenceEntry[],
+  input: DirectReasoningInput,
 ): ExecutionArtifact[] {
   const coverageSummaries = selectDirectReasoningCoverageSummaries(
     evidence,
@@ -2990,13 +3004,14 @@ function selectDirectReasoningSynthesisArtifacts(
   );
   const summaryScores = new Map(coverageSummaries
     .map((summary) => [summary.file, directReasoningFallbackFileScore(summary)]));
+  const prioritizeSearchResults = directReasoningShouldPrioritizeSearchResultArtifacts(input);
   const candidates = artifacts
     .filter((artifact) => artifact.artifactType !== 'EvidenceLedger' && artifact.artifactType !== 'SynthesisDraft')
     .map((artifact, index) => ({
       artifact,
       index,
       coverageFiles: directReasoningArtifactCoverageFiles(artifact, summaryScores),
-      score: directReasoningSynthesisArtifactScore(artifact, summaryScores),
+      score: directReasoningSynthesisArtifactScore(artifact, summaryScores, prioritizeSearchResults),
     }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => (
@@ -3007,6 +3022,20 @@ function selectDirectReasoningSynthesisArtifacts(
 
   const selected: typeof candidates = [];
   const coveredFiles = new Set<string>();
+  if (prioritizeSearchResults) {
+    for (const candidate of candidates) {
+      if (selected.length >= MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS) break;
+      if (
+        candidate.artifact.artifactType === 'SearchResultSet'
+        && !selected.some((entry) => entry.artifact.artifactId === candidate.artifact.artifactId)
+      ) {
+        selected.push(candidate);
+        for (const file of candidate.coverageFiles) {
+          coveredFiles.add(file);
+        }
+      }
+    }
+  }
   for (const candidate of candidates) {
     if (selected.length >= MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS) break;
     if (candidate.coverageFiles.some((file) => !coveredFiles.has(file))) {
@@ -3028,18 +3057,28 @@ function selectDirectReasoningSynthesisArtifacts(
 function directReasoningSynthesisArtifactScore(
   artifact: ExecutionArtifact,
   summaryScores: Map<string, number>,
+  prioritizeSearchResults = false,
 ): number {
   const coverageFiles = directReasoningArtifactCoverageFiles(artifact, summaryScores);
   const refScore = coverageFiles.reduce((score, ref) => Math.max(score, summaryScores.get(ref) ?? 0), 0);
-  if (refScore <= 0) {
+  if (refScore <= 0 && !(prioritizeSearchResults && artifact.artifactType === 'SearchResultSet')) {
     return 0;
   }
   const typeScore = artifact.artifactType === 'FileReadSet'
     ? 1_000
     : artifact.artifactType === 'SearchResultSet'
-      ? 60
+      ? (prioritizeSearchResults ? 1_200 : 60)
       : 0;
-  return refScore + typeScore + Math.min(160, coverageFiles.length * 16);
+  const referenceCount = artifact.refs.length;
+  return refScore + typeScore + Math.min(160, coverageFiles.length * 16) + Math.min(160, referenceCount * 4);
+}
+
+function directReasoningShouldPrioritizeSearchResultArtifacts(input: DirectReasoningInput): boolean {
+  const decision = input.gateway?.decision;
+  if (decision?.operation === 'search') {
+    return true;
+  }
+  return directReasoningRequiresSearchEvidence(input);
 }
 
 function directReasoningArtifactCoverageFiles(

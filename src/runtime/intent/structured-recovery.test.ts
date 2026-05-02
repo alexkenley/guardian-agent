@@ -52,6 +52,73 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.operation).toBe('repair.structured');
   });
 
+  it('repairs repo file-extension inventory requests to searchable coding tasks', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'unknown',
+      summary: 'List matching files in the repo.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+    }, {
+      sourceContent: 'Find files with the .json extension in the repo and list the paths.',
+    });
+
+    expect(decision.route).toBe('coding_task');
+    expect(decision.operation).toBe('search');
+    expect(decision.entities?.fileExtension).toBe('.json');
+    expect(decision.provenance?.operation).toBe('repair.structured');
+    expect(decision.provenance?.entities).toMatchObject({
+      fileExtension: 'resolver.coding',
+    });
+  });
+
+  it('repairs document-search drift for coding workspace file-extension inventories', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Search JSON files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'tool_loop',
+      entities: {
+        fileExtension: '.json',
+        searchSourceType: 'directory',
+      },
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search document files.',
+          expectedToolCategories: ['doc_search_list'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'List matching files.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Okay now search in the coding workspace repo for JSON files and list them out',
+    });
+
+    expect(decision.route).toBe('coding_task');
+    expect(decision.operation).toBe('search');
+    expect(decision.entities?.fileExtension).toBe('.json');
+    expect(decision.entities?.searchSourceType).toBeUndefined();
+    expect(decision.requiresRepoGrounding).toBe(true);
+    expect(decision.requiresToolSynthesis).toBe(false);
+    expect(decision.preferredAnswerPath).toBe('direct');
+    expect(decision.provenance?.route).toBe('repair.structured');
+  });
+
   it('re-derives workload metadata when route and operation are repaired', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'unknown',

@@ -168,6 +168,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       path: {
         type: 'string',
       },
+      fileExtension: {
+        type: 'string',
+      },
       sessionTarget: {
         type: 'string',
       },
@@ -294,6 +297,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Prefer search_task over browser_task for generic web search.',
   'Prefer search_task over memory_task when the user asks to search documents, indexed docs, configured document sources, document collections, or doc_search. Memory_task is only for explicit durable-memory recall/search requests.',
   'For document-source content search, use planned_steps with expectedToolCategories=["doc_search"]. For listing indexed document files by type or extension, use expectedToolCategories=["doc_search_list"]. For web search, use expectedToolCategories=["web_search"].',
+  'When the user asks to search or list files by file type or extension, set fileExtension to the normalized extension with a leading dot, for example ".json" for JSON files. Keep query as the broader search phrase only when useful.',
   'Configured document sources are named indexed collections. Do not classify a URL or GitHub repo as document search unless it clearly names a configured source with indexedSearchAvailable=true; otherwise use browser_task, coding_task, or filesystem_task.',
   'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',

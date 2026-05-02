@@ -1093,6 +1093,95 @@ describe('direct reasoning mode', () => {
     expect(result).toContain('src/runtime/run-timeline.ts');
   });
 
+  it('keeps search result artifacts available for workspace file search synthesis', async () => {
+    let toolLoopCalls = 0;
+    let synthesisPrompt = '';
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        toolLoopCalls += 1;
+        if (toolLoopCalls === 1) {
+          return chatResponse({
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'search-json',
+                name: 'fs_search',
+                arguments: JSON.stringify({
+                  path: '.',
+                  query: '.json',
+                  mode: 'name',
+                }),
+              },
+            ],
+          });
+        }
+        return chatResponse({ content: 'I found JSON files in the workspace.' });
+      }
+      synthesisPrompt = messages.map((message) => message.content).join('\n');
+      return chatResponse({
+        content: 'Workspace JSON files include `package.json`, `tsconfig.json`, and `skills/web-research/skill.json`.',
+      });
+    });
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        root: 'S:\\Development\\GuardianAgent',
+        query: '.json',
+        mode: 'name',
+        truncated: false,
+        matches: [
+          { relativePath: 'package.json', matchType: 'name' },
+          { relativePath: 'tsconfig.json', matchType: 'name' },
+          { relativePath: 'skills/web-research/skill.json', matchType: 'name' },
+        ],
+      },
+    }));
+    const traceEntries: Array<Record<string, unknown>> = [];
+
+    const result = await handleDirectReasoningMode({
+      message: 'OK, now search the workspace for any JSON files',
+      gateway: gateway({
+        operation: 'search',
+        summary: 'Search the workspace for JSON files',
+        resolvedContent: 'Search the current workspace/repo files for JSON files',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'medium',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search workspace files by JSON extension',
+            expectedToolCategories: ['fs_search'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'List the JSON files found in the workspace',
+            required: true,
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile(),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      maxTurns: 3,
+    }, {
+      chat,
+      executeTool,
+      trace: {
+        record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
+      },
+    });
+
+    expect(result.content).toContain('package.json');
+    expect(synthesisPrompt).toContain('package.json');
+    expect(synthesisPrompt).toContain('skills/web-research/skill.json');
+    const synthesisStarted = traceEntries.find((entry) => entry.stage === 'direct_reasoning_synthesis_started');
+    const selectedArtifacts = (synthesisStarted?.details as Record<string, unknown> | undefined)?.selectedArtifacts as Array<Record<string, unknown>> | undefined;
+    expect(selectedArtifacts?.some((artifact) => artifact.artifactType === 'SearchResultSet')).toBe(true);
+  });
+
   it('resolves direct fs_read paths relative to the default repo search root', async () => {
     const executeTool = vi.fn(async () => ({
       success: false,

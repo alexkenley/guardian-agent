@@ -390,6 +390,20 @@ export function normalizeSearchSourceType(
   }
 }
 
+export function normalizeFileExtension(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  let normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  normalized = normalized.replace(/^\*\./, '.').replace(/^\*+/, '');
+  if (!normalized.startsWith('.')) {
+    normalized = `.${normalized}`;
+  }
+  if (!/^\.[a-z0-9][a-z0-9._+-]{0,31}$/.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
 export function normalizeExecutionClass(
   value: unknown,
 ): IntentGatewayExecutionClass | undefined {

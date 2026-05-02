@@ -307,6 +307,32 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['filesystem']);
   });
 
+  it('defers tool-loop coding search plans to orchestration', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'coding_task',
+        operation: 'search',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search the scratch folder.',
+            expectedToolCategories: ['fs_search'],
+            required: true,
+          },
+          {
+            kind: 'tool_call',
+            summary: 'Create or attach a coding session.',
+            expectedToolCategories: ['code_session_create'],
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
   it('defers document-search answer plans for tool-loop orchestration', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

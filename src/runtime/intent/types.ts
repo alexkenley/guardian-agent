@@ -117,6 +117,7 @@ export interface IntentGatewayEntities {
   urls?: string[];
   query?: string;
   path?: string;
+  fileExtension?: string;
   sessionTarget?: string;
   codeSessionResource?: 'session' | 'session_list' | 'managed_sandboxes';
   codeSessionSandboxProvider?: 'daytona' | 'vercel' | 'all';
