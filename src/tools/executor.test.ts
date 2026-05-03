@@ -4813,6 +4813,41 @@ describe('ToolExecutor', () => {
     await expect(access(join(codeRoot, 'approval-smoke.txt'))).rejects.toThrow();
   });
 
+  it('lists pending approvals for surface-qualified web channels by base channel', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      toolPolicies: { fs_write: 'manual' },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: join(root, 'surface-approval.txt'),
+        content: 'pending approval',
+      },
+      origin: 'assistant',
+      userId: 'owner',
+      principalId: 'web-open',
+      channel: 'web:surface:approval-test',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('pending_approval');
+    expect(result.approvalId).toBeTruthy();
+    expect(executor.listPendingApprovalIdsForUser('owner', 'web', {
+      principalId: 'web-open',
+    })).toEqual([result.approvalId]);
+    expect(executor.listPendingApprovalIdsForUser('owner', 'cli', {
+      principalId: 'web-open',
+    })).toEqual([]);
+  });
+
   it('surfaces code-session workspace roots in tool context', () => {
     const globalRoot = createExecutorRoot();
     const codeRoot = createExecutorRoot();

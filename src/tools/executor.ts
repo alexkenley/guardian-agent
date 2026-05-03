@@ -3657,13 +3657,16 @@ export class ToolExecutor {
       const jobUserId = (job.userId ?? '').trim();
       const jobPrincipalId = (job.principalId ?? approval.requestedByPrincipal ?? '').trim();
       const jobChannel = (job.channel ?? '').trim();
+      const channelMatches = normalizedChannel.length === 0
+        || jobChannel === normalizedChannel
+        || jobChannel.startsWith(`${normalizedChannel}:surface:`);
       const scopedMatch = normalizedUserId.length > 0
         && normalizedChannel.length > 0
         && jobUserId === normalizedUserId
-        && jobChannel === normalizedChannel;
+        && channelMatches;
       const principalMatch = normalizedPrincipalId.length > 0 && jobPrincipalId === normalizedPrincipalId;
       const unscopedMatch = includeUnscoped && jobUserId.length === 0 && jobChannel.length === 0;
-      if ((principalMatch && (normalizedChannel.length === 0 || jobChannel === normalizedChannel)) || scopedMatch || unscopedMatch) {
+      if ((principalMatch && channelMatches) || scopedMatch || unscopedMatch) {
         ids.push(approval.id);
       }
     }

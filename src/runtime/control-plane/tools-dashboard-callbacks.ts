@@ -115,7 +115,8 @@ export function createToolsDashboardCallbacks(
     }),
 
     onToolsPendingApprovals: ({ userId, channel, principalId, limit }) => {
-      const ids = options.toolExecutor.listPendingApprovalIdsForUser(userId, channel, {
+      const canonicalUserId = options.identity.resolveCanonicalUserId(channel, userId);
+      const ids = options.toolExecutor.listPendingApprovalIdsForUser(canonicalUserId, channel, {
         limit: limit ?? 20,
         includeUnscoped: channel === 'web',
         principalId,
