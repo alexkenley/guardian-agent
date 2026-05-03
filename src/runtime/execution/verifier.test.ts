@@ -2365,6 +2365,366 @@ describe('verifyDelegatedResult', () => {
     });
   });
 
+  it('matches gateway filesystem category aliases to concrete filesystem tool receipts', () => {
+    const plannedTask = {
+      planId: 'plan:coding_task:run:3',
+      steps: [
+        {
+          stepId: 'step_1',
+          kind: 'read' as const,
+          summary: 'Inspect package.json.',
+          expectedToolCategories: ['filesystem_read'],
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'write' as const,
+          summary: 'Write package-summary.txt.',
+          expectedToolCategories: ['filesystem_write'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          stepId: 'step_3',
+          kind: 'answer' as const,
+          summary: 'Confirm the work.',
+          required: true,
+          dependsOn: ['step_1', 'step_2'],
+        },
+      ],
+      allowAdditionalSteps: false,
+    };
+    const stepReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: [
+        {
+          receiptId: 'receipt-read',
+          sourceType: 'tool_call',
+          toolName: 'fs_read',
+          status: 'succeeded',
+          refs: ['package.json'],
+          summary: 'Read package.json.',
+          startedAt: 1,
+          endedAt: 2,
+        },
+        {
+          receiptId: 'receipt-write',
+          sourceType: 'tool_call',
+          toolName: 'fs_write',
+          status: 'succeeded',
+          refs: ['tmp/package-summary.txt'],
+          summary: 'Wrote tmp/package-summary.txt.',
+          startedAt: 3,
+          endedAt: 4,
+        },
+        {
+          receiptId: 'answer:1',
+          sourceType: 'model_answer',
+          status: 'succeeded',
+          refs: [],
+          summary: 'Done.',
+          startedAt: 5,
+          endedAt: 5,
+        },
+      ],
+      toolReceiptStepIds: new Map([
+        ['receipt-read', 'step_1'],
+        ['receipt-write', 'step_2'],
+      ]),
+      finalAnswerReceiptId: 'answer:1',
+    });
+
+    expect(stepReceipts.map((receipt) => receipt.status)).toEqual([
+      'satisfied',
+      'satisfied',
+      'satisfied',
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
+  it('stabilizes mixed read-write gateway plans and distributes matching filesystem receipts', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Inspect package.json and the stress plan, then write package-summary.txt and lane6-evidence.json.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'write',
+          summary: 'Write tmp/lane6/package-summary.txt.',
+          expectedToolCategories: ['filesystem_write'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Read package.json.',
+          expectedToolCategories: ['filesystem_read'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Write tmp/lane6/lane6-evidence.json.',
+          expectedToolCategories: ['filesystem_write'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Read docs/plans/VERIFICATION-VALIDATION-STRESS-PLAN.md.',
+          expectedToolCategories: ['filesystem_read'],
+          required: true,
+        },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual([
+      'read',
+      'read',
+      'write',
+      'write',
+      'answer',
+    ]);
+
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-read-package',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['package.json'],
+        summary: 'Read package.json.',
+        startedAt: 1,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'receipt-read-plan',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['docs/plans/VERIFICATION-VALIDATION-STRESS-PLAN.md'],
+        summary: 'Read docs/plans/VERIFICATION-VALIDATION-STRESS-PLAN.md.',
+        startedAt: 3,
+        endedAt: 4,
+      },
+      {
+        receiptId: 'receipt-write-summary',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['tmp/lane6/package-summary.txt'],
+        summary: 'Wrote tmp/lane6/package-summary.txt.',
+        startedAt: 5,
+        endedAt: 6,
+      },
+      {
+        receiptId: 'receipt-write-evidence',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['tmp/lane6/lane6-evidence.json'],
+        summary: 'Wrote tmp/lane6/lane6-evidence.json.',
+        startedAt: 7,
+        endedAt: 8,
+      },
+      {
+        receiptId: 'answer:1',
+        sourceType: 'model_answer',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Both files verified on disk. All planned steps are complete.',
+        startedAt: 9,
+        endedAt: 9,
+      },
+    ];
+    const toolReceiptStepIds = new Map<string, string>();
+    const previouslyMatchedStepIds = new Set<string>();
+    for (const receipt of evidenceReceipts.filter((entry) => entry.sourceType === 'tool_call')) {
+      const stepId = matchPlannedStepForTool({
+        plannedTask: taskContract.plan,
+        toolName: receipt.toolName ?? 'tool_call',
+        args: { refs: receipt.refs },
+        previouslyMatchedStepIds,
+      });
+      expect(stepId).toBeDefined();
+      toolReceiptStepIds.set(receipt.receiptId, stepId as string);
+      previouslyMatchedStepIds.add(stepId as string);
+    }
+
+    expect([...toolReceiptStepIds.entries()]).toEqual([
+      ['receipt-read-package', 'step_1'],
+      ['receipt-read-plan', 'step_2'],
+      ['receipt-write-summary', 'step_3'],
+      ['receipt-write-evidence', 'step_4'],
+    ]);
+
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts,
+      toolReceiptStepIds,
+      finalAnswerReceiptId: 'answer:1',
+    });
+
+    expect(stepReceipts.map((receipt) => receipt.status)).toEqual([
+      'satisfied',
+      'satisfied',
+      'satisfied',
+      'satisfied',
+      'satisfied',
+    ]);
+    expect(computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
+  it('does not let post-mutation verification reads block approved filesystem writes', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Inspect package.json and the stress plan, then write two evidence files.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        { kind: 'read', summary: 'Real Lane 6 final verification.', expectedToolCategories: ['read'], required: true },
+        {
+          kind: 'read',
+          summary: 'Use the existing directory tmp/lane6.',
+          expectedToolCategories: ['read'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          kind: 'read',
+          summary: 'Inspect package.json and docs/plans/VERIFICATION-VALIDATION-STRESS-PLAN.md.',
+          expectedToolCategories: ['read'],
+          required: true,
+          dependsOn: ['step_2'],
+        },
+        {
+          kind: 'write',
+          summary: 'Write package-summary.txt and lane6-evidence.json.',
+          expectedToolCategories: ['write'],
+          required: true,
+          dependsOn: ['step_3'],
+        },
+        {
+          kind: 'read',
+          summary: 'Use real tools and confirm both files exist when done.',
+          expectedToolCategories: ['read'],
+          required: true,
+          dependsOn: ['step_4'],
+        },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.plan.steps[4]).toMatchObject({
+      kind: 'read',
+      required: false,
+    });
+    expect(taskContract.plan.steps[5]?.dependsOn).not.toContain('step_5');
+
+    const evidenceReceipts: EvidenceReceipt[] = [
+      {
+        receiptId: 'receipt-list',
+        sourceType: 'tool_call',
+        toolName: 'fs_list',
+        status: 'succeeded',
+        refs: ['tmp/lane6'],
+        summary: 'Listed tmp/lane6.',
+        startedAt: 1,
+        endedAt: 1,
+      },
+      {
+        receiptId: 'receipt-read-package',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['package.json'],
+        summary: 'Read package.json.',
+        startedAt: 2,
+        endedAt: 2,
+      },
+      {
+        receiptId: 'receipt-read-plan',
+        sourceType: 'tool_call',
+        toolName: 'fs_read',
+        status: 'succeeded',
+        refs: ['docs/plans/VERIFICATION-VALIDATION-STRESS-PLAN.md'],
+        summary: 'Read docs/plans/VERIFICATION-VALIDATION-STRESS-PLAN.md.',
+        startedAt: 3,
+        endedAt: 3,
+      },
+      {
+        receiptId: 'receipt-write-summary',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['tmp/lane6/package-summary.txt'],
+        summary: 'Wrote tmp/lane6/package-summary.txt.',
+        startedAt: 4,
+        endedAt: 4,
+      },
+      {
+        receiptId: 'receipt-write-evidence',
+        sourceType: 'tool_call',
+        toolName: 'fs_write',
+        status: 'succeeded',
+        refs: ['tmp/lane6/lane6-evidence.json'],
+        summary: 'Wrote tmp/lane6/lane6-evidence.json.',
+        startedAt: 5,
+        endedAt: 5,
+      },
+      {
+        receiptId: 'answer:1',
+        sourceType: 'model_answer',
+        status: 'succeeded',
+        refs: [],
+        summary: 'Both files confirmed present.',
+        startedAt: 6,
+        endedAt: 6,
+      },
+    ];
+    const stepReceipts = buildStepReceipts({
+      plannedTask: taskContract.plan,
+      evidenceReceipts,
+      toolReceiptStepIds: new Map([
+        ['receipt-list', 'step_2'],
+        ['receipt-read-package', 'step_1'],
+        ['receipt-read-plan', 'step_3'],
+        ['receipt-write-summary', 'step_4'],
+        ['receipt-write-evidence', 'step_4'],
+      ]),
+      finalAnswerReceiptId: 'answer:1',
+    });
+
+    expect(stepReceipts.map((receipt) => receipt.status)).toEqual([
+      'satisfied',
+      'satisfied',
+      'satisfied',
+      'satisfied',
+      'skipped',
+      'satisfied',
+    ]);
+    expect(computeWorkerRunStatus(taskContract.plan, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
   it('requires a real fs_write receipt for file-targeted filesystem mutation write steps', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'filesystem_task',

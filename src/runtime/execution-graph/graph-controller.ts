@@ -839,6 +839,10 @@ function isGraphWriteStep(step: DelegatedTaskPlanStep): boolean {
   return step.required !== false && step.kind === 'write';
 }
 
+function countRequiredDecisionWriteSteps(decision: IntentGatewayDecision | undefined): number {
+  return decision?.plannedSteps?.filter((step) => step.required !== false && step.kind === 'write').length ?? 0;
+}
+
 export function shouldUseGraphControlledExecution(input: {
   taskContract: DelegatedResultEnvelope['taskContract'];
   decision: IntentGatewayDecision | undefined;
@@ -850,8 +854,15 @@ export function shouldUseGraphControlledExecution(input: {
   if (input.decision?.executionClass === 'security_analysis') {
     return false;
   }
+  if (input.taskContract.kind !== 'filesystem_mutation') {
+    return false;
+  }
   const route = input.decision?.route ?? input.taskContract.route;
   if (route !== 'coding_task' && route !== 'filesystem_task') {
+    return false;
+  }
+  const operation = input.decision?.operation ?? input.taskContract.operation;
+  if (operation === 'inspect' || operation === 'read' || operation === 'search') {
     return false;
   }
   if (!hasConcreteGraphMutationContract(input.decision, route)) {
@@ -859,8 +870,11 @@ export function shouldUseGraphControlledExecution(input: {
   }
   const requiredSteps = input.taskContract.plan.steps.filter((step) => step.required !== false);
   const hasReadPhase = requiredSteps.some((step) => isGraphReadStep(step));
-  const hasWritePhase = requiredSteps.some((step) => isGraphWriteStep(step));
-  return hasReadPhase && hasWritePhase;
+  const writeStepCount = requiredSteps.filter((step) => isGraphWriteStep(step)).length;
+  if (writeStepCount !== 1 || countRequiredDecisionWriteSteps(input.decision) > 1) {
+    return false;
+  }
+  return hasReadPhase;
 }
 
 function hasConcreteGraphMutationContract(

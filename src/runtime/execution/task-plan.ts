@@ -47,6 +47,17 @@ const AUTOMATION_WRITE_TOOL_NAMES = new Set([
   'automation_save',
   'automation_set_enabled',
 ]);
+const FILESYSTEM_READ_TOOL_NAMES = new Set([
+  'fs_read',
+  'fs_list',
+]);
+const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
+  'fs_write',
+  'fs_mkdir',
+  'fs_delete',
+  'fs_move',
+  'fs_copy',
+]);
 const M365_STATUS_TOOL_CATEGORIES = new Set([
   'm365_calendar_status',
   'microsoft_calendar_status',
@@ -133,8 +144,10 @@ export function buildPlannedTask(
 
   if (gatewaySteps.length > 0) {
     const answerBackedSteps = ensureRequiredAnswerStep(gatewaySteps, contract);
+    const stabilizedSteps = stabilizeEvidenceBeforeMutationSteps(answerBackedSteps, contract);
+    const dependencyRelaxedSteps = relaxPostMutationEvidenceSteps(stabilizedSteps, contract);
     const steps = ensureExactFileReferenceReadStep(
-      applyContractAnswerSummary(answerBackedSteps, contract.summary, contract.answerConstraints),
+      applyContractAnswerSummary(dependencyRelaxedSteps, contract.summary, contract.answerConstraints),
       contract,
     );
     return {
@@ -243,43 +256,43 @@ function shouldUseGatewayPlannedSteps(
 }
 
 function isWriteToolCategory(value: string): boolean {
-  return value === 'write'
-    || value === 'fs_write'
-    || value === 'fs_mkdir'
-    || value === 'fs_delete'
-    || value === 'fs_move'
-    || value === 'fs_copy';
+  const normalized = normalizeExpectedToolCategory(value);
+  return normalized === 'write'
+    || FILESYSTEM_WRITE_TOOL_NAMES.has(normalized)
+    || isFilesystemWriteCategory(normalized);
 }
 
 function isExecutionToolCategory(value: string): boolean {
-  return value === 'tool_call'
-    || value === 'code_remote_exec'
-    || value === 'execute_code'
-    || value === 'shell'
-    || value === 'command';
+  const normalized = normalizeExpectedToolCategory(value);
+  return normalized === 'tool_call'
+    || normalized === 'code_remote_exec'
+    || normalized === 'execute_code'
+    || normalized === 'shell'
+    || normalized === 'command';
 }
 
 function isActionToolCategory(value: string): boolean {
+  const normalized = normalizeExpectedToolCategory(value);
   return isExecutionToolCategory(value)
     || isWriteToolCategory(value)
-    || value === 'search'
-    || value === 'read'
-    || value === 'fs_search'
-    || value === 'code_symbol_search'
-    || value === 'fs_read'
-    || value === 'fs_list'
-    || value === 'web_search'
-    || value === 'web_fetch'
-    || value === 'browser'
-    || value.startsWith('browser_')
-    || value === 'memory'
-    || value === 'memory_search'
-    || value === 'memory_recall'
-    || value === 'memory_save'
-    || value === 'automation'
-    || value === 'automation_list'
-    || value.startsWith('second_brain_')
-    || value === 'second_brain';
+    || normalized === 'search'
+    || normalized === 'read'
+    || normalized === 'fs_search'
+    || normalized === 'code_symbol_search'
+    || FILESYSTEM_READ_TOOL_NAMES.has(normalized)
+    || isFilesystemReadCategory(normalized)
+    || normalized === 'web_search'
+    || normalized === 'web_fetch'
+    || normalized === 'browser'
+    || normalized.startsWith('browser_')
+    || normalized === 'memory'
+    || normalized === 'memory_search'
+    || normalized === 'memory_recall'
+    || normalized === 'memory_save'
+    || normalized === 'automation'
+    || normalized === 'automation_list'
+    || normalized.startsWith('second_brain_')
+    || normalized === 'second_brain';
 }
 
 function ensureExactFileReferenceReadStep(
@@ -514,6 +527,121 @@ function renumberPlannedSteps(steps: PlannedStep[]): PlannedStep[] {
   }));
 }
 
+function stabilizeEvidenceBeforeMutationSteps(
+  steps: PlannedStep[],
+  contract: {
+    kind: DelegatedTaskContractKind;
+  },
+): PlannedStep[] {
+  if (!shouldStabilizeEvidenceMutationOrder(steps, contract)) {
+    return steps;
+  }
+  if (steps.some((step) => step.kind !== 'answer' && (step.dependsOn?.length ?? 0) > 0)) {
+    return steps;
+  }
+
+  const evidenceSteps: PlannedStep[] = [];
+  const mutationSteps: PlannedStep[] = [];
+  const answerSteps: PlannedStep[] = [];
+  const otherSteps: PlannedStep[] = [];
+  for (const step of steps) {
+    if (step.kind === 'answer') {
+      answerSteps.push(step);
+    } else if (isEvidenceCollectionStep(step)) {
+      evidenceSteps.push(step);
+    } else if (isMutationStep(step)) {
+      mutationSteps.push(step);
+    } else {
+      otherSteps.push(step);
+    }
+  }
+  const reordered = [
+    ...evidenceSteps,
+    ...otherSteps,
+    ...mutationSteps,
+    ...answerSteps,
+  ];
+  const unchanged = reordered.every((step, index) => step.stepId === steps[index]?.stepId);
+  return unchanged ? steps : renumberPlannedSteps(reordered);
+}
+
+function shouldStabilizeEvidenceMutationOrder(
+  steps: PlannedStep[],
+  contract: {
+    kind: DelegatedTaskContractKind;
+  },
+): boolean {
+  if (
+    contract.kind !== 'filesystem_mutation'
+    && contract.kind !== 'tool_execution'
+    && contract.kind !== 'repo_inspection'
+  ) {
+    return false;
+  }
+  return steps.some(isEvidenceCollectionStep) && steps.some(isMutationStep);
+}
+
+function relaxPostMutationEvidenceSteps(
+  steps: PlannedStep[],
+  contract: {
+    kind: DelegatedTaskContractKind;
+  },
+): PlannedStep[] {
+  if (
+    contract.kind !== 'filesystem_mutation'
+    && contract.kind !== 'tool_execution'
+    && contract.kind !== 'repo_inspection'
+  ) {
+    return steps;
+  }
+  const firstMutationIndex = steps.findIndex(isMutationStep);
+  if (firstMutationIndex < 0 || !steps.some((step) => step.kind === 'answer')) {
+    return steps;
+  }
+  const relaxedStepIds = new Set(
+    steps
+      .slice(firstMutationIndex + 1)
+      .filter((step) => step.kind !== 'answer' && isEvidenceCollectionStep(step))
+      .map((step) => step.stepId),
+  );
+  if (relaxedStepIds.size === 0) {
+    return steps;
+  }
+  return steps.map((step) => {
+    const dependsOn = step.dependsOn?.filter((stepId) => !relaxedStepIds.has(stepId));
+    return {
+      ...step,
+      ...(relaxedStepIds.has(step.stepId) ? { required: false } : {}),
+      ...(dependsOn && dependsOn.length !== (step.dependsOn?.length ?? 0)
+        ? dependsOn.length > 0
+          ? { dependsOn }
+          : { dependsOn: undefined }
+        : {}),
+    };
+  });
+}
+
+function isEvidenceCollectionStep(step: PlannedStep): boolean {
+  return step.kind === 'read'
+    || step.kind === 'search'
+    || step.expectedToolCategories?.some((value) => {
+      const normalized = normalizeExpectedToolCategory(value);
+      return normalized === 'read'
+        || normalized === 'search'
+        || normalized === 'fs_read'
+        || normalized === 'fs_list'
+        || normalized === 'fs_search'
+        || normalized === 'code_symbol_search'
+        || isFilesystemReadCategory(normalized);
+    }) === true;
+}
+
+function isMutationStep(step: PlannedStep): boolean {
+  return step.kind === 'write'
+    || step.kind === 'memory_save'
+    || step.expectedToolCategories?.some(isWriteToolCategory) === true;
+}
+
 export function matchPlannedStepForTool(input: ToolStepMatchInput): string | undefined {
   const toolKind = inferStepKindFromToolName(input.toolName);
   const normalizedHint = input.hintStepId?.trim();
@@ -530,14 +658,24 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
   const scored = input.plannedTask.steps.map((step, index) => {
     let score = 0;
     if (!toolNameSatisfiesStep(step, input.toolName, toolKind)) {
-      return { step, index, score: Number.NEGATIVE_INFINITY };
+      return {
+        step,
+        index,
+        previouslyMatched: previouslyMatched.has(step.stepId),
+        score: Number.NEGATIVE_INFINITY,
+      };
     }
     if (
       input.toolName === 'find_tools'
       && step.kind === 'tool_call'
       && !step.expectedToolCategories?.some((value) => value === 'find_tools' || value === 'search')
     ) {
-      return { step, index, score: Number.NEGATIVE_INFINITY };
+      return {
+        step,
+        index,
+        previouslyMatched: previouslyMatched.has(step.stepId),
+        score: Number.NEGATIVE_INFINITY,
+      };
     }
     if (step.kind === toolKind) score += 8;
     if (step.expectedToolCategories?.some((value) => expectedToolCategoryMatchesTool(value, input.toolName, toolKind, step.kind))) {
@@ -550,14 +688,29 @@ export function matchPlannedStepForTool(input: ToolStepMatchInput): string | und
     if (summaryRefs.length > 0 && summaryRefs.some((ref) => [...argRefs].some((argRef) => argRef.includes(ref) || ref.includes(argRef)))) {
       score += 3;
     }
-    if (!previouslyMatched.has(step.stepId)) {
-      score += 1;
+    return {
+      step,
+      index,
+      previouslyMatched: previouslyMatched.has(step.stepId),
+      score,
+    };
+  });
+  const hasUnmatchedViableCandidate = scored.some((entry) => !entry.previouslyMatched && entry.score > 0);
+  const adjustedScored = scored.map((entry) => {
+    if (entry.score <= 0) {
+      return entry;
     }
-    return { step, index, score };
+    if (entry.previouslyMatched && hasUnmatchedViableCandidate) {
+      return { ...entry, score: entry.score - 12 };
+    }
+    if (!entry.previouslyMatched) {
+      return { ...entry, score: entry.score + 2 };
+    }
+    return entry;
   });
 
-  scored.sort((left, right) => right.score - left.score || left.index - right.index);
-  const best = scored[0];
+  adjustedScored.sort((left, right) => right.score - left.score || left.index - right.index);
+  const best = adjustedScored[0];
   return best && best.score > 0 ? best.step.stepId : undefined;
 }
 
@@ -1135,9 +1288,11 @@ function expectedToolCategoryMatchesTool(
   inferredToolKind: PlannedStepKind,
   stepKind: PlannedStepKind,
 ): boolean {
-  const normalized = value.trim();
+  const normalized = normalizeExpectedToolCategory(value);
   return normalized === toolName
     || normalized === inferredToolKind
+    || (isFilesystemReadCategory(normalized) && FILESYSTEM_READ_TOOL_NAMES.has(toolName))
+    || (isFilesystemWriteCategory(normalized) && FILESYSTEM_WRITE_TOOL_NAMES.has(toolName))
     || (normalized === 'runtime_evidence' && toolName !== 'find_tools' && (
       inferredToolKind === 'read'
         || inferredToolKind === 'search'
@@ -1168,6 +1323,24 @@ function expectedToolCategoryMatchesTool(
     || (GWS_STATUS_TOOL_CATEGORIES.has(normalized) && (toolName === 'gws_status' || toolName === 'gws'))
     || (normalized === 'm365' && toolName.startsWith('m365'))
     || (normalized === 'gws' && (toolName === 'gws' || toolName === 'gws_schema'));
+}
+
+function normalizeExpectedToolCategory(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isFilesystemReadCategory(value: string): boolean {
+  return value === 'filesystem_read'
+    || value === 'filesystem.read'
+    || value === 'filesystem-read'
+    || value === 'filesystem:read';
+}
+
+function isFilesystemWriteCategory(value: string): boolean {
+  return value === 'filesystem_write'
+    || value === 'filesystem.write'
+    || value === 'filesystem-write'
+    || value === 'filesystem:write';
 }
 
 function receiptSatisfiesStep(step: PlannedStep, receipt: EvidenceReceipt): boolean {

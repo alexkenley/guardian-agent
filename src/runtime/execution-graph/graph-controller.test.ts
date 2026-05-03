@@ -111,6 +111,133 @@ describe('graph-controller boundary', () => {
     })).toBe(false);
   });
 
+  it('leaves multi-write mutation plans on the delegated worker path', () => {
+    const multiWriteContract = taskContract([
+      {
+        stepId: 'read-1',
+        kind: 'read',
+        summary: 'Read the source files.',
+        expectedToolCategories: ['filesystem.read'],
+        required: true,
+      },
+      {
+        stepId: 'write-1',
+        kind: 'write',
+        summary: 'Write the first output file.',
+        expectedToolCategories: ['filesystem.write'],
+        required: true,
+      },
+      {
+        stepId: 'write-2',
+        kind: 'write',
+        summary: 'Write the second output file.',
+        expectedToolCategories: ['filesystem.write'],
+        required: true,
+      },
+    ]);
+
+    expect(shouldUseGraphControlledExecution({
+      taskContract: multiWriteContract,
+      decision: baseDecision(),
+      executionProfile: localProfile,
+    })).toBe(false);
+
+    expect(shouldUseGraphControlledExecution({
+      taskContract: taskContract([
+        multiWriteContract.plan.steps[0],
+        multiWriteContract.plan.steps[1],
+      ]),
+      decision: baseDecision({
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read the source files.',
+            required: true,
+          },
+          {
+            kind: 'write',
+            summary: 'Write the first output file.',
+            required: true,
+          },
+          {
+            kind: 'write',
+            summary: 'Write the second output file.',
+            required: true,
+          },
+        ],
+      }),
+      executionProfile: localProfile,
+    })).toBe(false);
+  });
+
+  it('leaves inspect/read operations with incidental writes on the delegated worker path', () => {
+    const mixedInspectContract = taskContract([
+      {
+        stepId: 'read-1',
+        kind: 'read',
+        summary: 'Read the requested source files.',
+        expectedToolCategories: ['filesystem.read'],
+        required: true,
+      },
+      {
+        stepId: 'write-1',
+        kind: 'write',
+        summary: 'Write the requested evidence artifacts.',
+        expectedToolCategories: ['filesystem.write'],
+        required: true,
+      },
+    ]);
+
+    expect(shouldUseGraphControlledExecution({
+      taskContract: mixedInspectContract,
+      decision: baseDecision({
+        operation: 'inspect',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Read the requested source files.',
+            required: true,
+          },
+          {
+            kind: 'write',
+            summary: 'Write the requested evidence artifacts.',
+            required: true,
+          },
+        ],
+      }),
+      executionProfile: localProfile,
+    })).toBe(false);
+  });
+
+  it('requires an explicit filesystem mutation contract before graph control', () => {
+    const repoInspectionContract: DelegatedTaskContract = {
+      ...taskContract([
+        {
+          stepId: 'read-1',
+          kind: 'read',
+          summary: 'Read the requested source files.',
+          expectedToolCategories: ['filesystem.read'],
+          required: true,
+        },
+        {
+          stepId: 'write-1',
+          kind: 'write',
+          summary: 'Write the requested evidence artifacts.',
+          expectedToolCategories: ['filesystem.write'],
+          required: true,
+        },
+      ]),
+      kind: 'repo_inspection',
+      operation: 'update',
+    };
+
+    expect(shouldUseGraphControlledExecution({
+      taskContract: repoInspectionContract,
+      decision: baseDecision({ operation: 'update' }),
+      executionProfile: localProfile,
+    })).toBe(false);
+  });
+
   it('derives a read-only gateway decision for the exploration node', () => {
     const contract = taskContract([
       {
