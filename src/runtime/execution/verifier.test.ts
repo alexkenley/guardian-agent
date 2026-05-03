@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { INTENT_GATEWAY_MISSING_SUMMARY } from '../intent/summary.js';
+import {
+  INTENT_GATEWAY_MISSING_SUMMARY,
+  normalizeUserFacingIntentGatewaySummary,
+} from '../intent/summary.js';
 import { normalizeIntentGatewayDecision } from '../intent/structured-recovery.js';
 import type {
   AnswerConstraints,
@@ -177,6 +180,38 @@ function buildEnvelope(input?: {
 }
 
 describe('verifyDelegatedResult', () => {
+  it('does not promote provider fallback failures into delegated task summaries', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'xAI (Grok) rate limit exceeded or quota depleted. Check the account limits for this provider.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'medium',
+      simpleVsComplex: 'simple',
+      preferredAnswerPath: 'direct',
+      plannedSteps: [
+        { kind: 'read', summary: 'Check requested connector statuses.', required: true },
+        { kind: 'answer', summary: 'Return a concise status summary.', required: true, dependsOn: ['step_1'] },
+      ],
+      entities: {},
+    });
+
+    expect(normalizeUserFacingIntentGatewaySummary('xAI (Grok) rate limit exceeded or quota depleted. Check the account limits for this provider.'))
+      .toBeUndefined();
+    expect(taskContract.summary).toBeUndefined();
+    expect(taskContract.plan.steps.map((step) => step.summary)).toEqual([
+      'Check requested connector statuses.',
+      'Return a concise status summary.',
+    ]);
+  });
+
   it('requires evidence and disables answer-first when a general task has required tool-backed steps', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'automation_control',

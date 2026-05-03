@@ -480,8 +480,7 @@ function resolveDelegatedTaskSummary(
   if (resolvedContent) {
     return resolvedContent;
   }
-  const rawSummary = decision?.summary?.trim();
-  return rawSummary || undefined;
+  return undefined;
 }
 
 function verifyProviderSelection(
