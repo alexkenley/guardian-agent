@@ -136,7 +136,7 @@ export function hasPagedListFollowUpRequest(
     return true;
   }
   return /\b(?:next|another)\s+(?:page|items?|results?|entries|messages?|emails?|automations?|links?|pages?)\b/i.test(compact)
-    || /\b(?:show|list|display|get|give)\b[\s\S]{0,80}\b(?:additional|more|remaining|next|rest|other)\b/i.test(compact)
+    || /\b(?:show|list|display|get|give)\b[\s\S]{0,80}\b(?:additional|more|remaining|next|rest)\b/i.test(compact)
     || /\bother\s+\d{1,3}\b/i.test(compact)
     || /\bother\s+(?:items|results|entries|messages|emails|automations|links|pages)\b/i.test(compact);
 }

@@ -833,6 +833,56 @@ This should not load.
     expect(resolved).toHaveLength(0);
   });
 
+  it('does not keep same-turn pre-gateway provider skills on new clarification requests', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Check my email.',
+      intentRoute: 'email_task',
+      intentTurnRelation: 'new_request',
+      intentResolution: 'needs_clarification',
+      priorActiveSkillIds: ['microsoft-365', 'google-workspace'],
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+
+    expect(resolved).toHaveLength(0);
+  });
+
+  it('does not keep prior provider skills on fresh clarification requests with stale pending state', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolved = resolver.resolve(makeInput({
+      content: 'Check my email.',
+      intentRoute: 'email_task',
+      intentTurnRelation: 'new_request',
+      intentResolution: 'needs_clarification',
+      pendingActionKind: 'clarification',
+      priorActiveSkillIds: ['microsoft-365', 'google-workspace'],
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    }));
+
+    expect(resolved).toHaveLength(0);
+  });
+
+  it('does not activate managed provider skills from generic workspace-provider wording', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 3 });
+
+    const resolvedIds = resolver.resolve(makeInput({
+      content: 'Use Slack to list my channels. If Slack is not connected, just say so; do not use any other workspace provider.',
+      intentRoute: 'general_assistant',
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    })).map((skill) => skill.id);
+
+    expect(resolvedIds).not.toContain('google-workspace');
+    expect(resolvedIds).not.toContain('microsoft-365');
+  });
+
   it('keeps file-grounded review prompts anchored to code-review plus coding-workspace', async () => {
     const registry = new SkillRegistry();
     await registry.loadFromRoots([join(process.cwd(), 'skills')]);

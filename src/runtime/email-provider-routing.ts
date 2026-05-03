@@ -50,6 +50,9 @@ export function applyContextualEmailProviderHint(
   if (!text || mentionsSpecificEmailProvider(text) || !MAILBOX_FOLLOW_UP_PATTERN.test(text)) {
     return content;
   }
+  if (getAmbiguousEmailProviderClarification(text, enabledManagedProviders)) {
+    return content;
+  }
 
   const inferred = inferProviderFromHistory(history);
   if (!inferred) return content;

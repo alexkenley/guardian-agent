@@ -7,7 +7,7 @@ export function isExplicitProviderConfigRequest(content: string | undefined): bo
   return /\bconfigured\s+(?:ai\s+|llm\s+)?providers?\b/.test(normalized)
     || /\b(?:ai\s+|llm\s+)?provider\s+profiles?\b/.test(normalized)
     || (/\b(?:providers?|profiles?|models?|catalog|routing policy)\b/.test(normalized)
-      && /\b(?:ai|llm|model|provider|ollama|anthropic|openai|xai|gemini|claude)\b/.test(normalized));
+      && /\b(?:ai|llm|model|ollama|anthropic|openai|xai|gemini|claude)\b/.test(normalized));
 }
 
 export function inferProviderConfigOperation(

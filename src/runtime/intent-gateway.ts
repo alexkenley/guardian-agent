@@ -26,6 +26,7 @@ import {
   isRawCredentialDisclosureRequest,
   looksLikeSelfContainedDirectAnswerTurn,
 } from './intent/request-patterns.js';
+import { getAmbiguousEmailProviderClarification } from './email-provider-routing.js';
 import type {
   IntentGatewayChatFn,
   IntentGatewayDecision,
@@ -248,6 +249,7 @@ function normalizeIntentGatewayRecordDecisionForInput(
       sourceContent: input.content,
       pendingAction: input.pendingAction,
       continuity: input.continuity,
+      enabledManagedProviders: input.enabledManagedProviders,
     },
     { classifierSource: classifierProvenanceSourceForMode(record.mode) },
   );
@@ -261,7 +263,7 @@ function repairEmailProviderDecisionIfNeeded(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
 ): IntentGatewayDecision {
-  if (decision.route !== 'email_task' || decision.entities.emailProvider) {
+  if (decision.route !== 'email_task') {
     return decision;
   }
 
@@ -272,19 +274,31 @@ function repairEmailProviderDecisionIfNeeded(
   );
   const hasGoogleWorkspace = enabledProviders.has('gws');
   const hasMicrosoft365 = enabledProviders.has('m365');
+  const hasBothMailProviders = hasGoogleWorkspace && hasMicrosoft365;
 
   if (!hasGoogleWorkspace && !hasMicrosoft365) {
     return decision;
   }
 
-  if (hasGoogleWorkspace && hasMicrosoft365) {
+  if (hasBothMailProviders && getAmbiguousEmailProviderClarification(input.content, enabledProviders)) {
     const missingFields = new Set(decision.missingFields);
     missingFields.add('email_provider');
+    const { emailProvider: _emailProvider, ...entities } = decision.entities;
+    const { emailProvider: _emailProviderSource, ...entityProvenance } = decision.provenance?.entities ?? {};
     return {
       ...decision,
       resolution: 'needs_clarification',
       missingFields: [...missingFields],
+      entities,
+      provenance: {
+        ...(decision.provenance ?? {}),
+        entities: entityProvenance,
+      },
     };
+  }
+
+  if (decision.entities.emailProvider) {
+    return decision;
   }
 
   const emailProvider = hasMicrosoft365 ? 'm365' : 'gws';

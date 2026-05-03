@@ -638,6 +638,45 @@ interface DegradedDirectIntentResponseInput {
     return formatSkillInventoryResponse(this.skillRegistry.listStatus());
   }
 
+  private tryDirectUnsupportedManagedProviderPlanResponse(
+    decision: IntentGatewayDecision | undefined,
+  ): string | null {
+    const provider = this.resolveUnsupportedManagedProviderFromDecision(decision);
+    if (!provider) return null;
+    const label = provider === 'slack'
+      ? 'Slack'
+      : provider === 'notion'
+      ? 'Notion'
+      : provider === 'email'
+      ? 'the local email provider'
+      : provider;
+    return `${label} is not connected or enabled in this Guardian session, so I cannot use ${label} tools for that request right now.`;
+  }
+
+  private resolveUnsupportedManagedProviderFromDecision(
+    decision: IntentGatewayDecision | undefined,
+  ): 'slack' | 'notion' | 'email' | null {
+    if (!decision?.plannedSteps?.length || !this.enabledManagedProviders) return null;
+    const enabledProviders = new Set([...this.enabledManagedProviders].map((provider) => provider.trim().toLowerCase()));
+    const aliases: Record<string, 'slack' | 'notion' | 'email'> = {
+      slack: 'slack',
+      notion: 'notion',
+      email: 'email',
+      himalaya: 'email',
+    };
+    for (const step of decision.plannedSteps) {
+      for (const category of step.expectedToolCategories ?? []) {
+        const normalized = category.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        const base = normalized.replace(/_(?:status|read|write|send|draft|list|search|schema)$/g, '');
+        const provider = aliases[normalized] ?? aliases[base];
+        if (provider && !enabledProviders.has(provider)) {
+          return provider;
+        }
+      }
+    }
+    return null;
+  }
+
   private tryDirectPendingApprovalStatusResponse(
     message: UserMessage,
     options?: { exactOnly?: boolean },
@@ -1381,6 +1420,27 @@ interface DegradedDirectIntentResponseInput {
           this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
         }
         return clarificationResponse;
+      }
+      const unsupportedManagedProviderResponse = this.tryDirectUnsupportedManagedProviderPlanResponse(earlyGateway?.decision);
+      if (unsupportedManagedProviderResponse) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            unsupportedManagedProviderResponse,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, []);
+        }
+        return {
+          content: unsupportedManagedProviderResponse,
+          metadata: {
+            ...(toIntentGatewayClientMetadata(earlyGateway)
+              ? { intentGateway: toIntentGatewayClientMetadata(earlyGateway) }
+              : {}),
+          },
+        };
       }
       const explicitWorkspaceTarget = await buildCodingRoutes().backendDeps.ensureExplicitCodingTaskWorkspaceTarget({
         message,

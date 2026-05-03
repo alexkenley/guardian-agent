@@ -1311,6 +1311,91 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.operation).toBe('derived.workload');
   });
 
+  it('does not preserve provider-crud workload for generic workspace provider wording', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Use Slack to list channels.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'provider_crud',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+    }, {
+      sourceContent: 'Use Slack to list my channels. If Slack is not connected, just say so; do not use any other workspace provider.',
+    });
+
+    expect(decision.executionClass).toBe('direct_assistant');
+    expect(decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('downgrades disabled managed-provider tool plans to direct answers', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'run',
+      summary: 'Use Slack to list channels.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'simple',
+      planned_steps: [
+        {
+          kind: 'tool_call',
+          summary: 'Check Slack and list channels.',
+          expectedToolCategories: ['slack'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Say whether Slack is connected.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Use Slack to list my channels. If Slack is not connected, just say so; do not use any other workspace provider.',
+      enabledManagedProviders: ['gws', 'm365'],
+    });
+
+    expect(decision.executionClass).toBe('direct_assistant');
+    expect(decision.requiresToolSynthesis).toBe(false);
+    expect(decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('repairs generic email reads to email_task when both mail providers are enabled', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'read',
+      summary: 'Check email.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Check my email.',
+      enabledManagedProviders: ['gws', 'm365'],
+    });
+
+    expect(decision.route).toBe('email_task');
+  });
+
   it('removes stray Second Brain evidence from connector-status-only plans', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',

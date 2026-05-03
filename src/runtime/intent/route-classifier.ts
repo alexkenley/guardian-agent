@@ -649,6 +649,7 @@ export async function classifyIntentGatewayPass(
       pendingAction: input.pendingAction,
       continuity: input.continuity,
       configuredSearchSources: input.configuredSearchSources,
+      enabledManagedProviders: input.enabledManagedProviders,
     }, {
       mode: options.mode,
     });

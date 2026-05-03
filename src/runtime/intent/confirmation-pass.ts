@@ -100,6 +100,7 @@ export async function confirmIntentGatewayDecisionIfNeeded(
       sourceContent: input.content,
       pendingAction: input.pendingAction,
       continuity: input.continuity,
+      enabledManagedProviders: input.enabledManagedProviders,
     }, {
       mode: 'confirmation',
     });
@@ -117,6 +118,7 @@ export async function confirmIntentGatewayDecisionIfNeeded(
         sourceContent: input.content,
         pendingAction: input.pendingAction,
         continuity: input.continuity,
+        enabledManagedProviders: input.enabledManagedProviders,
       }, {
         mode: 'confirmation',
       });

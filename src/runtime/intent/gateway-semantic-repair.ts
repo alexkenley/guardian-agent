@@ -24,6 +24,7 @@ import {
   isExplicitProviderConfigRequest,
 } from './entity-resolvers/provider-config.js';
 import { resolvePagedListContinuationRoute } from '../list-continuation.js';
+import { getAmbiguousEmailProviderClarification } from '../email-provider-routing.js';
 import {
   isExplicitCodingExecutionRequest,
   isExplicitCodingSessionControlRequest,
@@ -63,6 +64,10 @@ export function repairStructuredIntentGatewayRoute(
   const explicitRepoPlanning = isExplicitRepoPlanningRequest(rawSourceContent);
   const explicitRemoteSandbox = isExplicitRemoteSandboxTaskRequest(rawSourceContent, normalizedSourceContent);
   const managedSandboxStatusInspection = isManagedSandboxStatusInspectionRequest(rawSourceContent, normalizedSourceContent);
+  const ambiguousEmailProviderRequest = !!getAmbiguousEmailProviderClarification(
+    rawSourceContent,
+    new Set(repairContext?.enabledManagedProviders ?? []),
+  );
   const explicitFilesystemOperation = inferExplicitFilesystemTaskOperation(normalizedSourceContent, operation);
   const classifierFilesystemMutation = operation === 'create'
     || operation === 'update'
@@ -100,6 +105,12 @@ export function repairStructuredIntentGatewayRoute(
   }
   if (rawCredentialDisclosure || externalPromptInjection) {
     return 'security_task';
+  }
+  if (
+    (route === 'unknown' || route === 'general_assistant' || route === 'workspace_task')
+    && ambiguousEmailProviderRequest
+  ) {
+    return 'email_task';
   }
   if (
     (route === 'coding_session_control'

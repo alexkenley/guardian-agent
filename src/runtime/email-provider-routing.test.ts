@@ -54,6 +54,16 @@ describe('email-provider-routing', () => {
     )).toBe('Gmail / Google Workspace follow-up: Open the drafts folder.');
   });
 
+  it('does not inherit stale provider context for fresh generic mailbox reads', () => {
+    expect(applyContextualEmailProviderHint(
+      'Check my email.',
+      [
+        { role: 'user', content: 'Check my Gmail inbox.' },
+      ],
+      BOTH_MAIL_PROVIDERS,
+    )).toBe('Check my email.');
+  });
+
   it('does not rewrite follow-ups when no prior provider is visible', () => {
     expect(applyContextualEmailProviderHint(
       'Check that it is in the drafts.',

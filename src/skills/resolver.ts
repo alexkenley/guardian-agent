@@ -180,6 +180,18 @@ function shouldAllowManagedProviderSkill(
   return explicitlyTargetsManagedProvider(input, provider);
 }
 
+function routeAllowsImplicitManagedProviderSkill(input: SkillResolutionInput): boolean {
+  return input.intentRoute === 'email_task' || input.intentRoute === 'workspace_task';
+}
+
+function contentTargetsManagedProvider(normalizedContent: string, provider: string): boolean {
+  return hasAnyMatch(normalizedContent, PROVIDER_ENTITY_HINTS[provider] ?? []);
+}
+
+function contentTargetsSharedManagedProviderDomain(normalizedContent: string): boolean {
+  return hasAnyMatch(normalizedContent, ['email', 'mailbox', 'inbox']);
+}
+
 function scoreIntentEntityMatches(
   manifest: LoadedSkill['manifest'],
   input: SkillResolutionInput,
@@ -441,6 +453,11 @@ function shouldSuppressCodingWorkspaceForProviderStatus(
 }
 
 function shouldKeepSkillForAmbiguousClarification(skill: LoadedSkill, input: SkillResolutionInput): boolean {
+  const turnRelation = input.intentTurnRelation ?? '';
+  if (!CLARIFICATION_TURN_RELATIONS.has(turnRelation)
+    && !(turnRelation === 'follow_up' && input.pendingActionKind && STICKY_PENDING_ACTION_KINDS.has(input.pendingActionKind))) {
+    return false;
+  }
   const priorActiveSkills = new Set((input.priorActiveSkillIds ?? []).map((value) => value.trim()).filter(Boolean));
   return priorActiveSkills.has(skill.manifest.id);
 }
@@ -483,6 +500,18 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
   let specificity = 0;
   const keywords = manifest.triggers?.keywords ?? [];
   const explicitMention = scoreExplicitSkillMention(manifest, normalizedContent);
+  const managedProvider = normalizeManagedProviderEntity(manifest.requiredManagedProvider);
+
+  if (
+    managedProvider
+    && !routeAllowsImplicitManagedProviderSkill(input)
+    && explicitMention.score === 0
+    && !explicitlyTargetsManagedProvider(input, managedProvider)
+    && !contentTargetsManagedProvider(normalizedContent, managedProvider)
+    && !contentTargetsSharedManagedProviderDomain(normalizedContent)
+  ) {
+    return { score: 0, specificity: 0 };
+  }
 
   if (shouldSuppressCodingWorkspaceForProviderStatus(manifest, input.content, normalizedContent, explicitMention.score)) {
     return { score: 0, specificity: 0 };
@@ -547,7 +576,12 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
     score = Math.max(1, score - 1);
   }
 
-  if (score === 0 && keywords.length === 0 && manifest.requiredManagedProvider) {
+  if (
+    score === 0
+    && keywords.length === 0
+    && manifest.requiredManagedProvider
+    && routeAllowsImplicitManagedProviderSkill(input)
+  ) {
     score = 1;
   }
 

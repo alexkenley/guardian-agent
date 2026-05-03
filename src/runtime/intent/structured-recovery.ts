@@ -228,8 +228,13 @@ export function normalizeIntentGatewayDecision(
   });
   const explicitProviderConfigRequest = route === 'general_assistant'
     && isExplicitProviderConfigRequest(repairContext?.sourceContent);
-  const useDerivedWorkload = routeOrOperationRepaired || explicitProviderConfigRequest;
   const normalizedExecutionClass = normalizeExecutionClass(parsed.executionClass);
+  const providerCrudWithoutExplicitConfig = route === 'general_assistant'
+    && normalizedExecutionClass === 'provider_crud'
+    && !explicitProviderConfigRequest;
+  const useDerivedWorkload = routeOrOperationRepaired
+    || explicitProviderConfigRequest
+    || providerCrudWithoutExplicitConfig;
   const executionClass = directSecurityRefusal
     ? 'security_analysis'
     : !useDerivedWorkload && normalizedExecutionClass
@@ -393,8 +398,11 @@ export function normalizeIntentGatewayDecision(
     requiresToolSynthesis,
     plannedSteps: effectivePlannedSteps,
   });
+  const unsupportedManagedProviderPlan = hasUnsupportedManagedProviderPlan(effectivePlannedSteps, repairContext);
   const effectiveExecutionClass = structuredWritePlanRoute
     ? 'tool_orchestration'
+    : unsupportedManagedProviderPlan
+    ? 'direct_assistant'
     : effectiveRequiresRepoGrounding && executionClass === 'direct_assistant'
     ? 'tool_orchestration'
     : toolBackedAnswerPlan ? 'tool_orchestration' : executionClass;
@@ -405,8 +413,12 @@ export function normalizeIntentGatewayDecision(
     : toolBackedAnswerPlan ? 'external' : preferredTier;
   const effectiveRequiresToolSynthesis = structuredWritePlanRoute
     ? true
+    : unsupportedManagedProviderPlan
+    ? false
     : toolBackedAnswerPlan ? true : requiresToolSynthesis;
-  const effectiveExpectedContextPressure = toolBackedAnswerPlan
+  const effectiveExpectedContextPressure = unsupportedManagedProviderPlan
+    ? 'low'
+    : toolBackedAnswerPlan
     ? 'medium'
     : structuredWritePlanRoute
       ? 'medium'
@@ -415,14 +427,18 @@ export function normalizeIntentGatewayDecision(
     : effectiveRequiresRepoGrounding && expectedContextPressure === 'low'
       ? 'medium'
       : expectedContextPressure;
-  const effectivePreferredAnswerPath = toolBackedAnswerPlan
+  const effectivePreferredAnswerPath = unsupportedManagedProviderPlan
+    ? 'direct'
+    : toolBackedAnswerPlan
     ? 'tool_loop'
     : structuredWritePlanRoute
       ? 'tool_loop'
     : structurallyDirectAnswer
       ? 'direct'
       : preferredAnswerPath;
-  const effectiveSimpleVsComplex = toolBackedAnswerPlan
+  const effectiveSimpleVsComplex = unsupportedManagedProviderPlan
+    ? 'simple'
+    : toolBackedAnswerPlan
     ? 'complex'
     : structuredWritePlanRoute
       ? 'complex'
@@ -801,6 +817,45 @@ function hasExplicitToolBackedAnswerPlan(steps: IntentGatewayPlannedStep[]): boo
   return hasEvidenceStep && hasAnswerStep;
 }
 
+const MANAGED_PROVIDER_CATEGORY_ALIASES: Record<string, string> = {
+  gws: 'gws',
+  google: 'gws',
+  gmail: 'gws',
+  google_workspace: 'gws',
+  googleworkspace: 'gws',
+  m365: 'm365',
+  microsoft: 'm365',
+  outlook: 'm365',
+  microsoft_365: 'm365',
+  microsoft365: 'm365',
+  email: 'email',
+  himalaya: 'email',
+  notion: 'notion',
+  slack: 'slack',
+};
+
+function hasUnsupportedManagedProviderPlan(
+  steps: IntentGatewayPlannedStep[],
+  repairContext?: IntentGatewayRepairContext,
+): boolean {
+  const enabledProviders = new Set((repairContext?.enabledManagedProviders ?? [])
+    .map((provider) => provider.trim().toLowerCase())
+    .filter(Boolean));
+  if (enabledProviders.size === 0) return false;
+
+  for (const step of steps) {
+    for (const category of step.expectedToolCategories ?? []) {
+      const normalized = category.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      const base = normalized.replace(/_(?:status|read|write|send|draft|list|search|schema)$/g, '');
+      const provider = MANAGED_PROVIDER_CATEGORY_ALIASES[normalized] ?? MANAGED_PROVIDER_CATEGORY_ALIASES[base];
+      if (provider && !enabledProviders.has(provider)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function normalizePlannedStepsForDecision(
   steps: IntentGatewayPlannedStep[],
   decision: {
@@ -937,7 +992,11 @@ function removeProviderStatusSecondBrainDistractors(
   steps: IntentGatewayPlannedStep[],
   sourceContent?: string,
 ): IntentGatewayPlannedStep[] {
-  if (!hasProviderStatusEvidenceStep(steps) || hasExplicitSecondBrainRequest(sourceContent)) {
+  if (
+    !hasProviderStatusEvidenceStep(steps)
+    || hasExplicitSecondBrainRequest(sourceContent)
+    || hasExplicitSecondBrainPlannedStep(steps)
+  ) {
     return steps;
   }
   return steps
@@ -971,6 +1030,13 @@ function isSecondBrainEvidenceCategory(category: string): boolean {
 
 function hasExplicitSecondBrainRequest(sourceContent?: string): boolean {
   return /\bsecond\s+brain\b/i.test(sourceContent ?? '');
+}
+
+function hasExplicitSecondBrainPlannedStep(steps: IntentGatewayPlannedStep[]): boolean {
+  return steps.some((step) => (
+    (step.expectedToolCategories?.some(isSecondBrainEvidenceCategory) ?? false)
+    && hasExplicitSecondBrainRequest(step.summary)
+  ));
 }
 
 function isAutomationCatalogReadDecision(decision: {

@@ -3990,6 +3990,36 @@ describe('IntentGateway', () => {
     expect(result.decision.missingFields).toContain('email_provider');
   });
 
+  it('keeps ambiguous mailbox reads unresolved when the classifier guesses a provider', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check my email.',
+        channel: 'web',
+        enabledManagedProviders: ['gws', 'm365'],
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Checks Gmail.',
+          resolution: 'ready',
+          missingFields: [],
+          emailProvider: 'gws',
+          resolvedContent: 'Check my email using Gmail / Google Workspace.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.entities.emailProvider).toBeUndefined();
+    expect(result.decision.missingFields).toContain('email_provider');
+  });
+
   it('selects the only enabled mail provider when mailbox classification omits it', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

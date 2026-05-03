@@ -196,4 +196,12 @@ describe('list-continuation', () => {
       turnRelation: 'new_request',
     })).toBeNull();
   });
+
+  it('does not treat unrelated "other provider" wording as a paged-list follow-up', () => {
+    expect(resolvePagedListContinuationRoute({
+      continuationStateKind: 'automation_catalog_list',
+      content: 'Use Slack to list my channels. If Slack is not connected, just say so; do not use any other workspace provider.',
+      turnRelation: 'new_request',
+    })).toBeNull();
+  });
 });

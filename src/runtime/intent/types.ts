@@ -243,6 +243,7 @@ export interface IntentGatewayRepairContext {
   pendingAction?: IntentGatewayInput['pendingAction'] | null;
   continuity?: IntentGatewayInput['continuity'] | null;
   configuredSearchSources?: IntentGatewayInput['configuredSearchSources'];
+  enabledManagedProviders?: IntentGatewayInput['enabledManagedProviders'];
 }
 
 export type IntentGatewayPromptProfile = 'compact' | 'full';
