@@ -146,6 +146,48 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('rejects additional chat input while an assistant turn is in flight', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({ input, output });
+    const received: string[] = [];
+    let releaseFirstTurn!: () => void;
+    const firstTurnReleased = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    let firstTurnStarted!: () => void;
+    const firstTurnStartedPromise = new Promise<void>((resolve) => {
+      firstTurnStarted = resolve;
+    });
+
+    await cli.start(async (msg) => {
+      received.push(msg.content);
+      if (msg.content === 'first request') {
+        firstTurnStarted();
+        await firstTurnReleased;
+      }
+      return { content: `done: ${msg.content}` };
+    });
+    output.read();
+
+    input.write('first request\n');
+    await firstTurnStartedPromise;
+    input.write('second request\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(received).toEqual(['first request']);
+    expect(output.read()?.toString() ?? '').toContain('Still working on your previous message');
+
+    releaseFirstTurn();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    input.write('third request\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(received).toEqual(['first request', 'third request']);
+
+    await cli.stop();
+  });
+
   it('shows response source labels for chat replies', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
@@ -326,6 +368,82 @@ describe('CLIChannel', () => {
     expect(text).toContain('[progress] Waiting for approval — fs_write');
     expect(text).not.toContain('Queued chat');
     expect(text).not.toContain('Started chat');
+    expect(text.match(/\[progress\] Inspecting workspace — fs_list/g)?.length ?? 0).toBe(1);
+    expect(text).toContain('[frontier] Completed.');
+
+    await cli.stop();
+  });
+
+  it('suppresses duplicate CLI progress displayed through both stream callbacks and SSE subscriptions', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let sseListener: ((event: { type: string; data: unknown }) => void) | null = null;
+    const cli = new CLIChannel({
+      input,
+      output,
+      dashboard: {
+        onSSESubscribe: (listener) => {
+          sseListener = listener as typeof sseListener;
+          return () => {
+            sseListener = null;
+          };
+        },
+        onStreamDispatch: async (_agentId, msg, emitSSE) => {
+          const runId = msg.requestId || 'cli-progress-run';
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{
+                id: 'inspect-stream',
+                runId,
+                type: 'tool_call_started',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Inspecting workspace',
+                detail: 'fs_list',
+              }],
+            },
+          });
+          sseListener?.({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{
+                id: 'inspect-subscription',
+                runId,
+                type: 'tool_call_started',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Inspecting workspace',
+                detail: 'fs_list',
+              }],
+            },
+          });
+          return {
+            requestId: runId,
+            runId,
+            content: 'Completed.',
+            metadata: {
+              responseSource: {
+                locality: 'external',
+                providerName: 'anthropic',
+              },
+            },
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'fallback' }));
+    output.read();
+
+    input.write('inspect repo\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const text = output.read()?.toString() ?? '';
     expect(text.match(/\[progress\] Inspecting workspace — fs_list/g)?.length ?? 0).toBe(1);
     expect(text).toContain('[frontier] Completed.');
 

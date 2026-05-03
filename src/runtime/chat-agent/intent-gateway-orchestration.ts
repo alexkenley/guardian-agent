@@ -22,6 +22,7 @@ import {
   sanitizePendingActionPrompt,
   type PendingActionBlocker,
   type PendingActionRecord,
+  type PendingActionTransferPolicy,
 } from '../pending-actions.js';
 import {
   PENDING_ACTION_SWITCH_CONFIRM_PATTERN,
@@ -92,6 +93,7 @@ export interface IntentGatewayClarificationResponseDeps {
       resolvedContent?: string;
       provenance?: PendingActionRecord['intent']['provenance'];
       entities?: Record<string, unknown>;
+      transferPolicy?: PendingActionTransferPolicy;
     },
   ) => { collisionPrompt?: string };
   recordIntentRoutingTrace: (
@@ -141,6 +143,9 @@ export function buildGatewayClarificationResponse(
         resolution: decision.resolution,
         missingFields: decision.missingFields,
         provenance: decision.provenance,
+        ...(resolveClarificationTransferPolicy(decision, 'intent_route')
+          ? { transferPolicy: resolveClarificationTransferPolicy(decision, 'intent_route') }
+          : {}),
         entities: {
           ...(deps.toPendingActionEntities(decision.entities) ?? {}),
           ...(decision.route !== 'unknown' ? { intentRouteHint: decision.route } : {}),
@@ -267,8 +272,11 @@ export function buildGatewayClarificationResponse(
   }
 
   if (decision.resolution === 'needs_clarification') {
-    const prompt = sanitizePendingActionPrompt(decision.summary, 'clarification');
     const clarificationField = resolveSingleClarificationField(missingFields);
+    const prompt = clarificationField === 'query'
+      ? buildSearchQueryClarificationPrompt(decision)
+      : sanitizePendingActionPrompt(decision.summary, 'clarification');
+    const transferPolicy = resolveClarificationTransferPolicy(decision, clarificationField);
     const options = clarificationField === 'search_surface'
       ? [
           {
@@ -305,6 +313,7 @@ export function buildGatewayClarificationResponse(
         missingFields: decision.missingFields,
         provenance: decision.provenance,
         entities: deps.toPendingActionEntities(decision.entities),
+        ...(transferPolicy ? { transferPolicy } : {}),
         ...(options ? { options } : {}),
       },
     );
@@ -328,6 +337,41 @@ export function buildGatewayClarificationResponse(
   return null;
 }
 
+function resolveClarificationTransferPolicy(
+  decision: IntentGatewayDecision,
+  field: string | undefined,
+): PendingActionTransferPolicy | undefined {
+  if (
+    decision.resolution === 'needs_clarification'
+    && (
+      (
+        decision.confidence === 'low'
+        && decision.turnRelation === 'new_request'
+        && (field === 'intent_route' || field === 'query')
+      )
+      || (
+        decision.provenance?.route === 'repair.structured'
+        && (field === 'intent_route' || field === 'query')
+      )
+    )
+  ) {
+    return 'origin_surface_only';
+  }
+  return undefined;
+}
+
+function buildSearchQueryClarificationPrompt(decision: IntentGatewayDecision): string {
+  if (hasWebSearchPlan(decision)) {
+    return 'What should I search the web for? A topic, question, or website category is enough.';
+  }
+  return 'What should I search for? A topic, question, file, or source is enough.';
+}
+
+function hasWebSearchPlan(decision: IntentGatewayDecision): boolean {
+  return decision.plannedSteps?.some((step) =>
+    (step.expectedToolCategories ?? []).some((category) => category.trim().toLowerCase() === 'web_search')) ?? false;
+}
+
 function resolveSingleClarificationField(
   missingFields: ReadonlySet<string>,
 ): string | undefined {
@@ -336,6 +380,9 @@ function resolveSingleClarificationField(
   }
   const [field] = [...missingFields];
   const normalized = field?.trim();
+  if (normalized === 'search_query') {
+    return 'query';
+  }
   return normalized ? normalized : undefined;
 }
 
@@ -495,6 +542,7 @@ function pendingActionAppliesToClassificationTurn(
   if (pendingAction.blocker.kind !== 'clarification') return false;
   const normalized = stripLeadingContextPrefix(content).trim().toLowerCase();
   if (!normalized || normalized.length > 120) return false;
+  if (isQueryClarificationAnswerCandidate(pendingAction, content)) return true;
   if (resolveSearchSurfaceSelection(pendingAction, content)) return true;
   const options = pendingAction.blocker.options ?? [];
   return options.some((option) => {
@@ -599,6 +647,10 @@ export function resolvePendingActionContinuationContent(
 ): string | null {
   if (!pendingAction) return null;
   const normalized = stripLeadingContextPrefix(content);
+  const queryClarificationContent = resolveQueryClarificationContinuationContent(normalized, pendingAction);
+  if (queryClarificationContent) {
+    return queryClarificationContent;
+  }
   const genericContinuation = isGenericPendingActionContinuationRequest(normalized);
   const affirmativeContinuation = isAffirmativeContinuation(normalized);
   if (!genericContinuation && !affirmativeContinuation) {
@@ -611,6 +663,47 @@ export function resolvePendingActionContinuationContent(
     return pendingAction.intent.originalUserContent;
   }
   return null;
+}
+
+function resolveQueryClarificationContinuationContent(
+  content: string,
+  pendingAction: PendingActionRecord,
+): string | null {
+  const query = extractQueryClarificationAnswerCandidate(pendingAction, content);
+  if (!query) return null;
+  const originalContent = pendingAction.intent.originalUserContent.trim();
+  if (!originalContent) {
+    return `Use "${query}" as the search query.`;
+  }
+  return `Use "${query}" as the search query for this request: ${originalContent}`;
+}
+
+function isQueryClarificationAnswerCandidate(
+  pendingAction: PendingActionRecord,
+  content: string,
+): boolean {
+  return !!extractQueryClarificationAnswerCandidate(pendingAction, content);
+}
+
+function extractQueryClarificationAnswerCandidate(
+  pendingAction: PendingActionRecord,
+  content: string,
+): string | null {
+  if (pendingAction.blocker.kind !== 'clarification') return null;
+  if (!isQueryClarificationField(pendingAction.blocker.field)) return null;
+  const normalized = stripLeadingContextPrefix(content).trim();
+  if (!normalized || normalized.length > 160 || normalized.includes('\n')) return null;
+  if (isAffirmativeContinuation(normalized)) return null;
+  if (PENDING_ACTION_SWITCH_CONFIRM_PATTERN.test(normalized)
+    || PENDING_ACTION_SWITCH_DENY_PATTERN.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function isQueryClarificationField(field: string | undefined): boolean {
+  const normalized = field?.trim().toLowerCase();
+  return normalized === 'query' || normalized === 'search_query';
 }
 
 export function resolveRetryAfterFailureContinuationContent(input: {

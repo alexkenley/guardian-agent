@@ -1372,7 +1372,9 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       sendJSON(res, 404, { error: 'Not available' });
       return true;
     }
-    sendJSON(res, 200, await dashboard.onProvidersStatus());
+    const force = url.searchParams.get('force') === '1'
+      || url.searchParams.get('force')?.trim().toLowerCase() === 'true';
+    sendJSON(res, 200, await dashboard.onProvidersStatus({ force }));
     return true;
   }
 

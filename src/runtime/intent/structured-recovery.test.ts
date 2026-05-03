@@ -387,6 +387,85 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.summary).toContain('What should I search the web for?');
   });
 
+  it('asks for a web search query when low-confidence browser routing lacks extracted query entities', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'browser_task',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Search the web for the requested topic.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'search',
+          summary: 'Search the web for the requested topic and collect source-backed results.',
+          expectedToolCategories: ['web_search', 'browser'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Answer using the web results and include the websites used when applicable.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Go out to the internet search on random websites and pull me back some information.',
+    }, {
+      classifierSource: 'classifier.json_fallback',
+    });
+
+    expect(decision.route).toBe('browser_task');
+    expect(decision.resolution).toBe('needs_clarification');
+    expect(decision.missingFields).toContain('query');
+    expect(decision.requiresToolSynthesis).toBe(true);
+  });
+
+  it('does not re-ask for a query when a low-confidence browser turn is already a concrete topic phrase', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'browser_task',
+      confidence: 'low',
+      operation: 'search',
+      summary: 'Search the web for the requested topic.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'search',
+          summary: 'Search the web for the requested topic.',
+          expectedToolCategories: ['web_search'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Summarize the web results.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Artificial Intelligence prostitutes and canaries.',
+    }, {
+      classifierSource: 'classifier.json_fallback',
+    });
+
+    expect(decision.route).toBe('browser_task');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('query');
+  });
+
   it('asks for a web search query when classifier fallback leaves vague web research unknown', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'unknown',
@@ -571,6 +650,57 @@ describe('normalizeIntentGatewayDecision', () => {
 
     expect(decision.resolution).toBe('ready');
     expect(decision.plannedSteps?.[0]?.expectedToolCategories).toEqual(['doc_search_list']);
+  });
+
+  it('does not ask for a search surface on follow-up web research refinements', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'low',
+      operation: 'search',
+      summary: 'Narrow the previous web research.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'answer',
+          summary: 'Research artificial intelligence, sex work policy, and canary deployment strategies.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Keep it factual and cite sources.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Now narrow that down to artificial intelligence, sex work policy, and canary deployment strategies. Keep it factual and cite sources.',
+      continuity: {
+        continuityKey: 'default:owner',
+        linkedSurfaceCount: 1,
+        lastActionableRequest: 'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+      },
+      configuredSearchSources: [
+        {
+          id: 'docs',
+          name: 'Docs',
+          type: 'directory',
+          enabled: true,
+          indexedSearchAvailable: true,
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.json_fallback',
+    });
+
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('search_surface');
   });
 
   it('preserves mixed automation creation and control plans as automation authoring', () => {

@@ -163,6 +163,13 @@ function resolveSurfaceId(channel: string | undefined, surfaceId: string | undef
   });
 }
 
+function samePendingActionScope(left: PendingActionScope, right: PendingActionScope): boolean {
+  return left.agentId === right.agentId
+    && left.userId === right.userId
+    && left.channel === right.channel
+    && left.surfaceId === right.surfaceId;
+}
+
 function isResumableExecution(record: ExecutionRecord | null | undefined): boolean {
   return record?.status === 'running'
     || record?.status === 'blocked'
@@ -726,11 +733,16 @@ export class ChatAgentOrchestrationState {
     const sameOriginal = activeOriginal === nextOriginal
       || activeOriginal.length === 0
       || nextOriginal.length === 0;
+    const sameClarificationSlot = active.blocker.kind === 'clarification'
+      && replacement.blocker.kind === 'clarification'
+      && (active.blocker.field ?? '') === (replacement.blocker.field ?? '')
+      && activeRoute === nextRoute
+      && activeOperation === nextOperation;
     return active.blocker.kind === replacement.blocker.kind
       && (active.blocker.field ?? '') === (replacement.blocker.field ?? '')
       && activeRoute === nextRoute
       && activeOperation === nextOperation
-      && sameOriginal;
+      && (sameOriginal || sameClarificationSlot);
   }
 
   private formatPendingActionSwitchSummary(
@@ -900,8 +912,18 @@ export class ChatAgentOrchestrationState {
     input: Omit<PendingActionRecord, 'id' | 'createdAt' | 'updatedAt' | 'scope'> & { id?: string },
     nowMs: number = Date.now(),
   ): PendingActionSetResult {
+    const scope = this.buildPendingActionScope(userId, channel, surfaceId);
     const active = this.getActivePendingAction(userId, channel, surfaceId, nowMs);
     const replacement = this.createPendingActionReplacementInput(input);
+    if (
+      active
+      && !samePendingActionScope(active.scope, scope)
+      && input.transferPolicy !== 'linked_surfaces_same_user'
+    ) {
+      return {
+        action: this.replacePendingAction(userId, channel, surfaceId, input, nowMs),
+      };
+    }
     if (!active || (input.id && active.id === input.id) || this.isEquivalentPendingActionReplacement(active, replacement)) {
       return {
         action: this.replacePendingAction(
@@ -1243,6 +1265,7 @@ export class ChatAgentOrchestrationState {
       targetSessionId?: string;
       targetSessionLabel?: string;
       metadata?: Record<string, unknown>;
+      transferPolicy?: PendingActionTransferPolicy;
       resume?: PendingActionRecord['resume'];
       executionId?: string;
       rootExecutionId?: string;
@@ -1253,7 +1276,7 @@ export class ChatAgentOrchestrationState {
     const summary = normalizeUserFacingIntentGatewaySummary(input.summary);
     return this.replacePendingActionWithGuard(userId, channel, surfaceId, {
       status: 'pending',
-      transferPolicy: defaultPendingActionTransferPolicy(input.blockerKind),
+      transferPolicy: input.transferPolicy ?? defaultPendingActionTransferPolicy(input.blockerKind),
       blocker: {
         kind: input.blockerKind,
         prompt,

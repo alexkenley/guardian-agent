@@ -38,6 +38,7 @@ import { attachExecutionIdentityMetadata } from './execution-identity.js';
 import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
 import { buildIntentGatewaySearchSourceSummaries } from './intent/search-source-context.js';
 import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
+import { filterIntentGatewayClassificationContext } from './chat-agent/intent-gateway-orchestration.js';
 import { resolveConversationHistoryChannel } from './channel-surface-ids.js';
 import {
   readChatProviderSelectionMetadata,
@@ -272,12 +273,18 @@ export function createIncomingDispatchPreparer(args: {
         ...listClassifierProvidersForMode(currentConfig, routingMode),
       ]),
     ];
-    const pendingAction = args.pendingActionStore.resolveActiveForSurface({
+    const resolvedPendingAction = args.pendingActionStore.resolveActiveForSurface({
       agentId: stateAgentId,
       userId: canonicalUserId,
       channel,
       surfaceId,
     });
+    const pendingActionContext = filterIntentGatewayClassificationContext({
+      content: normalizedContent,
+      pendingAction: resolvedPendingAction,
+      continuityThread: null,
+    });
+    const pendingAction = pendingActionContext.pendingAction;
     const continuity = args.continuityThreadStore.get({
       assistantId: stateAgentId,
       userId: canonicalUserId,

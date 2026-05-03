@@ -1313,7 +1313,7 @@ export interface DashboardCallbacks {
   onWatchdog?: () => WatchdogResult[];
   onProviders?: () => DashboardProviderInfo[];
   onProviderTypes?: () => DashboardProviderTypeInfo[];
-  onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
+  onProvidersStatus?: (input?: { force?: boolean }) => Promise<DashboardProviderInfo[]>;
   onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
   onCodingBackendStatus?: (sessionId?: string) => DashboardCodingBackendSession[];
   onAssistantState?: () => DashboardAssistantState;

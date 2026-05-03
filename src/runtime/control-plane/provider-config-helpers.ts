@@ -10,10 +10,13 @@ interface ProviderConfigHelperOptions {
   runtimeProviders: ReadonlyMap<string, LLMProvider>;
   secretStore: LocalSecretStore;
   isLocalProviderEndpoint: (baseUrl: string | undefined, providerType: string | undefined) => boolean;
+  providerHealthCacheTtlMs?: number;
 }
 
 export function createProviderConfigHelpers(options: ProviderConfigHelperOptions) {
   const providerHealth = new Map<string, Pick<DashboardProviderInfo, 'connected' | 'healthChecked' | 'healthCheckedAt' | 'availableModels'>>();
+  const providerHealthChecks = new Map<string, Promise<Pick<DashboardProviderInfo, 'connected' | 'healthChecked' | 'healthCheckedAt' | 'availableModels'>>>();
+  const providerHealthCacheTtlMs = options.providerHealthCacheTtlMs ?? 10 * 60 * 1000;
 
   const describeProvider = (name: string, provider: LLMProvider): DashboardProviderInfo => {
     const llmConfig = options.configRef.current.llm[name];
@@ -41,36 +44,65 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
     return results;
   };
 
-  const buildProviderInfo = async (withConnectivity: boolean): Promise<DashboardProviderInfo[]> => {
+  const refreshProviderHealth = async (
+    name: string,
+    provider: LLMProvider,
+  ): Promise<Pick<DashboardProviderInfo, 'connected' | 'healthChecked' | 'healthCheckedAt' | 'availableModels'>> => {
+    const checkedAt = Date.now();
+    let health: Pick<DashboardProviderInfo, 'connected' | 'healthChecked' | 'healthCheckedAt' | 'availableModels'>;
+    try {
+      const models = await provider.listModels();
+      health = {
+        connected: true,
+        healthChecked: true,
+        healthCheckedAt: checkedAt,
+        ...(models.length > 0 ? { availableModels: models.map((model) => model.id) } : {}),
+      };
+    } catch {
+      health = {
+        connected: false,
+        healthChecked: true,
+        healthCheckedAt: checkedAt,
+      };
+    }
+    providerHealth.set(name, health);
+    return health;
+  };
+
+  const isFreshHealth = (
+    health: Pick<DashboardProviderInfo, 'healthChecked' | 'healthCheckedAt'> | undefined,
+    now: number,
+  ): boolean => !!health?.healthChecked
+    && typeof health.healthCheckedAt === 'number'
+    && now - health.healthCheckedAt < providerHealthCacheTtlMs;
+
+  const buildProviderInfo = async (
+    withConnectivity: boolean,
+    healthOptions: { force?: boolean } = {},
+  ): Promise<DashboardProviderInfo[]> => {
     if (!withConnectivity) {
       return getProviderInfoSnapshot();
     }
 
     const results: DashboardProviderInfo[] = [];
     for (const [name, provider] of options.runtimeProviders) {
-      const info = describeProvider(name, provider);
-      const checkedAt = Date.now();
-      try {
-        const models = await provider.listModels();
-        info.connected = true;
-        info.healthChecked = true;
-        info.healthCheckedAt = checkedAt;
-        if (models.length > 0) {
-          info.availableModels = models.map((model) => model.id);
-        }
-      } catch {
-        info.connected = false;
-        info.healthChecked = true;
-        info.healthCheckedAt = checkedAt;
-        delete info.availableModels;
+      const cached = providerHealth.get(name);
+      if (healthOptions.force !== true && isFreshHealth(cached, Date.now())) {
+        results.push(describeProvider(name, provider));
+        continue;
       }
-      providerHealth.set(name, {
-        connected: info.connected,
-        healthChecked: true,
-        healthCheckedAt: checkedAt,
-        ...(info.availableModels ? { availableModels: info.availableModels } : {}),
-      });
-      results.push(info);
+      let healthCheck = providerHealthChecks.get(name);
+      if (!healthCheck) {
+        healthCheck = refreshProviderHealth(name, provider);
+        providerHealthChecks.set(name, healthCheck);
+        healthCheck.finally(() => {
+          if (providerHealthChecks.get(name) === healthCheck) {
+            providerHealthChecks.delete(name);
+          }
+        }).catch(() => undefined);
+      }
+      await healthCheck;
+      results.push(describeProvider(name, provider));
     }
     return results;
   };

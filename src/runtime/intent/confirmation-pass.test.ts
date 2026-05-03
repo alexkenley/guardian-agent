@@ -203,6 +203,107 @@ describe('confirmIntentGatewayDecisionIfNeeded', () => {
     expect(result.decision.plannedSteps?.[0]?.expectedToolCategories).toEqual(['automation_list']);
   });
 
+  it('rejects confirmation downgrades from ready web research plans to generic query clarifications', async () => {
+    const record: IntentGatewayRecord = {
+      mode: 'primary',
+      available: true,
+      model: 'test-gateway',
+      latencyMs: 5,
+      promptProfile: 'full',
+      rawStructuredDecision: {
+        route: 'general_assistant',
+        confidence: 'low',
+        operation: 'search',
+        resolution: 'ready',
+      },
+      decision: {
+        route: 'general_assistant',
+        confidence: 'low',
+        operation: 'search',
+        summary: 'Find random useful information from reputable websites.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        requireExactFileReferences: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search reputable websites for useful information.',
+            expectedToolCategories: ['web_search'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return useful findings with source links.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+        entities: {},
+      },
+    };
+
+    const chat = vi.fn(async () => ({
+      content: JSON.stringify({
+        route: 'search_task',
+        confidence: 'low',
+        operation: 'search',
+        summary: 'Ask what topic to search.',
+        turnRelation: 'new_request',
+        resolution: 'needs_clarification',
+        missingFields: ['query', 'topic', 'domain'],
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+        planned_steps: [
+          {
+            kind: 'search',
+            summary: 'Search the web.',
+            expectedToolCategories: ['web_search'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Answer with citations.',
+            required: true,
+          },
+        ],
+      }),
+      model: 'test-confirmation',
+      finishReason: 'stop',
+    }) satisfies ChatResponse);
+
+    const result = await confirmIntentGatewayDecisionIfNeeded({
+      content: 'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+      userId: 'owner',
+      channel: 'cli',
+      configuredSearchSources: [
+        {
+          id: 'docs',
+          name: 'Docs',
+          type: 'directory',
+          enabled: true,
+          indexedSearchAvailable: true,
+        },
+      ],
+    }, record, chat);
+
+    expect(chat).toHaveBeenCalledOnce();
+    expect(result).toBe(record);
+    expect(result.decision.resolution).toBe('ready');
+  });
+
   it('rejects confirmation routes outside the candidate route set', async () => {
     const record = buildAutomationCatalogRecord();
     record.decision.summary = 'List saved automations.';

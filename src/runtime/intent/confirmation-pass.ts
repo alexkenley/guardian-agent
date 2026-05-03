@@ -442,11 +442,41 @@ function shouldAdoptConfirmationDecision(
   if (!confirmation.candidateRoutes.includes(next.route as ConfirmationCandidateRoute)) {
     return false;
   }
+  if (isReadyWebResearchPlanDowngradedToGenericClarification(previousRecord.decision, next)) {
+    return false;
+  }
   if (priorStructuredDecision && doesPriorStructuredDecisionDisagree(priorStructuredDecision, next)) {
     return true;
   }
   return JSON.stringify(serializeDecisionForComparison(previousRecord.decision))
     !== JSON.stringify(serializeDecisionForComparison(next));
+}
+
+function isReadyWebResearchPlanDowngradedToGenericClarification(
+  previous: IntentGatewayDecision,
+  next: IntentGatewayDecision,
+): boolean {
+  if (
+    previous.resolution !== 'ready'
+    || previous.requiresToolSynthesis !== true
+    || !hasWebSearchEvidenceStep(previous)
+    || next.resolution !== 'needs_clarification'
+  ) {
+    return false;
+  }
+  const missingFields = new Set(next.missingFields.map((field) => field.trim().toLowerCase()).filter(Boolean));
+  if (missingFields.size === 0) {
+    return false;
+  }
+  const genericResearchFields = new Set(['query', 'search_query', 'topic', 'domain', 'source_category']);
+  return [...missingFields].every((field) => genericResearchFields.has(field));
+}
+
+function hasWebSearchEvidenceStep(decision: IntentGatewayDecision): boolean {
+  return (decision.plannedSteps ?? []).some((step) => (
+    step.kind === 'search'
+    && (step.expectedToolCategories ?? []).some((category) => category.trim().toLowerCase() === 'web_search')
+  ));
 }
 
 function doesPriorStructuredDecisionDisagree(

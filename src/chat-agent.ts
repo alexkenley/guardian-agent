@@ -203,6 +203,7 @@ import {
   type PendingActionApprovalSummary,
   type PendingActionBlocker,
   type PendingActionRecord,
+  type PendingActionTransferPolicy,
 } from './runtime/pending-actions.js';
 import {
   ContinuityThreadStore,
@@ -1278,6 +1279,10 @@ interface DegradedDirectIntentResponseInput {
       pendingAction,
       effectiveCodeContext?.sessionId,
     );
+    const resolvedPendingActionClarification = Boolean(
+      pendingAction?.blocker.kind === 'clarification'
+      && resolvedPendingActionContinuation,
+    );
     const resolvedRetryAfterFailureContinuation = resolvedPendingActionContinuation
       ? null
       : this.resolveRetryAfterFailureContinuationContent(
@@ -1525,7 +1530,8 @@ interface DegradedDirectIntentResponseInput {
       });
       refreshContinuityContextForGateway(earlyGateway);
       if (pendingAction && (
-        resolvedPendingSearchSurface
+        resolvedPendingActionClarification
+        || resolvedPendingSearchSurface
         || shouldClearPendingActionAfterTurnHelper(earlyGateway?.decision, pendingAction)
       )) {
         this.completePendingAction(pendingAction.id);
@@ -3466,6 +3472,7 @@ interface DegradedDirectIntentResponseInput {
       targetSessionId?: string;
       targetSessionLabel?: string;
       metadata?: Record<string, unknown>;
+      transferPolicy?: PendingActionTransferPolicy;
       resume?: PendingActionRecord['resume'];
       executionId?: string;
       rootExecutionId?: string;

@@ -42,6 +42,8 @@ const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
 const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 100;
 const CLI_PASTED_MESSAGE_CONTINUATION_GAP_MS = 25;
+const CLI_PROGRESS_DISPLAY_DEDUPE_WINDOW_MS = 10_000;
+const CLI_PROGRESS_DISPLAY_DEDUPE_MAX_KEYS = 50;
 const APPROVAL_CONFIRM_PATTERN = /^(?:approve|approved|yes|y|ok|okay|sure|go ahead|confirm|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:deny|denied|no|n|reject|decline|cancel)\b/i;
 
@@ -459,8 +461,10 @@ export class CLIChannel implements ChannelAdapter {
   private pendingPastedMessageLastQueuedAt = 0;
   private liveProgressStates = new Set<CliLiveProgressState>();
   private transientProgressVisible = false;
+  private renderedProgressDisplayKeys = new Map<string, number>();
   private unsubscribeSse: (() => void) | null = null;
   private shutdownRequested = false;
+  private assistantTurnInFlight = false;
 
   constructor(options: CLIChannelOptions = {}) {
     this.prompt = options.prompt ?? 'you> ';
@@ -486,6 +490,7 @@ export class CLIChannel implements ChannelAdapter {
     this.onMessage = onMessage;
     this.shutdownRequested = false;
     this.liveProgressStates.clear();
+    this.resetLiveProgressDisplayDedupe();
     this.unsubscribeSse?.();
     this.unsubscribeSse = this.dashboard?.onSSESubscribe?.((event) => {
       this.handleSubscribedProgressEvent(event);
@@ -550,6 +555,11 @@ export class CLIChannel implements ChannelAdapter {
       }
 
       // Send message to agent
+      if (this.assistantTurnInFlight) {
+        this.writeBusyNotice();
+        this.promptIfReady();
+        return;
+      }
       this.queueUserMessage(trimmed);
     });
 
@@ -567,6 +577,8 @@ export class CLIChannel implements ChannelAdapter {
     this.pendingPastedMessageLastQueuedAt = 0;
     this.clearTransientProgressLine();
     this.liveProgressStates.clear();
+    this.resetLiveProgressDisplayDedupe();
+    this.assistantTurnInFlight = false;
     this.unsubscribeSse?.();
     this.unsubscribeSse = null;
     const rl = this.rl;
@@ -607,10 +619,22 @@ export class CLIChannel implements ChannelAdapter {
       this.promptIfReady();
       return;
     }
+    if (this.assistantTurnInFlight) {
+      this.writeBusyNotice();
+      this.promptIfReady();
+      return;
+    }
+    this.assistantTurnInFlight = true;
     void this.handleUserMessage(content)
       .finally(() => {
+        this.assistantTurnInFlight = false;
         this.promptIfReady();
       });
+  }
+
+  private writeBusyNotice(): void {
+    this.clearTransientProgressLine();
+    this.write(`\n${this.yellow('[busy]')} Still working on your previous message. Please wait for the response.\n\n`);
   }
 
   private queueUserMessage(text: string): void {
@@ -892,6 +916,14 @@ export class CLIChannel implements ChannelAdapter {
         requestId,
         codeSessionId: readCodeSessionIdFromMetadata(input.metadata),
       });
+      if (progressState) {
+        this.renderLiveProgressSnapshot({
+          key: `${requestId}:cli-dispatch-started`,
+          tone: 'running',
+          title: 'Working on your request',
+          detail: '',
+        });
+      }
       try {
         const response = await this.dashboard.onStreamDispatch(
           input.agentId,
@@ -957,6 +989,7 @@ export class CLIChannel implements ChannelAdapter {
       ? input.codeSessionId.trim()
       : undefined;
     if (!requestId && !codeSessionId) return null;
+    this.resetLiveProgressDisplayDedupe();
     const state: CliLiveProgressState = {
       ...(requestId ? { requestId } : {}),
       ...(codeSessionId ? { codeSessionId } : {}),
@@ -993,6 +1026,7 @@ export class CLIChannel implements ChannelAdapter {
   }
 
   private renderLiveProgressSnapshot(snapshot: CliLiveProgressSnapshot): void {
+    if (this.shouldSuppressDuplicateProgressDisplay(snapshot)) return;
     const badge = snapshot.tone === 'failed'
       ? (this.useColor ? this.red('[progress]') : '[progress]')
       : snapshot.tone === 'warning'
@@ -1007,6 +1041,34 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
     this.write(`${line}\n`);
+  }
+
+  private shouldSuppressDuplicateProgressDisplay(snapshot: CliLiveProgressSnapshot): boolean {
+    const now = Date.now();
+    for (const [key, renderedAt] of this.renderedProgressDisplayKeys.entries()) {
+      if ((now - renderedAt) >= CLI_PROGRESS_DISPLAY_DEDUPE_WINDOW_MS) {
+        this.renderedProgressDisplayKeys.delete(key);
+      }
+    }
+    const displayKey = [
+      snapshot.tone,
+      snapshot.title.trim().replace(/\s+/g, ' '),
+      snapshot.detail.trim().replace(/\s+/g, ' '),
+    ].join('\n');
+    if (this.renderedProgressDisplayKeys.has(displayKey)) {
+      return true;
+    }
+    this.renderedProgressDisplayKeys.set(displayKey, now);
+    while (this.renderedProgressDisplayKeys.size > CLI_PROGRESS_DISPLAY_DEDUPE_MAX_KEYS) {
+      const oldestKey = this.renderedProgressDisplayKeys.keys().next().value;
+      if (!oldestKey) break;
+      this.renderedProgressDisplayKeys.delete(oldestKey);
+    }
+    return false;
+  }
+
+  private resetLiveProgressDisplayDedupe(): void {
+    this.renderedProgressDisplayKeys.clear();
   }
 
   private shouldUseTransientProgressLine(): boolean {

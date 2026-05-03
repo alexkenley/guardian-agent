@@ -300,6 +300,62 @@ describe('ChatAgentOrchestrationState', () => {
     });
   });
 
+  it('keeps local uncertainty clarifications from colliding with portable blocked work on another surface', () => {
+    const nowMs = 1_710_000_000_000;
+    const store = createStore(nowMs);
+    const portable = store.replaceActive(
+      {
+        agentId: 'assistant',
+        userId: 'user-1',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      {
+        status: 'pending',
+        transferPolicy: 'linked_surfaces_same_user',
+        blocker: {
+          kind: 'clarification',
+          prompt: 'What should I search the web for?',
+          field: 'query',
+        },
+        intent: {
+          route: 'search_task',
+          operation: 'search',
+          originalUserContent: 'Find something useful.',
+        },
+        expiresAt: nowMs + 30 * 60_000,
+      },
+    );
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      pendingActionStore: store,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+
+    const result = state.setClarificationPendingAction(
+      'user-1',
+      'web',
+      'new-web-surface',
+      {
+        blockerKind: 'clarification',
+        field: 'intent_route',
+        prompt: 'What do you want me to do next?',
+        originalUserContent: 'Go out to the internet search on random websites and pull me back some information.',
+        route: 'coding_task',
+        operation: 'unknown',
+        transferPolicy: 'origin_surface_only',
+      },
+      nowMs + 1,
+    );
+
+    expect(result.collisionPrompt).toBeUndefined();
+    expect(result.action?.scope.surfaceId).toBe('new-web-surface');
+    expect(result.action?.transferPolicy).toBe('origin_surface_only');
+    expect(store.get(portable.id)?.status).toBe('pending');
+  });
+
   it('preserves a cross-scope approval pending action when scoped lookup misses it but the executor still reports it pending globally', () => {
     const nowMs = 1_710_000_000_000;
     const store = createStore(nowMs);

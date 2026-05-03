@@ -3640,6 +3640,113 @@ describe('IntentGateway', () => {
     expect(result.decision.simpleVsComplex).toBe('simple');
   });
 
+  it('asks for clarification instead of delegating low-confidence repaired execution lanes', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'No, I did not want random quirky content. Go out and pull me back something useful.',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Go out to the internet search on random websites and pull me back some information.' },
+          { role: 'assistant', content: 'Here is a quick roundup of sites that specialize in serving up random web content.' },
+        ],
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          operation: 'unknown',
+          confidence: 'low',
+          summary: 'No confident route.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.provenance?.route).toBe('repair.structured');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.requiresRepoGrounding).toBe(false);
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+    expect(result.decision.summary).toContain('previous request');
+  });
+
+  it('does not let unrelated pending actions bypass uncertain repaired route clarification', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Go out to the internet search on random websites and pull me back some information.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-unrelated-search',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'query',
+          prompt: 'What should I search the web for?',
+          originalRequest: 'No, I did not want random quirky content. Go out and pull me back something useful.',
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          operation: 'unknown',
+          confidence: 'low',
+          summary: 'No confident route.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.provenance?.route).toBe('repair.structured');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('asks for a concrete query before running repaired search plans without extracted targets', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Go out to the internet search on random websites and pull me back some information.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'search_task',
+          operation: 'search',
+          confidence: 'high',
+          summary: 'Search for useful information.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          planned_steps: [
+            {
+              kind: 'search',
+              summary: 'Search the web for useful information.',
+              expectedToolCategories: ['web_search'],
+              required: true,
+            },
+          ],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.provenance?.route).toBe('repair.structured');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('query');
+    expect(result.decision.requiresRepoGrounding).toBe(false);
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.summary).toContain('What should I search the web for?');
+  });
+
   it('captures correction metadata and resolved content for coding backend repairs', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

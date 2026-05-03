@@ -140,6 +140,34 @@ describe('createProviderConfigHelpers', () => {
       ['one', { id: 'one', region: 'us-east-1' }],
     ]));
   });
+
+  it('reuses fresh provider health and refreshes only when forced', async () => {
+    const config = createConfig();
+    config.llm.primary = {
+      provider: 'openai',
+      model: 'gpt-4o',
+      credentialRef: 'llm.primary.local',
+    } as LLMConfig;
+
+    const listModels = vi.fn(async () => [
+      { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
+    ]);
+    const helpers = createProviderConfigHelpers({
+      configRef: { current: config },
+      runtimeProviders: new Map<string, LLMProvider>([
+        ['primary', createProvider('openai', listModels)],
+      ]),
+      secretStore: { get: vi.fn() } as never,
+      isLocalProviderEndpoint: () => false,
+      providerHealthCacheTtlMs: 60_000,
+    });
+
+    await helpers.buildProviderInfo(true);
+    await helpers.buildProviderInfo(true);
+    await helpers.buildProviderInfo(true, { force: true });
+
+    expect(listModels).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('createProviderDashboardCallbacks', () => {

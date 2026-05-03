@@ -191,6 +191,10 @@ const MAX_TOOL_CALLS_PER_CHAIN = 100;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 50;
 const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
 const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
+const TOOL_CHAIN_APPROVAL_GRANT_TTL_MS = 10 * 60_000;
+const MAX_WEB_SEARCH_APPROVAL_GRANT_CALLS = 4;
+const BOUNDED_TOOL_CHAIN_APPROVAL_GRANT_TOOLS = new Set(['web_search']);
+const READ_LIKE_NETWORK_LOOKUP_TOOLS = new Set(['web_search']);
 const HIGH_RISK_AUTO_POLICY_TOOLS = new Set([
   'shell_safe',
   'run_command',
@@ -720,6 +724,13 @@ interface ToolChainBudgetState {
   lastSeenAt: number;
 }
 
+interface ToolChainApprovalGrant {
+  toolName: string;
+  remainingCalls: number;
+  expiresAt: number;
+  approvalId: string;
+}
+
 interface AutomationWorkflowSummary {
   id: string;
   name: string;
@@ -798,6 +809,7 @@ export class ToolExecutor {
   private readonly jobsById = new Map<string, ToolJobRecord>();
   private readonly pendingApprovalContexts = new Map<string, PendingApprovalContext>();
   private readonly toolChainBudgets = new Map<string, ToolChainBudgetState>();
+  private readonly toolChainApprovalGrants = new Map<string, ToolChainApprovalGrant>();
   private readonly options: ToolExecutorOptions;
   private automationControlPlane?: AutomationControlPlane;
   private readonly marketingStore: MarketingStore;
@@ -3944,6 +3956,10 @@ export class ToolExecutor {
         }
       }
 
+      if (this.consumeToolChainApprovalGrant(entry.definition, request)) {
+        return await this.execute(job, request, args, entry.handler);
+      }
+
       const redactedArgs = redactSensitiveValue(args);
       const approvalArgs = isRecord(redactedArgs) ? redactedArgs : {};
       const approval = this.approvals.create(
@@ -4109,6 +4125,7 @@ export class ToolExecutor {
     }
 
     const result = await this.execute(job, pending.request, pending.args, entry.handler);
+    this.grantToolChainApproval(approvalId, entry.definition, pending.request, result);
     const approvalResult: ToolApprovalDecisionResult = {
       success: true,
       approved: true,
@@ -4223,6 +4240,62 @@ export class ToolExecutor {
     };
     this.toolChainBudgets.set(key, created);
     return created;
+  }
+
+  private pruneToolChainApprovalGrants(): void {
+    const now = this.now();
+    for (const [key, grant] of this.toolChainApprovalGrants.entries()) {
+      if (grant.expiresAt <= now || grant.remainingCalls <= 0) {
+        this.toolChainApprovalGrants.delete(key);
+      }
+    }
+  }
+
+  private resolveToolChainApprovalGrantKey(
+    definition: ToolDefinition,
+    request: Partial<ToolExecutionRequest>,
+  ): string | null {
+    if (!BOUNDED_TOOL_CHAIN_APPROVAL_GRANT_TOOLS.has(definition.name)) return null;
+    const requestId = request.requestId?.trim();
+    if (!requestId) return null;
+    const actorId = request.principalId?.trim() || request.userId?.trim() || '';
+    const channel = request.channel?.trim() || request.origin || '';
+    const surfaceId = request.surfaceId?.trim() || '';
+    const codeSessionId = request.codeContext?.sessionId?.trim() || '';
+    return JSON.stringify([definition.name, requestId, actorId, channel, surfaceId, codeSessionId]);
+  }
+
+  private consumeToolChainApprovalGrant(
+    definition: ToolDefinition,
+    request: Partial<ToolExecutionRequest>,
+  ): boolean {
+    const key = this.resolveToolChainApprovalGrantKey(definition, request);
+    if (!key) return false;
+    this.pruneToolChainApprovalGrants();
+    const grant = this.toolChainApprovalGrants.get(key);
+    if (!grant || grant.toolName !== definition.name) return false;
+    grant.remainingCalls -= 1;
+    if (grant.remainingCalls <= 0) {
+      this.toolChainApprovalGrants.delete(key);
+    }
+    return true;
+  }
+
+  private grantToolChainApproval(
+    approvalId: string,
+    definition: ToolDefinition,
+    request: Partial<ToolExecutionRequest>,
+    result: ToolRunResponse,
+  ): void {
+    if (!result.success || definition.risk !== 'network') return;
+    const key = this.resolveToolChainApprovalGrantKey(definition, request);
+    if (!key) return;
+    this.toolChainApprovalGrants.set(key, {
+      toolName: definition.name,
+      remainingCalls: MAX_WEB_SEARCH_APPROVAL_GRANT_CALLS,
+      expiresAt: this.now() + TOOL_CHAIN_APPROVAL_GRANT_TTL_MS,
+      approvalId,
+    });
   }
 
   private consumeToolChainBudget(
@@ -4377,6 +4450,10 @@ export class ToolExecutor {
     if (explicit) {
       if (explicit === 'auto') return 'allow';
       if (explicit === 'manual') return 'require_approval';
+    }
+
+    if (READ_LIKE_NETWORK_LOOKUP_TOOLS.has(definition.name)) {
+      return 'allow';
     }
 
     const browserDecision = this.decideBrowserTool(definition.name, args);

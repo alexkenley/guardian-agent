@@ -2198,7 +2198,7 @@ function createProviderPanel(config, providers, panel) {
       statusEl.textContent = `Testing ${providerName}...`;
       statusEl.style.color = 'var(--text-muted)';
       try {
-        const latest = await api.providersStatus();
+        const latest = await api.providersStatus({ force: true });
         const found = latest.find(p => p.name === providerName);
         if (!found) { statusEl.textContent = `'${providerName}' not in runtime (save first).`; statusEl.style.color = 'var(--warning)'; return; }
         if (found.connected === false) { statusEl.textContent = `${providerName}: health check failed.`; statusEl.style.color = 'var(--error)'; }

@@ -28,7 +28,7 @@ interface ProviderRegistryLike {
 
 interface ProviderDashboardCallbackOptions {
   getProviderInfoSnapshot: () => DashboardProviderInfo[];
-  buildProviderInfo: (withConnectivity: boolean) => Promise<DashboardProviderInfo[]>;
+  buildProviderInfo: (withConnectivity: boolean, healthOptions?: { force?: boolean }) => Promise<DashboardProviderInfo[]>;
   resolveCredentialForProviderInput: (credentialRef: string | undefined, apiKey: string | undefined) => string | undefined;
   getDefaultModelForProviderType: (providerType: string) => string;
   getDefaultBaseUrlForProviderType: (providerType: string) => string | undefined;
@@ -45,7 +45,7 @@ export function createProviderDashboardCallbacks(
 
     onProviderTypes: () => providerRegistry.listProviderTypes(),
 
-    onProvidersStatus: async () => options.buildProviderInfo(true),
+    onProvidersStatus: async (input) => options.buildProviderInfo(true, { force: input?.force === true }),
 
     onProviderModels: async (input) => {
       const providerType = input.providerType.trim().toLowerCase();

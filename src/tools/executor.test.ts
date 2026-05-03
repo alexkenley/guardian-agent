@@ -9210,6 +9210,51 @@ describe('ToolExecutor', () => {
       expect(run.message).toContain('allowedDomains');
     });
 
+    it('auto-allows web search as a read-like network lookup even in approve_each mode', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      let fetchCount = 0;
+      const ddgHtml = `
+        <html><body>
+          <div class="result results_links">
+            <a class="result__a" href="https://example.com/search">Search Result</a>
+            <a class="result__snippet">Search snippet.</a>
+          </div>
+        </body></html>
+      `;
+      globalThis.fetch = (async () => {
+        fetchCount++;
+        return new Response(ddgHtml, { status: 200, headers: { 'Content-Type': 'text/html' } });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'approve_each',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: ['html.duckduckgo.com'],
+          webSearch: { cacheTtlMs: 0 },
+        });
+
+        const run = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'approval-free search', provider: 'duckduckgo' },
+          origin: 'assistant',
+          requestId: 'req-auto-web-search',
+          userId: 'owner',
+          principalId: 'owner',
+          channel: 'cli',
+        });
+
+        expect(run.status).toBe('succeeded');
+        expect(run.approvalId).toBeUndefined();
+        expect(fetchCount).toBe(1);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     it('parses DuckDuckGo HTML results', async () => {
       const root = createExecutorRoot();
       const originalFetch = globalThis.fetch;
@@ -9403,6 +9448,102 @@ describe('ToolExecutor', () => {
         expect(run3.success).toBe(true);
         expect((run3.output as { cached: boolean }).cached).toBe(false);
         expect(fetchCount).toBe(3);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('reuses one approved web search decision for bounded follow-up searches under explicit manual policy', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      let fetchCount = 0;
+      const ddgHtml = `
+        <html><body>
+          <div class="result results_links">
+            <a class="result__a" href="https://example.com/granted">Granted Result</a>
+            <a class="result__snippet">Granted snippet.</a>
+          </div>
+        </body></html>
+      `;
+      globalThis.fetch = (async () => {
+        fetchCount++;
+        return new Response(ddgHtml, { status: 200, headers: { 'Content-Type': 'text/html' } });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'approve_each',
+          toolPolicies: { web_search: 'manual' },
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: ['html.duckduckgo.com', 'example.com'],
+          webSearch: { cacheTtlMs: 0 },
+        });
+
+        const requestContext = {
+          origin: 'assistant' as const,
+          requestId: 'req-web-search-grant',
+          userId: 'owner',
+          principalId: 'owner',
+          channel: 'cli',
+          surfaceId: 'cli-guardian-chat',
+        };
+        const pending = await executor.runTool({
+          ...requestContext,
+          toolName: 'web_search',
+          args: { query: 'first approved search', provider: 'duckduckgo' },
+        });
+
+        expect(pending.status).toBe('pending_approval');
+        expect(fetchCount).toBe(0);
+
+        const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'owner');
+        expect(approved.success).toBe(true);
+        expect(approved.executionSucceeded).toBe(true);
+        expect(fetchCount).toBe(1);
+
+        const followUp = await executor.runTool({
+          ...requestContext,
+          toolName: 'web_search',
+          args: { query: 'second related search', provider: 'duckduckgo' },
+        });
+        expect(followUp.status).toBe('succeeded');
+        expect(followUp.approvalId).toBeUndefined();
+        expect(fetchCount).toBe(2);
+
+        for (const query of ['third related search', 'fourth related search', 'fifth related search']) {
+          const additional = await executor.runTool({
+            ...requestContext,
+            toolName: 'web_search',
+            args: { query, provider: 'duckduckgo' },
+          });
+          expect(additional.status).toBe('succeeded');
+          expect(additional.approvalId).toBeUndefined();
+        }
+        expect(fetchCount).toBe(5);
+
+        const exhaustedGrant = await executor.runTool({
+          ...requestContext,
+          toolName: 'web_search',
+          args: { query: 'sixth related search', provider: 'duckduckgo' },
+        });
+        expect(exhaustedGrant.status).toBe('pending_approval');
+
+        const unrelatedRequest = await executor.runTool({
+          ...requestContext,
+          requestId: 'req-web-search-other',
+          toolName: 'web_search',
+          args: { query: 'third unrelated search', provider: 'duckduckgo' },
+        });
+        expect(unrelatedRequest.status).toBe('pending_approval');
+
+        const differentTool = await executor.runTool({
+          ...requestContext,
+          toolName: 'web_fetch',
+          args: { url: 'https://example.com/article' },
+        });
+        expect(differentTool.status).toBe('pending_approval');
       } finally {
         globalThis.fetch = originalFetch;
       }

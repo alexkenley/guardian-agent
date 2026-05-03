@@ -336,6 +336,89 @@ describe('intent-gateway-orchestration', () => {
     ]);
   });
 
+  it('keeps low-confidence intent-route clarifications on the origin surface', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const gateway = makeGatewayRecord({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'unknown',
+      resolution: 'needs_clarification',
+      missingFields: ['intent_route'],
+      summary: 'I am not sure which task you want me to perform.',
+      provenance: {
+        route: 'repair.structured',
+      },
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'new-web-surface',
+        message: makeMessage('Go out to the internet search on random websites and pull me back some information.'),
+        activeSkills: [],
+      },
+      {
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: () => undefined,
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response?.content).toContain('not sure');
+    expect(pendingActionInputs[0]).toMatchObject({
+      field: 'intent_route',
+      transferPolicy: 'origin_surface_only',
+      provenance: gateway.decision.provenance,
+    });
+  });
+
+  it('keeps repaired missing-query clarifications on the origin surface', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const gateway = makeGatewayRecord({
+      route: 'coding_task',
+      confidence: 'high',
+      operation: 'search',
+      turnRelation: 'follow_up',
+      resolution: 'needs_clarification',
+      missingFields: ['query'],
+      summary: 'What should I search the web for?',
+      provenance: {
+        route: 'repair.structured',
+      },
+    });
+
+    buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'new-web-surface',
+        message: makeMessage('Go out to the internet search on random websites and pull me back some information.'),
+        activeSkills: [],
+      },
+      {
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: () => undefined,
+        toPendingActionEntities,
+      },
+    );
+
+    expect(pendingActionInputs[0]).toMatchObject({
+      field: 'query',
+      transferPolicy: 'origin_surface_only',
+    });
+  });
+
   it('falls back to generic clarification copy when the classifier omits a real summary', () => {
     const pendingActionInputs: Array<Record<string, unknown>> = [];
     const gateway = makeGatewayRecord({
@@ -576,6 +659,78 @@ describe('intent-gateway-orchestration', () => {
     expect(context.pendingAction).toBe(pendingAction);
     expect(context.continuityThread).toBe(continuityThread);
     expect(context.contextSuppressed).toBe(false);
+  });
+
+  it('keeps query clarification context for concise search-topic answers', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'query',
+        prompt: 'What should I search the web for?',
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Go out to the internet and find useful information from various sites.',
+      },
+    });
+    const continuityThread = makeContinuityThread();
+
+    const context = filterIntentGatewayClassificationContext({
+      content: 'Artificial Intelligence',
+      pendingAction,
+      continuityThread,
+    });
+
+    expect(context.pendingAction).toBe(pendingAction);
+    expect(context.continuityThread).toBe(continuityThread);
+    expect(context.contextSuppressed).toBe(false);
+  });
+
+  it('still suppresses query clarification context for long self-contained replacement requests', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'query',
+        prompt: 'What should I search the web for?',
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Go out to the internet and find useful information from various sites.',
+      },
+    });
+
+    const context = filterIntentGatewayClassificationContext({
+      content: 'Ignore that pending web search clarification and instead inspect the current workspace architecture docs, summarize the routing design, list changed files, and do not browse the internet.',
+      pendingAction,
+      continuityThread: makeContinuityThread(),
+    });
+
+    expect(context.pendingAction).toBeNull();
+    expect(context.contextSuppressed).toBe(true);
+  });
+
+  it('rewrites query clarification answers back onto the original blocked search request', () => {
+    const pendingAction = makePendingAction({
+      blocker: {
+        kind: 'clarification',
+        field: 'query',
+        prompt: 'What should I search the web for?',
+      },
+      intent: {
+        route: 'search_task',
+        operation: 'search',
+        originalUserContent: 'Go out to the internet and find useful information from various sites.',
+      },
+    });
+
+    expect(resolvePendingActionContinuationContent(
+      'Artificial Intelligence',
+      pendingAction,
+    )).toBe(
+      'Use "Artificial Intelligence" as the search query for this request: Go out to the internet and find useful information from various sites.',
+    );
   });
 
   it('rewrites search-surface clarification answers to the selected source', () => {

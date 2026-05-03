@@ -139,6 +139,8 @@ export class IntentGateway {
         };
     workingRecord = await confirmIntentGatewayDecisionIfNeeded(input, workingRecord, chat);
     decision = workingRecord.decision;
+    decision = applyUncertainRepairedRouteGuard(input, decision);
+    decision = applyMissingRepairedSearchTargetGuard(input, decision);
     decision = repairAutomationClarificationFromRecentHistory(input, decision);
     if (needsAutomationNameRepair(decision)) {
       const repairedName = await repairAutomationName(input, decision, chat);
@@ -257,6 +259,168 @@ function normalizeIntentGatewayRecordDecisionForInput(
     ...record,
     decision,
   };
+}
+
+function applyUncertainRepairedRouteGuard(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (!shouldClarifyUncertainRepairedRoute(input, decision)) {
+    return decision;
+  }
+  return {
+    ...decision,
+    summary: buildUncertainRepairedRoutePrompt(input),
+    resolution: 'needs_clarification',
+    missingFields: [...new Set([...decision.missingFields, 'intent_route'])],
+    executionClass: 'direct_assistant',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+  };
+}
+
+function applyMissingRepairedSearchTargetGuard(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (!shouldClarifyMissingRepairedSearchTarget(decision)) {
+    return decision;
+  }
+  return {
+    ...decision,
+    summary: buildMissingRepairedSearchTargetPrompt(input, decision),
+    resolution: 'needs_clarification',
+    missingFields: [...new Set([...decision.missingFields, 'query'])],
+    executionClass: 'direct_assistant',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+  };
+}
+
+function shouldClarifyMissingRepairedSearchTarget(decision: IntentGatewayDecision): boolean {
+  if (decision.resolution !== 'ready') {
+    return false;
+  }
+  if (decision.provenance?.route !== 'repair.structured') {
+    return false;
+  }
+  if (!hasSearchPlannedStep(decision) && decision.operation !== 'search') {
+    return false;
+  }
+  if (decision.operation !== 'search' && !hasWebSearchPlannedStep(decision)) {
+    return false;
+  }
+  return !hasConcreteSearchTarget(decision);
+}
+
+function hasSearchPlannedStep(decision: IntentGatewayDecision): boolean {
+  return (decision.plannedSteps ?? []).some((step) => (
+    step.kind === 'search'
+    || (step.expectedToolCategories ?? []).some((category) => {
+      const normalized = category.trim().toLowerCase();
+      return normalized === 'search'
+        || normalized === 'web_search';
+    })
+  ));
+}
+
+function hasWebSearchPlannedStep(decision: IntentGatewayDecision): boolean {
+  return (decision.plannedSteps ?? []).some((step) =>
+    (step.expectedToolCategories ?? []).some((category) => category.trim().toLowerCase() === 'web_search'));
+}
+
+function hasConcreteSearchTarget(decision: IntentGatewayDecision): boolean {
+  const entities = decision.entities;
+  return !!(
+    entities.query
+    || (entities.urls && entities.urls.length > 0)
+    || entities.path
+    || entities.searchSourceId
+    || entities.searchSourceName
+  );
+}
+
+function buildMissingRepairedSearchTargetPrompt(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): string {
+  const hasWebSearchPlan = hasWebSearchPlannedStep(decision);
+  if (hasWebSearchPlan) {
+    return 'What should I search the web for? A topic, question, or website category is enough.';
+  }
+  const hasRecentHistory = (input.recentHistory ?? []).length > 0
+    || !!input.continuity?.lastActionableRequest
+    || !!input.continuity?.focusSummary;
+  if (hasRecentHistory) {
+    return 'I am not sure what to search for from the previous request. What useful information should I bring back?';
+  }
+  return 'What should I search for? A topic, question, file, or source is enough.';
+}
+
+function shouldClarifyUncertainRepairedRoute(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): boolean {
+  if (
+    input.pendingAction
+    && (decision.turnRelation === 'clarification_answer' || decision.turnRelation === 'correction')
+  ) {
+    return false;
+  }
+  if (decision.resolution !== 'ready' || decision.confidence !== 'low') {
+    return false;
+  }
+  if (decision.route === 'unknown' || decision.route === 'general_assistant') {
+    return false;
+  }
+  if (decision.operation !== 'unknown' || decision.turnRelation !== 'new_request') {
+    return false;
+  }
+  if (hasConcreteExecutionTarget(decision)) {
+    return false;
+  }
+  return decision.provenance?.route === 'repair.structured';
+}
+
+function hasConcreteExecutionTarget(decision: IntentGatewayDecision): boolean {
+  const entities = decision.entities;
+  return !!(
+    entities.automationName
+    || entities.newAutomationName
+    || entities.uiSurface
+    || (entities.urls && entities.urls.length > 0)
+    || entities.query
+    || entities.path
+    || entities.sessionTarget
+    || entities.codeSessionResource
+    || entities.emailProvider
+    || entities.calendarTarget
+    || entities.codingBackend
+    || entities.command
+    || entities.searchSourceId
+    || entities.searchSourceName
+    || entities.toolName
+  );
+}
+
+function buildUncertainRepairedRoutePrompt(
+  input: IntentGatewayInput,
+): string {
+  const hasRecentHistory = (input.recentHistory ?? []).length > 0
+    || !!input.continuity?.lastActionableRequest
+    || !!input.continuity?.focusSummary;
+  if (hasRecentHistory) {
+    return 'I am not sure how this relates to the previous request. What do you want me to do next, and what useful information should I bring back?';
+  }
+  return 'I am not sure which task you want me to perform. What should I do, and what useful information should I bring back?';
 }
 
 function repairEmailProviderDecisionIfNeeded(

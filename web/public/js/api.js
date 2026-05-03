@@ -369,7 +369,7 @@ export const api = {
   }),
   providers:    () => request('/api/providers'),
   providerTypes: () => request('/api/providers/types'),
-  providersStatus: () => request('/api/providers/status'),
+  providersStatus: (options = {}) => request(`/api/providers/status${options.force ? '?force=1' : ''}`),
   providerModels: (payload) => request('/api/providers/models', {
     method: 'POST',
     body: JSON.stringify(payload),

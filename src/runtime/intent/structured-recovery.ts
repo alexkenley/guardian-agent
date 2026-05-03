@@ -440,11 +440,13 @@ export function normalizeIntentGatewayDecision(
       : simpleVsComplex;
   const searchQueryClarification = buildSearchQueryClarification({
     route: effectiveRoute,
+    confidence,
     resolution: effectiveResolution,
     turnRelation,
     query: entityResolution.entities.query,
     urls: entityResolution.entities.urls,
     sourceContent: repairContext?.sourceContent,
+    configuredSearchSources: repairContext?.configuredSearchSources,
     plannedSteps: effectivePlannedSteps,
   });
   const searchSurfaceClarification = searchQueryClarification
@@ -454,6 +456,7 @@ export function normalizeIntentGatewayDecision(
       confidence,
       operation: effectiveOperation,
       resolution: effectiveResolution,
+      turnRelation,
       plannedSteps: effectivePlannedSteps,
       configuredSearchSources: repairContext?.configuredSearchSources,
     });
@@ -1213,11 +1216,13 @@ function isToolBackedEvidenceCategory(category: string): boolean {
 
 function buildSearchQueryClarification(input: {
   route: IntentGatewayDecision['route'];
+  confidence: IntentGatewayDecision['confidence'];
   resolution: IntentGatewayDecision['resolution'];
   turnRelation: IntentGatewayDecision['turnRelation'];
   query?: string;
   urls?: string[];
   sourceContent?: string;
+  configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
   plannedSteps: IntentGatewayPlannedStep[];
 }): { prompt: string } | null {
   if (
@@ -1237,6 +1242,18 @@ function buildSearchQueryClarification(input: {
   if (hasMeaningfulResearchTarget(input.query)) {
     return null;
   }
+  if (
+    input.confidence === 'low'
+    && (input.route === 'search_task' || input.route === 'browser_task')
+    && !hasEnabledIndexedSearchSource(input.configuredSearchSources)
+  ) {
+    if (isLikelyStandaloneResearchTarget(input.sourceContent)) {
+      return null;
+    }
+    return {
+      prompt: 'What should I search the web for? A topic, question, or website category is enough.',
+    };
+  }
   if (hasMeaningfulResearchTarget(input.sourceContent)) {
     return null;
   }
@@ -1246,6 +1263,13 @@ function buildSearchQueryClarification(input: {
   return {
     prompt: 'What should I search the web for? A topic, question, or website category is enough.',
   };
+}
+
+function isLikelyStandaloneResearchTarget(value: string | undefined): boolean {
+  if (!hasMeaningfulResearchTarget(value)) {
+    return false;
+  }
+  return !isVagueWebResearchFallback('unknown', value);
 }
 
 function isVagueWebResearchFallback(
@@ -1319,10 +1343,14 @@ function buildSearchSurfaceClarification(input: {
   confidence: IntentGatewayDecision['confidence'];
   operation: IntentGatewayDecision['operation'];
   resolution: IntentGatewayDecision['resolution'];
+  turnRelation: IntentGatewayDecision['turnRelation'];
   plannedSteps: IntentGatewayPlannedStep[];
   configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
 }): { prompt: string } | null {
   if (input.route !== 'search_task' || input.resolution !== 'ready') {
+    return null;
+  }
+  if (input.turnRelation !== 'new_request') {
     return null;
   }
   const hasIndexedSource = hasEnabledIndexedSearchSource(input.configuredSearchSources);
