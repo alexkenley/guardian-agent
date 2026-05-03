@@ -242,7 +242,7 @@ import {
   handleDirectReasoningMode as handleDirectReasoningModeRuntime,
   shouldHandleDirectReasoningMode as shouldHandleDirectReasoningModeRuntime,
 } from './runtime/direct-reasoning-mode.js';
-import { readExecutionIdentityMetadata } from './runtime/execution-identity.js';
+import { readExecutionIdentityMetadata, type ExecutionIdentityMetadata } from './runtime/execution-identity.js';
 import {
   constrainCapabilitiesToOrchestrationRole,
   inferDelegatedOrchestrationDescriptor,
@@ -2158,7 +2158,7 @@ interface DegradedDirectIntentResponseInput {
         const workerMessage = workerMetadata
           ? { ...routedScopedMessage, metadata: workerMetadata }
           : routedScopedMessage;
-        const executionIdentity = readExecutionIdentityMetadata(message.metadata);
+        const delegatedExecutionIdentity = readExecutionIdentityMetadata(message.metadata);
         const workerCapabilities = constrainCapabilitiesToOrchestrationRole(
           [...ctx.capabilities],
           delegatedOrchestration,
@@ -2183,8 +2183,8 @@ interface DegradedDirectIntentResponseInput {
           directReasoning: handleDirectReasoning,
           delegation: {
             requestId: message.id,
-            ...(executionIdentity?.executionId ? { executionId: executionIdentity.executionId } : {}),
-            ...(executionIdentity?.rootExecutionId ? { rootExecutionId: executionIdentity.rootExecutionId } : {}),
+            ...(delegatedExecutionIdentity?.executionId ? { executionId: delegatedExecutionIdentity.executionId } : {}),
+            ...(delegatedExecutionIdentity?.rootExecutionId ? { rootExecutionId: delegatedExecutionIdentity.rootExecutionId } : {}),
             originChannel: message.channel,
             ...(message.surfaceId ? { originSurfaceId: message.surfaceId } : {}),
             ...(continuitySummary?.continuityKey ? { continuityKey: continuitySummary.continuityKey } : {}),
@@ -2231,7 +2231,10 @@ interface DegradedDirectIntentResponseInput {
           pendingActionSurfaceId,
         );
         const workerPendingActionMeta = toPendingActionClientMetadata(workerPendingAction);
-        if (workerPendingActionMeta) {
+        if (
+          workerPendingActionMeta
+          && this.shouldAttachWorkerPendingActionMetadata(workerMeta, workerPendingAction, executionIdentity)
+        ) {
           workerMeta.pendingAction = workerPendingActionMeta;
         }
         if (workerContextAssemblyMeta) {
@@ -2829,6 +2832,20 @@ interface DegradedDirectIntentResponseInput {
       }
     }
     return false;
+  }
+
+  private shouldAttachWorkerPendingActionMetadata(
+    metadata: Record<string, unknown>,
+    pendingAction: PendingActionRecord | null,
+    executionIdentity: ExecutionIdentityMetadata,
+  ): boolean {
+    if (isRecord(metadata.pendingAction) || !pendingAction) {
+      return false;
+    }
+    const executionId = executionIdentity.executionId?.trim();
+    const rootExecutionId = executionIdentity.rootExecutionId?.trim();
+    return (!!executionId && pendingAction.executionId === executionId)
+      || (!!rootExecutionId && pendingAction.rootExecutionId === rootExecutionId);
   }
 
   private async buildDirectIntentResponse(input: DirectIntentResponseInput): Promise<AgentResponse> {

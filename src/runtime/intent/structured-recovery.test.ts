@@ -353,6 +353,146 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.summary).toContain('configured document search source');
   });
 
+  it('asks for a web search query when browser routing has no concrete research target', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'browser_task',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Search some websites and return random information.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'answer',
+          summary: 'Return random information from websites.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Give me go and search some websites and bring back me some random information',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('browser_task');
+    expect(decision.resolution).toBe('needs_clarification');
+    expect(decision.missingFields).toContain('query');
+    expect(decision.summary).toContain('What should I search the web for?');
+  });
+
+  it('asks for a web search query when classifier fallback leaves vague web research unknown', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Direct fallback.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Give me go and search some websites and bring back me some random information',
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.route).toBe('unknown');
+    expect(decision.resolution).toBe('needs_clarification');
+    expect(decision.missingFields).toContain('query');
+    expect(decision.summary).toContain('What should I search the web for?');
+  });
+
+  it('keeps web search ready when the request has a concrete topic', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'medium',
+      operation: 'search',
+      summary: 'Search websites for AWS Systems Manager Explorer delegated administrator setup.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      query: 'AWS Systems Manager Explorer delegated administrator setup',
+      planned_steps: [
+        {
+          kind: 'search',
+          summary: 'Search the web for AWS Systems Manager Explorer delegated administrator setup.',
+          expectedToolCategories: ['web_search'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Summarize the matching web results.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'Search websites for AWS Systems Manager Explorer delegated administrator setup.',
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.route).toBe('search_task');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('query');
+  });
+
+  it('upgrades clear web research answer-only plans to require source evidence', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'browser_task',
+      confidence: 'medium',
+      operation: 'unknown',
+      summary: 'Search websites for GLM-4.7 Ollama cloud tool support.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'answer',
+          summary: 'Summarize GLM-4.7 Ollama cloud tool support.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Search websites for GLM-4.7 Ollama cloud tool support.',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('browser_task');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.operation).toBe('inspect');
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.plannedSteps[0]?.kind).toBe('search');
+    expect(decision.plannedSteps[0]?.expectedToolCategories).toContain('web_search');
+    expect(decision.plannedSteps[1]?.kind).toBe('answer');
+    expect(decision.plannedSteps[1]?.dependsOn).toContain('step_1');
+  });
+
   it('keeps concrete document-search plans ready when indexed sources exist', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'search_task',

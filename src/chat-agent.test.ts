@@ -1052,6 +1052,72 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
+  it('does not attach stale pending clarification metadata to unrelated worker responses', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const stalePendingAction: PendingActionRecord = {
+      id: 'pending-old',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'clarification',
+        prompt: 'What should I search the web for?',
+        field: 'query',
+      },
+      intent: {
+        route: 'browser_task',
+        operation: 'search',
+        originalUserContent: 'Search some websites.',
+      },
+      executionId: 'old-execution',
+      rootExecutionId: 'old-execution',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    };
+
+    expect((agent as any).shouldAttachWorkerPendingActionMetadata(
+      { executionGraph: { status: 'completed' } },
+      stalePendingAction,
+      { executionId: 'new-execution', rootExecutionId: 'new-execution' },
+    )).toBe(false);
+
+    expect((agent as any).shouldAttachWorkerPendingActionMetadata(
+      { executionGraph: { status: 'completed' } },
+      {
+        ...stalePendingAction,
+        id: 'pending-current',
+        executionId: 'new-execution',
+        rootExecutionId: 'new-execution',
+      },
+      { executionId: 'new-execution', rootExecutionId: 'new-execution' },
+    )).toBe(true);
+
+    expect((agent as any).shouldAttachWorkerPendingActionMetadata(
+      { pendingAction: { id: 'from-worker' } },
+      {
+        ...stalePendingAction,
+        id: 'pending-current',
+        executionId: 'new-execution',
+        rootExecutionId: 'new-execution',
+      },
+      { executionId: 'new-execution', rootExecutionId: 'new-execution' },
+    )).toBe(false);
+  });
+
   it('auto-switches to an explicitly named coding workspace before delegated coding work runs', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

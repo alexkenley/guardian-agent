@@ -328,6 +328,7 @@ export function normalizeIntentGatewayDecision(
     requireExactFileReferences,
     requiresRepoGrounding,
     requiresToolSynthesis,
+    configuredSearchSources: repairContext?.configuredSearchSources,
   });
   const selectedPlannedSteps = shouldSuppressSecurityEvidencePlan({
     route,
@@ -336,7 +337,7 @@ export function normalizeIntentGatewayDecision(
     requiresToolSynthesis,
   })
     ? plannedSteps.filter((step) => step.kind === 'answer')
-    : shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps)
+    : shouldPreferSynthesizedPlannedSteps(plannedSteps, synthesizedPlannedSteps, { route })
     ? synthesizedPlannedSteps
     : plannedSteps.length > 0
       ? plannedSteps
@@ -347,14 +348,6 @@ export function normalizeIntentGatewayDecision(
     personalItemType: entityResolution.entities.personalItemType,
     configuredSearchSources: repairContext?.configuredSearchSources,
     sourceContent: repairContext?.sourceContent,
-  });
-  const searchSurfaceClarification = buildSearchSurfaceClarification({
-    route,
-    confidence,
-    operation,
-    resolution: effectiveResolution,
-    plannedSteps: effectivePlannedSteps,
-    configuredSearchSources: repairContext?.configuredSearchSources,
   });
   const plannedStepsRequireRepoGrounding = !directSecurityRefusal
     && planRequiresRepoGrounding(effectivePlannedSteps);
@@ -445,13 +438,33 @@ export function normalizeIntentGatewayDecision(
     : structurallyDirectAnswer && preferredAnswerPath !== 'direct'
       ? derivedWorkload.simpleVsComplex
       : simpleVsComplex;
-  const finalResolution = searchSurfaceClarification
+  const searchQueryClarification = buildSearchQueryClarification({
+    route: effectiveRoute,
+    resolution: effectiveResolution,
+    query: entityResolution.entities.query,
+    urls: entityResolution.entities.urls,
+    sourceContent: repairContext?.sourceContent,
+    plannedSteps: effectivePlannedSteps,
+  });
+  const searchSurfaceClarification = searchQueryClarification
+    ? null
+    : buildSearchSurfaceClarification({
+      route: effectiveRoute,
+      confidence,
+      operation: effectiveOperation,
+      resolution: effectiveResolution,
+      plannedSteps: effectivePlannedSteps,
+      configuredSearchSources: repairContext?.configuredSearchSources,
+    });
+  const finalResolution = searchQueryClarification || searchSurfaceClarification
     ? 'needs_clarification' as const
     : effectiveResolution;
-  const finalMissingFields = searchSurfaceClarification
+  const finalMissingFields = searchQueryClarification
+    ? [...new Set([...effectiveMissingFields, 'query'])]
+    : searchSurfaceClarification
     ? [...new Set([...effectiveMissingFields, 'search_surface'])]
     : effectiveMissingFields;
-  const finalSummary = searchSurfaceClarification?.prompt ?? summary;
+  const finalSummary = searchQueryClarification?.prompt ?? searchSurfaceClarification?.prompt ?? summary;
   const clarificationPendingRoute = normalizeRoute(repairContext?.pendingAction?.route);
   const clarificationPendingOperation = normalizeOperation(repairContext?.pendingAction?.operation);
   const clarificationOwnsRoute = (turnRelation === 'clarification_answer' || turnRelation === 'correction')
@@ -714,6 +727,7 @@ function synthesizeIntentGatewayPlannedSteps(input: {
   requireExactFileReferences: boolean;
   requiresRepoGrounding: boolean;
   requiresToolSynthesis: boolean;
+  configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
 }): IntentGatewayPlannedStep[] {
   const sourceContent = collapseIntentGatewayWhitespace(input.sourceContent ?? '');
   if (!sourceContent) return [];
@@ -730,6 +744,31 @@ function synthesizeIntentGatewayPlannedSteps(input: {
         ...buildSynthesizedExpectedToolCategories(kind, summary),
       };
     });
+  }
+
+  if (
+    shouldSynthesizeWebResearchPlan({
+      route: input.route,
+      sourceContent,
+      configuredSearchSources: input.configuredSearchSources,
+    })
+    && input.requiresToolSynthesis
+    && hasMeaningfulResearchTarget(sourceContent)
+  ) {
+    return [
+      {
+        kind: 'search',
+        summary: 'Search the web for the requested topic and collect source-backed results.',
+        required: true,
+        expectedToolCategories: ['web_search', 'browser'],
+      },
+      {
+        kind: 'answer',
+        summary: 'Answer using the web results and include the websites used when applicable.',
+        required: true,
+        dependsOn: ['step_1'],
+      },
+    ];
   }
 
   if (
@@ -776,6 +815,9 @@ function shouldSuppressSecurityEvidencePlan(input: {
 function shouldPreferSynthesizedPlannedSteps(
   parsedSteps: IntentGatewayPlannedStep[],
   synthesizedSteps: IntentGatewayPlannedStep[],
+  context?: {
+    route: IntentGatewayDecision['route'];
+  },
 ): boolean {
   if (parsedSteps.length === 0 || synthesizedSteps.length < 2) {
     return false;
@@ -785,6 +827,16 @@ function shouldPreferSynthesizedPlannedSteps(
   const synthesizedEvidenceSteps = synthesizedRequired.filter((step) => step.kind !== 'answer');
   const parsedEvidenceSteps = parsedRequired.filter((step) => step.kind !== 'answer');
   const parsedHasAnswer = parsedRequired.some((step) => step.kind === 'answer');
+  const synthesizedHasToolBackedAnswerPlan = hasExplicitToolBackedAnswerPlan(synthesizedRequired);
+  const parsedHasToolBackedAnswerPlan = hasExplicitToolBackedAnswerPlan(parsedRequired);
+  if (
+    (context?.route === 'search_task' || context?.route === 'browser_task')
+    && parsedHasAnswer
+    && synthesizedHasToolBackedAnswerPlan
+    && !parsedHasToolBackedAnswerPlan
+  ) {
+    return true;
+  }
   if (
     parsedHasAnswer
     && synthesizedEvidenceSteps.length >= 2
@@ -792,7 +844,7 @@ function shouldPreferSynthesizedPlannedSteps(
   ) {
     return true;
   }
-  if (hasExplicitToolBackedAnswerPlan(parsedRequired)) {
+  if (parsedHasToolBackedAnswerPlan) {
     return false;
   }
   const synthesizedHasWrite = synthesizedRequired.some((step) => step.kind === 'write'
@@ -1158,6 +1210,107 @@ function isToolBackedEvidenceCategory(category: string): boolean {
     || normalized.startsWith('second_brain_');
 }
 
+function buildSearchQueryClarification(input: {
+  route: IntentGatewayDecision['route'];
+  resolution: IntentGatewayDecision['resolution'];
+  query?: string;
+  urls?: string[];
+  sourceContent?: string;
+  plannedSteps: IntentGatewayPlannedStep[];
+}): { prompt: string } | null {
+  if (
+    input.resolution !== 'ready'
+    || (
+      input.route !== 'search_task'
+      && input.route !== 'browser_task'
+      && !isVagueWebResearchFallback(input.route, input.sourceContent)
+    )
+  ) {
+    return null;
+  }
+  if (input.urls && input.urls.length > 0) {
+    return null;
+  }
+  if (hasMeaningfulResearchTarget(input.query)) {
+    return null;
+  }
+  if (hasMeaningfulResearchTarget(input.sourceContent)) {
+    return null;
+  }
+  if (input.plannedSteps.some((step) => hasMeaningfulResearchTarget(step.summary))) {
+    return null;
+  }
+  return {
+    prompt: 'What should I search the web for? A topic, question, or website category is enough.',
+  };
+}
+
+function isVagueWebResearchFallback(
+  route: IntentGatewayDecision['route'],
+  sourceContent: string | undefined,
+): boolean {
+  if (route !== 'unknown' && route !== 'general_assistant') {
+    return false;
+  }
+  const normalized = collapseIntentGatewayWhitespace(sourceContent ?? '').toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /\b(?:search|browse|find|research|look\s+up|read)\b/i.test(normalized)
+    && /\b(?:web|website|websites|internet|online|site|sites|page|pages)\b/i.test(normalized);
+}
+
+const GENERIC_RESEARCH_TARGET_WORDS = new Set([
+  'a',
+  'about',
+  'and',
+  'any',
+  'anything',
+  'back',
+  'bring',
+  'browse',
+  'find',
+  'for',
+  'from',
+  'give',
+  'go',
+  'information',
+  'internet',
+  'latest',
+  'me',
+  'online',
+  'page',
+  'pages',
+  'random',
+  'read',
+  'research',
+  'results',
+  'return',
+  'search',
+  'site',
+  'sites',
+  'some',
+  'stuff',
+  'the',
+  'things',
+  'web',
+  'website',
+  'websites',
+]);
+
+function hasMeaningfulResearchTarget(value: string | undefined): boolean {
+  const normalized = collapseIntentGatewayWhitespace(value ?? '')
+    .replace(/\[[^\]]+\]/g, ' ')
+    .toLowerCase();
+  if (!normalized) return false;
+  if (/\bhttps?:\/\//i.test(normalized)) return true;
+  const tokens = normalized
+    .split(/[^a-z0-9+#]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+  return tokens.some((token) => !GENERIC_RESEARCH_TARGET_WORDS.has(token));
+}
+
 function buildSearchSurfaceClarification(input: {
   route: IntentGatewayDecision['route'];
   confidence: IntentGatewayDecision['confidence'];
@@ -1169,9 +1322,7 @@ function buildSearchSurfaceClarification(input: {
   if (input.route !== 'search_task' || input.resolution !== 'ready') {
     return null;
   }
-  const hasIndexedSource = input.configuredSearchSources?.some((source) => (
-    source.enabled && source.indexedSearchAvailable
-  )) === true;
+  const hasIndexedSource = hasEnabledIndexedSearchSource(input.configuredSearchSources);
   if (!hasIndexedSource) {
     return null;
   }
@@ -1184,6 +1335,31 @@ function buildSearchSurfaceClarification(input: {
   return {
     prompt: 'Which search surface should I use: the configured document search source, the current workspace/repo files, or web search?',
   };
+}
+
+function shouldSynthesizeWebResearchPlan(input: {
+  route: IntentGatewayDecision['route'];
+  sourceContent: string;
+  configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
+}): boolean {
+  if (input.route === 'browser_task') {
+    return true;
+  }
+  if (input.route !== 'search_task') {
+    return false;
+  }
+  if (!hasEnabledIndexedSearchSource(input.configuredSearchSources)) {
+    return true;
+  }
+  return /\b(?:web|internet|online|website|websites|url|urls|browser|https?:\/\/)\b/i.test(input.sourceContent);
+}
+
+function hasEnabledIndexedSearchSource(
+  configuredSearchSources: IntentGatewayRepairContext['configuredSearchSources'] | undefined,
+): boolean {
+  return configuredSearchSources?.some((source) => (
+    source.enabled && source.indexedSearchAvailable
+  )) === true;
 }
 
 function hasConcreteSearchSurface(steps: IntentGatewayPlannedStep[]): boolean {
