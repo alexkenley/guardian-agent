@@ -441,6 +441,7 @@ export function normalizeIntentGatewayDecision(
   const searchQueryClarification = buildSearchQueryClarification({
     route: effectiveRoute,
     resolution: effectiveResolution,
+    turnRelation,
     query: entityResolution.entities.query,
     urls: entityResolution.entities.urls,
     sourceContent: repairContext?.sourceContent,
@@ -1213,6 +1214,7 @@ function isToolBackedEvidenceCategory(category: string): boolean {
 function buildSearchQueryClarification(input: {
   route: IntentGatewayDecision['route'];
   resolution: IntentGatewayDecision['resolution'];
+  turnRelation: IntentGatewayDecision['turnRelation'];
   query?: string;
   urls?: string[];
   sourceContent?: string;
@@ -1220,6 +1222,7 @@ function buildSearchQueryClarification(input: {
 }): { prompt: string } | null {
   if (
     input.resolution !== 'ready'
+    || input.turnRelation !== 'new_request'
     || (
       input.route !== 'search_task'
       && input.route !== 'browser_task'

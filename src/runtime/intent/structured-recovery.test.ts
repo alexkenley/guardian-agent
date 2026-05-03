@@ -414,6 +414,41 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.summary).toContain('What should I search the web for?');
   });
 
+  it('does not re-clarify resolved web route clarification answers', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'search_task',
+      confidence: 'high',
+      operation: 'search',
+      summary: 'Searches the web for the requested topic.',
+      turnRelation: 'clarification_answer',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      resolvedContent: 'Look into OpenAI pricing for me.',
+    }, {
+      sourceContent: 'Search the web.',
+      pendingAction: {
+        blockerKind: 'clarification',
+        field: 'intent_route',
+        route: 'search_task',
+        originalRequest: 'Look into OpenAI pricing for me.',
+      },
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.route).toBe('search_task');
+    expect(decision.turnRelation).toBe('clarification_answer');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('query');
+    expect(decision.resolvedContent).toBe('Look into OpenAI pricing for me.');
+  });
+
   it('keeps web search ready when the request has a concrete topic', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'search_task',
