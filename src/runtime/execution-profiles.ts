@@ -29,6 +29,7 @@ import {
   hasRequiredWritePlannedStep,
   requiresSecurityEvidence,
 } from './intent/planned-steps.js';
+import { normalizeUserFacingIntentGatewaySummary } from './intent/summary.js';
 import type { RouteDecision } from './message-router.js';
 import type { OrchestrationRoleDescriptor } from './orchestration-role-descriptors.js';
 
@@ -789,7 +790,7 @@ function deriveDelegatedExecutionDecision(input: {
   const basePreferredAnswerPath = gatewayDecision?.preferredAnswerPath ?? 'tool_loop';
   const baseSimpleVsComplex = gatewayDecision?.simpleVsComplex ?? 'simple';
 
-  const originalSummary = gatewayDecision?.summary?.trim();
+  const originalSummary = normalizeUserFacingIntentGatewaySummary(gatewayDecision?.summary);
   const originalPlannedSteps = Array.isArray(gatewayDecision?.plannedSteps)
     ? gatewayDecision.plannedSteps
     : undefined;

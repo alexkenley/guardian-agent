@@ -99,10 +99,46 @@ describe('ModelFallbackChain', () => {
       },
     });
   });
+
+  it('starts provider cooldowns when the failure happens, not when the attempt starts', async () => {
+    let now = 0;
+    const slowTimeout = createProvider('slow-timeout', async () => {
+      now += 30_000;
+      throw new Error("LLM provider 'slow-timeout' timed out after 30000ms");
+    });
+    const fallback = createProvider('fallback', async () => ({
+      content: 'fallback ok',
+      model: 'fallback-model',
+      finishReason: 'stop',
+    }));
+    const chain = new ModelFallbackChain(new Map([
+      ['slow-timeout', slowTimeout],
+      ['fallback', fallback],
+    ]), ['slow-timeout', 'fallback'], () => now);
+
+    await expect(chain.chatWithProviderOrder(
+      ['slow-timeout', 'fallback'],
+      [{ role: 'user', content: 'hello' }],
+      {},
+    )).resolves.toMatchObject({
+      providerName: 'fallback',
+      usedFallback: true,
+    });
+
+    expect(chain.isOnCooldown('slow-timeout')).toBe(true);
+    now += 14_999;
+    expect(chain.isOnCooldown('slow-timeout')).toBe(true);
+    now += 1;
+    expect(chain.isOnCooldown('slow-timeout')).toBe(false);
+  });
 });
 
 describe('classifyError', () => {
   it('classifies provider timeout messages as timeout errors', () => {
     expect(classifyError(new Error("LLM provider 'nvidia-direct' timed out after 30000ms"))).toBe('timeout');
+  });
+
+  it('classifies depleted provider credits as quota errors', () => {
+    expect(classifyError(new Error('Your credit balance is too low to access the Anthropic API. Please purchase credits.'))).toBe('quota');
   });
 });

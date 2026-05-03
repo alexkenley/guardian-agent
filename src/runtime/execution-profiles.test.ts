@@ -751,6 +751,22 @@ describe('execution profiles', () => {
     });
   });
 
+  it('does not decorate placeholder gateway summaries into delegated workload summaries', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        summary: 'No classification summary provided.',
+      }),
+      orchestration: {
+        role: 'explorer',
+        label: 'Workspace Explorer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision?.summary).toBe('Workspace Explorer delegated workload.');
+  });
+
   it('keeps delegated implementer workloads read-only when the structured plan only requires search/read evidence', () => {
     const delegatedDecision = resolveDelegatedExecutionDecision({
       gatewayDecision: createGatewayDecision({

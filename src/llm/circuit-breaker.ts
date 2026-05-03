@@ -138,7 +138,15 @@ export function classifyError(error: unknown): ErrorClass {
   }
 
   // Quota / rate limit — may succeed with a different provider
-  if (status === 429 || message.includes('rate limit') || message.includes('quota') || message.includes('too many requests')) {
+  if (
+    status === 429
+    || message.includes('rate limit')
+    || message.includes('quota')
+    || message.includes('too many requests')
+    || message.includes('credit balance')
+    || message.includes('insufficient credits')
+    || message.includes('purchase credits')
+  ) {
     return 'quota';
   }
 

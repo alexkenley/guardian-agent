@@ -177,15 +177,13 @@ export class ModelFallbackChain {
   ): Promise<FallbackResult> {
     const errors: Array<{ name: string; error: unknown; errorClass: ErrorClass }> = [];
     const skipped: string[] = [];
-    const now = this.now();
-
     for (const name of order) {
       const provider = this.providers.get(name);
       if (!provider) continue;
 
       // Check cooldown
       const cooldown = this.cooldowns.get(name);
-      if (cooldown && now < cooldown.until) {
+      if (cooldown && this.now() < cooldown.until) {
         log.debug({ provider: name, cooldownUntil: cooldown.until, errorClass: cooldown.errorClass }, 'Provider on cooldown, skipping');
         skipped.push(name);
         continue;
@@ -213,7 +211,7 @@ export class ModelFallbackChain {
         // Set cooldown
         const cooldownMs = COOLDOWN_MS[errorClass];
         if (cooldownMs > 0) {
-          this.cooldowns.set(name, { until: now + cooldownMs, errorClass });
+          this.cooldowns.set(name, { until: this.now() + cooldownMs, errorClass });
         }
 
         log.warn(
