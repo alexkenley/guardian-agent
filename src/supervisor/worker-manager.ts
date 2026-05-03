@@ -120,6 +120,7 @@ import {
 import { readWorkerExecutionMetadata } from '../runtime/worker-execution-metadata.js';
 import {
   buildDelegatedExecutionMetadata,
+  EXECUTION_EVENTS_METADATA_KEY,
   readDelegatedResultEnvelope,
   readExecutionEvents,
   sanitizeDelegatedEnvelopeForOperator,
@@ -3148,12 +3149,13 @@ export class WorkerManager {
     const target = this.buildWorkerContinuationTraceTarget(state);
     const requestId = state.requestId?.trim() || request.delegation?.requestId || approvalId;
     const taskRunId = state.taskRunId?.trim() || `delegated-approval-continuation:${approvalId}`;
+    const filteredMetadata = filterResolvedApprovalContinuationMetadata(metadata, approvalId);
     this.recordDelegatedExecutionArtifacts(
       request,
       target,
       requestId,
       taskRunId,
-      metadata,
+      filteredMetadata,
     );
   }
 
@@ -3289,6 +3291,58 @@ function reconcileSatisfiedDelegatedWorkerMetadata(
   const workerExecution = readWorkerExecutionMetadata(metadata);
   if (workerExecution?.lifecycle !== 'failed') return;
   delete metadata.workerExecution;
+}
+
+function filterResolvedApprovalContinuationMetadata(
+  metadata: Record<string, unknown> | undefined,
+  approvalId: string,
+): Record<string, unknown> | undefined {
+  const events = readExecutionEvents(metadata);
+  if (events.length === 0) return metadata;
+  const activeApprovalIds = new Set(readDelegatedPendingApprovalMetadata(metadata)?.approvalIds ?? []);
+  const filteredEvents = filterResolvedApprovalContinuationEvents(events, approvalId, activeApprovalIds);
+  if (filteredEvents.length === events.length) return metadata;
+  return {
+    ...(metadata ?? {}),
+    [EXECUTION_EVENTS_METADATA_KEY]: filteredEvents,
+  };
+}
+
+function filterResolvedApprovalContinuationEvents(
+  events: ExecutionEvent[],
+  approvalId: string,
+  activeApprovalIds: Set<string>,
+): ExecutionEvent[] {
+  const resolvedApprovalId = approvalId.trim();
+  if (!resolvedApprovalId) return events;
+  const hasActiveApprovals = activeApprovalIds.size > 0;
+  return events.filter((event) => {
+    const resultStatus = readEventString(event.payload.resultStatus);
+    const isPendingResult = resultStatus === 'pending_approval' || resultStatus === 'blocked';
+    const referencesResolvedApproval = eventReferencesApproval(event, resolvedApprovalId);
+    if (referencesResolvedApproval && event.type === 'interruption_requested') {
+      return false;
+    }
+    if (referencesResolvedApproval && event.type === 'tool_call_completed' && isPendingResult) {
+      return false;
+    }
+    if (!hasActiveApprovals) {
+      if (event.type === 'interruption_requested') return false;
+      if (event.type === 'tool_call_completed' && isPendingResult) return false;
+    }
+    return true;
+  });
+}
+
+function eventReferencesApproval(event: ExecutionEvent, approvalId: string): boolean {
+  if (readEventString(event.payload.approvalId) === approvalId) return true;
+  const approvalIds = event.payload.approvalIds;
+  return Array.isArray(approvalIds)
+    && approvalIds.some((id) => typeof id === 'string' && id.trim() === approvalId);
+}
+
+function readEventString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function isSatisfiedDelegatedResultMetadata(metadata: Record<string, unknown>): boolean {

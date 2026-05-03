@@ -7153,6 +7153,8 @@ describe('WorkerManager', () => {
         nodeKind: 'delegated_worker',
       },
     });
+    const traceCountBeforeFinalApproval = intentRoutingTrace.record.mock.calls.length;
+    const timelineCountBeforeFinalApproval = runTimeline.ingestDelegatedExecutionEvents.mock.calls.length;
 
     const completed = await manager.resumeExecutionGraphPendingAction(
       secondPending!,
@@ -7169,6 +7171,34 @@ describe('WorkerManager', () => {
 
     expect(completed?.content).toBe('Created the task and weekly automation.');
     expect(completed?.metadata?.workerExecution).toBeUndefined();
+    const finalApprovalTraceEntries = intentRoutingTrace.record.mock.calls
+      .slice(traceCountBeforeFinalApproval)
+      .map(([entry]) => entry);
+    expect(finalApprovalTraceEntries).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: 'delegated_interruption_requested',
+      }),
+      expect.objectContaining({
+        stage: 'delegated_tool_call_completed',
+        details: expect.objectContaining({
+          resultStatus: 'pending_approval',
+        }),
+      }),
+    ]));
+    const finalApprovalTimelineCalls = runTimeline.ingestDelegatedExecutionEvents.mock.calls
+      .slice(timelineCountBeforeFinalApproval)
+      .map(([call]) => call);
+    expect(finalApprovalTimelineCalls.flatMap((call) => call.events)).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'interruption_requested',
+      }),
+      expect.objectContaining({
+        type: 'tool_call_completed',
+        payload: expect.objectContaining({
+          resultStatus: 'pending_approval',
+        }),
+      }),
+    ]));
     const continuationToolTraces = intentRoutingTrace.record.mock.calls
       .map(([entry]) => entry)
       .filter((entry) => entry.stage === 'delegated_tool_call_completed');
