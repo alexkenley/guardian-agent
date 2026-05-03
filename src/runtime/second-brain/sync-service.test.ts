@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SecondBrainService } from './second-brain-service.js';
 import { SecondBrainStore } from './second-brain-store.js';
 import { SyncService } from './sync-service.js';
@@ -199,5 +199,52 @@ describe('SyncService', () => {
       .toContain('Google Partial Sync');
     expect(service.getSyncCursorById('google:calendar')?.lastSyncAt).toBe(now());
     expect(service.getSyncCursorById('google:contacts')).toBeNull();
+  });
+
+  it('retains last provider sync health without rerunning connector calls', async () => {
+    const { service, now } = createFixture();
+    const googleExecute = vi.fn(async (params: { service: string }) => {
+      if (params.service === 'calendar') {
+        return {
+          success: true,
+          data: { items: [] },
+        };
+      }
+      return {
+        success: false,
+        error: 'People API has not been used in project before or it is disabled.',
+      };
+    });
+    const googleService = {
+      isAuthenticated: () => true,
+      isServiceEnabled: (svc: string) => svc === 'calendar' || svc === 'contacts',
+      execute: googleExecute,
+    };
+
+    const syncService = new SyncService(service, {
+      now,
+      getGoogleService: () => googleService as any,
+    });
+
+    const summary = await syncService.syncAll('startup');
+    const health = syncService.getProviderSyncHealth('google');
+
+    expect(syncService.getLastSummary()).toEqual(summary);
+    expect(health).toMatchObject({
+      provider: 'google',
+      status: 'warning',
+      reason: 'startup',
+      skipped: false,
+      eventsSynced: 0,
+      peopleSynced: 0,
+      connectorCalls: 2,
+      error: expect.stringContaining('People API'),
+    });
+    expect(health?.lastSyncStartedAt).toBe(now());
+    expect(health?.lastSyncFinishedAt).toBe(now());
+    expect(googleExecute).toHaveBeenCalledTimes(2);
+
+    syncService.getProviderSyncHealth('google');
+    expect(googleExecute).toHaveBeenCalledTimes(2);
   });
 });

@@ -17,6 +17,7 @@ import type { MicrosoftAuth } from '../../microsoft/microsoft-auth.js';
 import type { MicrosoftService } from '../../microsoft/microsoft-service.js';
 import { resolveRuntimeCredentialView } from '../../runtime/credentials.js';
 import type { LocalSecretStore } from '../../runtime/secret-store.js';
+import type { WorkspaceIntegrationSyncHealthProvider } from '../../runtime/workspace-sync-health.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 
 import { getGuardianBaseDir } from '../../util/env.js';
@@ -44,6 +45,7 @@ interface ProviderIntegrationCallbackOptions {
   microsoftAuthRef: { current: MicrosoftAuth | null };
   microsoftServiceRef: { current: MicrosoftService | null };
   toolExecutorRef: { current: ToolExecutor | null };
+  getWorkspaceSyncHealth?: WorkspaceIntegrationSyncHealthProvider;
   enabledManagedProviders: Set<string>;
   secretStore: LocalSecretStore;
   loadRawConfig: () => Record<string, unknown>;
@@ -123,7 +125,13 @@ export function createProviderIntegrationCallbacks(
     onGoogleStatus: async () => {
       const auth = options.googleAuthRef.current;
       const svc = options.googleServiceRef.current;
-      if (!auth) return { authenticated: false, services: [], mode: 'native' as const };
+      const syncHealth = options.getWorkspaceSyncHealth?.('google');
+      if (!auth) return {
+        authenticated: false,
+        services: [],
+        mode: 'native' as const,
+        ...(syncHealth ? { syncHealth } : {}),
+      };
       const expiry = auth.getTokenExpiry();
       return {
         authenticated: auth.isAuthenticated(),
@@ -132,6 +140,7 @@ export function createProviderIntegrationCallbacks(
         tokenExpired: expiry ? expiry < Date.now() : false,
         services: svc?.getEnabledServices() ?? [],
         mode: 'native' as const,
+        ...(syncHealth ? { syncHealth } : {}),
       };
     },
 
@@ -196,7 +205,14 @@ export function createProviderIntegrationCallbacks(
       const auth = options.microsoftAuthRef.current;
       const svc = options.microsoftServiceRef.current;
       const msConfig = options.configRef.current.assistant.tools.microsoft;
-      if (!auth) return { authenticated: false, services: [], clientId: msConfig?.clientId, tenantId: msConfig?.tenantId };
+      const syncHealth = options.getWorkspaceSyncHealth?.('microsoft');
+      if (!auth) return {
+        authenticated: false,
+        services: [],
+        clientId: msConfig?.clientId,
+        tenantId: msConfig?.tenantId,
+        ...(syncHealth ? { syncHealth } : {}),
+      };
       const expiry = auth.getTokenExpiry();
       return {
         authenticated: auth.isAuthenticated(),
@@ -206,6 +222,7 @@ export function createProviderIntegrationCallbacks(
         services: svc?.getEnabledServices() ?? [],
         clientId: msConfig?.clientId,
         tenantId: msConfig?.tenantId,
+        ...(syncHealth ? { syncHealth } : {}),
       };
     },
 

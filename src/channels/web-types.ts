@@ -26,6 +26,7 @@ import type { QuickActionDefinition } from '../quick-actions.js';
 import type { SetupStatus, SetupApplyInput, SearchConfigInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ConversationSessionInfo } from '../runtime/conversation.js';
+import type { WorkspaceIntegrationSyncHealth } from '../runtime/workspace-sync-health.js';
 import type {
   SecondBrainBriefRecord,
   SecondBrainBriefFilter,
@@ -1928,6 +1929,7 @@ export interface DashboardCallbacks {
     tokenExpiry?: number;
     services: string[];
     mode: 'native';
+    syncHealth?: WorkspaceIntegrationSyncHealth;
   }>;
   /** Start native Google OAuth flow. */
   onGoogleAuthStart?: (services: string[]) => Promise<{
@@ -1950,6 +1952,7 @@ export interface DashboardCallbacks {
     services: string[];
     clientId?: string;
     tenantId?: string;
+    syncHealth?: WorkspaceIntegrationSyncHealth;
   }>;
   /** Start native Microsoft OAuth flow. */
   onMicrosoftAuthStart?: (services: string[]) => Promise<{

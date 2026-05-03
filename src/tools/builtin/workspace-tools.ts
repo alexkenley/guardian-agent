@@ -2,6 +2,7 @@ import type { GoogleService } from '../../google/google-service.js';
 import { GOOGLE_SERVICE_SCOPES } from '../../google/types.js';
 import type { MicrosoftService } from '../../microsoft/microsoft-service.js';
 import { MICROSOFT_SERVICE_SCOPES } from '../../microsoft/types.js';
+import type { WorkspaceIntegrationSyncHealthProvider } from '../../runtime/workspace-sync-health.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
 
@@ -13,6 +14,7 @@ interface WorkspaceToolRegistrarContext {
   guardAction: (request: ToolExecutionRequest, action: string, details: Record<string, unknown>) => void;
   getGoogleService: () => GoogleService | undefined;
   getMicrosoftService: () => MicrosoftService | undefined;
+  getWorkspaceSyncHealth?: WorkspaceIntegrationSyncHealthProvider;
 }
 
 function mapGoogleConfiguredScopes(services: string[]): Record<string, string> {
@@ -295,6 +297,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
       const services = googleSvc?.getEnabledServices() ?? [];
       const authenticated = googleSvc?.isAuthenticated() ?? false;
       const configuredScopes = mapGoogleConfiguredScopes(services);
+      const syncHealth = context.getWorkspaceSyncHealth?.('google');
       return {
         success: true,
         output: {
@@ -314,6 +317,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
           docsEnabled: googleSvc?.isServiceEnabled('docs') ?? false,
           sheetsEnabled: googleSvc?.isServiceEnabled('sheets') ?? false,
           contactsEnabled: googleSvc?.isServiceEnabled('contacts') ?? false,
+          ...(syncHealth ? { syncHealth } : {}),
         },
       };
     },
@@ -341,6 +345,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
       const services = msService?.getEnabledServices() ?? [];
       const authenticated = msService?.isAuthenticated() ?? false;
       const configuredScopes = mapMicrosoftConfiguredScopes(services);
+      const syncHealth = context.getWorkspaceSyncHealth?.('microsoft');
       return {
         success: true,
         output: {
@@ -358,6 +363,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
           mailEnabled: msService?.isServiceEnabled('mail') ?? false,
           oneDriveEnabled: msService?.isServiceEnabled('onedrive') ?? false,
           contactsEnabled: msService?.isServiceEnabled('contacts') ?? false,
+          ...(syncHealth ? { syncHealth } : {}),
         },
       };
     },

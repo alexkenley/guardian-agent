@@ -122,6 +122,7 @@ import type { PersistMemoryEntryResult } from '../runtime/memory-mutation-servic
 import type { PerformanceService } from '../runtime/performance-service.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import type { PromptAssemblyAdditionalSection } from '../runtime/context-assembly.js';
+import type { WorkspaceIntegrationSyncHealthProvider } from '../runtime/workspace-sync-health.js';
 import { buildCodeSessionRegistryAdditionalSection as buildCodeSessionRegistryAdditionalSectionContent } from '../runtime/code-session-portfolio.js';
 import {
   getMemoryMutationIntentDeniedMessage,
@@ -558,6 +559,8 @@ export interface ToolExecutorOptions {
   googleService?: import('../google/google-service.js').GoogleService;
   /** Native Microsoft 365 service (Graph REST API). */
   microsoftService?: import('../microsoft/microsoft-service.js').MicrosoftService;
+  /** Last provider sync health for status-only workspace tools. */
+  getWorkspaceSyncHealth?: WorkspaceIntegrationSyncHealthProvider;
   /** Device inventory for network intelligence/baseline tools. */
   deviceInventory?: DeviceInventoryService;
   /** Network baseline and anomaly service. */
@@ -6304,6 +6307,7 @@ export class ToolExecutor {
       guardAction: (request, action, details) => this.guardAction(request, action, details),
       getGoogleService: () => this.options.googleService,
       getMicrosoftService: () => this.options.microsoftService,
+      getWorkspaceSyncHealth: this.options.getWorkspaceSyncHealth,
     });
 
     registerBuiltinAutomationTools({

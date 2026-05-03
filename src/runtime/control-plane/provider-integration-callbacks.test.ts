@@ -61,6 +61,67 @@ describe('createProviderIntegrationCallbacks', () => {
     });
   });
 
+  it('includes last workspace sync health in native provider status callbacks', async () => {
+    const googleAuth = {
+      isAuthenticated: vi.fn(() => true),
+      hasPendingAuth: vi.fn(() => false),
+      getTokenExpiry: vi.fn(() => undefined),
+    };
+    const microsoftAuth = {
+      isAuthenticated: vi.fn(() => true),
+      hasPendingAuth: vi.fn(() => false),
+      getTokenExpiry: vi.fn(() => undefined),
+    };
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      googleAuthRef: { current: googleAuth as never },
+      googleServiceRef: { current: { getEnabledServices: () => ['gmail', 'contacts'] } as never },
+      microsoftAuthRef: { current: microsoftAuth as never },
+      microsoftServiceRef: { current: { getEnabledServices: () => ['mail'] } as never },
+      getWorkspaceSyncHealth: (provider) => provider === 'google'
+        ? {
+            provider: 'google',
+            status: 'warning',
+            lastSyncStartedAt: 1_777_000_000_000,
+            lastSyncFinishedAt: 1_777_000_001_000,
+            reason: 'startup',
+            skipped: false,
+            eventsSynced: 1,
+            peopleSynced: 0,
+            connectorCalls: 2,
+            error: 'People API disabled',
+          }
+        : {
+            provider: 'microsoft',
+            status: 'healthy',
+            lastSyncStartedAt: 1_777_000_000_000,
+            lastSyncFinishedAt: 1_777_000_001_000,
+            reason: 'startup',
+            skipped: false,
+            eventsSynced: 0,
+            peopleSynced: 0,
+            connectorCalls: 0,
+          },
+    }));
+
+    await expect(callbacks.onGoogleStatus?.()).resolves.toMatchObject({
+      authenticated: true,
+      services: ['gmail', 'contacts'],
+      syncHealth: {
+        provider: 'google',
+        status: 'warning',
+        error: 'People API disabled',
+      },
+    });
+    await expect(callbacks.onMicrosoftStatus?.()).resolves.toMatchObject({
+      authenticated: true,
+      services: ['mail'],
+      syncHealth: {
+        provider: 'microsoft',
+        status: 'healthy',
+      },
+    });
+  });
+
   it('cancels pending native auth flows from the dashboard callbacks', async () => {
     const googleAuth = {
       cancelPendingAuth: vi.fn(),

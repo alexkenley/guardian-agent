@@ -1,6 +1,10 @@
 import { createLogger } from '../../util/logging.js';
 import type { GoogleService } from '../../google/google-service.js';
 import type { MicrosoftService } from '../../microsoft/microsoft-service.js';
+import type {
+  WorkspaceIntegrationProvider,
+  WorkspaceIntegrationSyncHealth,
+} from '../workspace-sync-health.js';
 import type { SecondBrainService } from './second-brain-service.js';
 import type { SecondBrainSyncCursorRecord } from './types.js';
 
@@ -173,6 +177,7 @@ export class SyncService {
   private readonly now: () => number;
   private readonly getGoogleService: () => GoogleService | undefined;
   private readonly getMicrosoftService: () => MicrosoftService | undefined;
+  private lastSummary?: SecondBrainSyncSummary;
 
   constructor(
     private readonly secondBrainService: SecondBrainService,
@@ -189,18 +194,43 @@ export class SyncService {
     });
   }
 
+  getLastSummary(): SecondBrainSyncSummary | undefined {
+    return this.lastSummary ? cloneSummary(this.lastSummary) : undefined;
+  }
+
+  getProviderSyncHealth(provider: WorkspaceIntegrationProvider): WorkspaceIntegrationSyncHealth | undefined {
+    const summary = this.lastSummary;
+    const providerResult = summary?.providers.find((entry) => entry.provider === provider);
+    if (!summary || !providerResult) return undefined;
+    return {
+      provider,
+      status: providerResult.skipped ? 'skipped' : (providerResult.error ? 'warning' : 'healthy'),
+      lastSyncStartedAt: summary.startedAt,
+      lastSyncFinishedAt: summary.finishedAt,
+      reason: summary.reason,
+      skipped: providerResult.skipped,
+      skipReason: providerResult.reason,
+      eventsSynced: providerResult.eventsSynced,
+      peopleSynced: providerResult.peopleSynced,
+      connectorCalls: providerResult.connectorCalls,
+      error: providerResult.error,
+    };
+  }
+
   async syncAll(reason = 'manual'): Promise<SecondBrainSyncSummary> {
     const startedAt = this.now();
     const providers = await Promise.all([
       this.syncGoogleWorkspace(),
       this.syncMicrosoft365(),
     ]);
-    return {
+    const summary = {
       startedAt,
       finishedAt: this.now(),
       reason,
       providers,
     };
+    this.lastSummary = cloneSummary(summary);
+    return summary;
   }
 
   async syncGoogleWorkspace(): Promise<ProviderSyncResult> {
@@ -518,4 +548,13 @@ export class SyncService {
       updatedAt: timestamp,
     });
   }
+}
+
+function cloneSummary(summary: SecondBrainSyncSummary): SecondBrainSyncSummary {
+  return {
+    startedAt: summary.startedAt,
+    finishedAt: summary.finishedAt,
+    reason: summary.reason,
+    providers: summary.providers.map((provider) => ({ ...provider })),
+  };
 }
