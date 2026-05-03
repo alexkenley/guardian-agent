@@ -27,6 +27,24 @@
 .PARAMETER Token
     Auth token (default: auto-generated, or env HARNESS_TOKEN).
 
+.PARAMETER RunId
+    Unique harness run identifier. Defaults to a generated value and is included
+    in requestId, userId, and surfaceId values for trace correlation.
+
+.PARAMETER TestDir
+    Scratch directory used by filesystem write tests. Defaults to a unique
+    OS-native temp path. Set HARNESS_TEST_DIR or pass -UseUnixTmpPathStress to
+    deliberately exercise Unix-style absolute path handling.
+
+.PARAMETER UseUnixTmpPathStress
+    Use /tmp/harness-tools-test-<runId> as the scratch path. This is useful for
+    reproducing Windows path-normalization regressions separately from the broad
+    tool exercise.
+
+.PARAMETER PreflightOnly
+    Print the generated harness identity and scratch path, then exit without
+    starting the app or sending HTTP requests.
+
 .EXAMPLE
     .\scripts\test-tools.ps1
 
@@ -44,7 +62,11 @@ param(
     [switch]$SkipStart,
     [switch]$Keep,
     [int]$Port = $( if ($env:HARNESS_PORT) { [int]$env:HARNESS_PORT } else { 3000 } ),
-    [string]$Token = $( if ($env:HARNESS_TOKEN) { $env:HARNESS_TOKEN } else { "test-tools-$(Get-Date -Format 'yyyyMMddHHmmss')" } )
+    [string]$Token = $( if ($env:HARNESS_TOKEN) { $env:HARNESS_TOKEN } else { "test-tools-$(Get-Date -Format 'yyyyMMddHHmmss')" } ),
+    [string]$RunId = $( if ($env:HARNESS_RUN_ID) { $env:HARNESS_RUN_ID } else { "tools-" + [guid]::NewGuid().ToString("N").Substring(0, 12) } ),
+    [string]$TestDir = $( if ($env:HARNESS_TEST_DIR) { $env:HARNESS_TEST_DIR } else { "" } ),
+    [switch]$UseUnixTmpPathStress,
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,7 +82,18 @@ $Fail = 0
 $Skip = 0
 $Results = @()
 $LogFile = Join-Path $env:TEMP "guardian-tools-harness.log"
-$TestDir = "/tmp/harness-tools-test"
+$HarnessConfigPath = $null
+$MessageCounter = 0
+$HarnessUserId = "harness-$RunId"
+$HarnessSurfacePrefix = "tools-harness-$RunId"
+if (-not $TestDir) {
+    if ($UseUnixTmpPathStress) {
+        $TestDir = "/tmp/harness-tools-test-$RunId"
+    }
+    else {
+        $TestDir = Join-Path $env:TEMP "guardian-tools-harness-$RunId"
+    }
+}
 
 # ─── Helpers ─────────────────────────────────────────────────
 function Write-Log($msg) { Write-Host "[tools] $msg" -ForegroundColor Cyan }
@@ -77,10 +110,41 @@ function Write-Skip($name, $reason) {
     $script:Skip++; $script:Results += "SKIP: $name - $reason"
 }
 
-function Send-Message {
-    param([string]$Content, [string]$AgentId)
+function New-HarnessSlug {
+    param([string]$Value)
+    $slug = $Value.ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+    $slug = $slug.Trim('-')
+    if (-not $slug) { return "case" }
+    if ($slug.Length -gt 48) { return $slug.Substring(0, 48).Trim('-') }
+    return $slug
+}
 
-    $body = @{ content = $Content; userId = "harness" }
+function Send-Message {
+    param([string]$Content, [string]$AgentId, [string]$CaseName = "")
+
+    $script:MessageCounter++
+    if (-not $CaseName) {
+        $CaseName = if ($Content.Length -gt 60) { $Content.Substring(0, 60) } else { $Content }
+    }
+    $caseSlug = New-HarnessSlug $CaseName
+    $requestId = "$RunId-$($script:MessageCounter)-$caseSlug"
+    $surfaceId = "$HarnessSurfacePrefix-$($script:MessageCounter)-$caseSlug"
+    Write-Log "case: $CaseName requestId=$requestId surfaceId=$surfaceId"
+
+    $body = @{
+        content = $Content
+        userId = $HarnessUserId
+        channel = "web"
+        surfaceId = $surfaceId
+        requestId = $requestId
+        metadata = @{
+            harness = @{
+                name = "test-tools"
+                runId = $RunId
+                caseName = $CaseName
+            }
+        }
+    }
     if ($AgentId) { $body.agentId = $AgentId }
 
     try {
@@ -88,12 +152,16 @@ function Send-Message {
             -Method Post `
             -Headers @{ Authorization = "Bearer $Token" } `
             -ContentType "application/json" `
-            -Body ($body | ConvertTo-Json -Compress) `
+            -Body ($body | ConvertTo-Json -Depth 8 -Compress) `
             -TimeoutSec $TimeoutResponse
+        if ($resp -and ($resp -is [psobject])) {
+            $resp | Add-Member -NotePropertyName harnessRequestId -NotePropertyValue $requestId -Force
+            $resp | Add-Member -NotePropertyName harnessSurfaceId -NotePropertyValue $surfaceId -Force
+        }
         return $resp
     }
     catch {
-        return @{ error = $_.Exception.Message }
+        return @{ error = $_.Exception.Message; harnessRequestId = $requestId; harnessSurfaceId = $surfaceId }
     }
 }
 
@@ -209,7 +277,7 @@ function Invoke-ApprovalDecision {
 }
 
 # ─── Start the app ────────────────────────────────────────────
-if (-not $SkipStart) {
+if (-not $SkipStart -and -not $PreflightOnly) {
     $existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "src[/\\]index\.ts|dist[/\\]index\.js" }
     if ($existing) {
@@ -222,7 +290,8 @@ if (-not $SkipStart) {
 
     $projectRoot = Split-Path -Parent $PSScriptRoot
     $userConfig = Join-Path $env:USERPROFILE ".guardianagent\config.yaml"
-    $harnessConfig = Join-Path $env:TEMP "guardian-tools-harness-config.yaml"
+    $harnessConfig = Join-Path $env:TEMP ("guardian-tools-harness-config-{0}.yaml" -f ([guid]::NewGuid().ToString("N")))
+    $script:HarnessConfigPath = $harnessConfig
 
     if (-not $Token -or $Token -match "^test-tools-") {
         $Token = "harness-" + [guid]::NewGuid().ToString("N")
@@ -230,15 +299,19 @@ if (-not $SkipStart) {
 
     if (Test-Path $userConfig) {
         $configContent = Get-Content $userConfig -Raw
-        $configContent = $configContent -replace '(?m)^  web:\r?\n(    .*\r?\n)*', ''
-        $configContent = $configContent -replace '(?m)^\s*authToken:.*\r?\n?', ''
+        $configContent = [regex]::Replace($configContent, '(?ms)^channels:\r?\n(?<body>(?:  .*(?:\r?\n|$))*)', {
+            param([System.Text.RegularExpressions.Match]$match)
+            $body = $match.Groups['body'].Value
+            $body = $body -creplace '(?m)^  web:\r?\n(?:    .*\r?\n)*', ''
+            "channels:`n$body"
+        })
         $webBlock = @"
   web:
     enabled: true
     port: $Port
     authToken: "$Token"
 "@
-        $configContent = $configContent -replace '(channels:\s*\r?\n)', "`$1$webBlock`n"
+        $configContent = $configContent -creplace '(?m)^channels:\s*\r?\n', "`$0$webBlock`n"
         $configContent | Set-Content $harnessConfig -Encoding utf8
     }
     else {
@@ -293,7 +366,23 @@ guardian:
     Write-Log "Ready with auth token: $Token"
 }
 else {
-    Write-Log "Skipping app startup (-SkipStart). Using $BaseUrl"
+    if ($PreflightOnly) {
+        Write-Log "Preflight only. App startup and HTTP requests are disabled."
+    }
+    else {
+        Write-Log "Skipping app startup (-SkipStart). Using $BaseUrl"
+    }
+}
+
+Write-Log "Harness run id: $RunId"
+Write-Log "Harness user id: $HarnessUserId"
+Write-Log "Scratch path: $TestDir"
+if ($UseUnixTmpPathStress) {
+    Write-Log "Unix-style /tmp path stress mode is enabled"
+}
+
+if ($PreflightOnly) {
+    exit 0
 }
 
 # ─── Cleanup on exit ─────────────────────────────────────────
@@ -307,8 +396,8 @@ $cleanupBlock = {
             $script:AppProcess.Kill()
         }
     }
-    $tempCfg = Join-Path $env:TEMP "guardian-tools-harness-config.yaml"
-    if (Test-Path $tempCfg) { Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue }
+    $tempCfg = $script:HarnessConfigPath
+    if ($tempCfg -and (Test-Path $tempCfg)) { Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue }
 }
 
 try {
@@ -835,6 +924,7 @@ if ($Fail -gt 0) {
 }
 
 Write-Log "Full app log: $LogFile"
+Write-Log "Trace correlation: search intent-routing.jsonl for requestId prefix '$RunId-'"
 
 } finally {
     & $cleanupBlock

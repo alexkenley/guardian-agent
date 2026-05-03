@@ -224,6 +224,26 @@ Unlike unit tests (vitest), these exercise the HTTP stack, config loading, Guard
 .\scripts\test-tools.ps1
 ```
 
+`test-tools.ps1` is the broad LLM-path tool exercise. It now isolates each run with a generated harness run ID, `userId`, per-case `surfaceId`, per-case `requestId`, and an OS-native scratch directory. Use the printed request ID prefix to inspect `intent-routing.jsonl` for any failed case.
+
+Useful options:
+
+```powershell
+# Run against an already-running app and keep trace IDs grouped by a readable prefix.
+.\scripts\test-tools.ps1 -SkipStart -Port 3000 -RunId tools-manual-001
+
+# Reproduce Unix-style /tmp path handling separately from the default native-temp run.
+.\scripts\test-tools.ps1 -SkipStart -Port 3000 -RunId tools-tmp-path-001 -UseUnixTmpPathStress
+
+# Force a specific scratch path.
+.\scripts\test-tools.ps1 -SkipStart -Port 3000 -TestDir "$env:TEMP\guardian-tools-manual"
+
+# Validate generated harness identity/path without starting the app or sending requests.
+.\scripts\test-tools.ps1 -RunId tools-preflight-001 -PreflightOnly
+```
+
+Treat this suite as the Intent Gateway/tool-discovery lane, not the deterministic tool-contract lane. For product bugs, pair failures with trace rows by request ID before changing routing, prompts, or tool policy.
+
 ### Focused Security Suites
 
 ```powershell
