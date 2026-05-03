@@ -1213,6 +1213,142 @@ describe('direct reasoning mode', () => {
     }), expect.any(Object));
   });
 
+  it('preserves repo-root file reads in direct reasoning tool args', async () => {
+    const executeTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        path: 'S:\\Development\\GuardianAgent\\package.json',
+        bytes: 64,
+        truncated: false,
+        content: '{ "name": "guardianagent", "scripts": { "test": "vitest run" } }',
+      },
+    }));
+
+    await executeDirectReasoningToolCall({
+      toolCall: {
+        id: 'call-root-read',
+        name: 'fs_read',
+        arguments: JSON.stringify({ path: 'package.json' }),
+      },
+      input: {
+        message: 'read the contents of package.json',
+        gateway: gateway({
+          operation: 'read',
+          resolvedContent: 'read the contents of package.json',
+        }),
+        selectedExecutionProfile: profile(),
+        workspaceRoot: 'S:/Development/GuardianAgent',
+      },
+      deps: {
+        chat: vi.fn(),
+        executeTool,
+      },
+      turn: 1,
+    });
+
+    expect(executeTool).toHaveBeenCalledWith('fs_read', expect.objectContaining({
+      path: 'package.json',
+    }), expect.any(Object));
+  });
+
+  it('does not expand a successful direct read request into unrelated repository search', async () => {
+    let explorationCalls = 0;
+    let synthesisPrompt = '';
+    const chat = vi.fn(async (messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> => {
+      if (options?.tools && options.tools.length > 0) {
+        explorationCalls += 1;
+        if (explorationCalls === 1) {
+          return chatResponse({
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'read-package',
+                name: 'fs_read',
+                arguments: JSON.stringify({ path: 'package.json' }),
+              },
+            ],
+          });
+        }
+        return chatResponse({ content: 'Read package.json.' });
+      }
+      synthesisPrompt = messages.map((message) => message.content).join('\n');
+      return chatResponse({
+        content: 'package.json declares the package name `guardianagent` and includes npm scripts.',
+      });
+    });
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      expect(toolName).toBe('fs_read');
+      expect(args.path).toBe('package.json');
+      return {
+        success: true,
+        status: 'succeeded',
+        output: {
+          path: 'S:\\Development\\GuardianAgent\\package.json',
+          bytes: 94,
+          truncated: false,
+          content: [
+            '{',
+            '  "name": "guardianagent",',
+            '  "scripts": { "test": "vitest run" },',
+            '  "dependencies": {}',
+            '}',
+          ].join('\n'),
+        },
+      };
+    });
+    const traceEntries: Array<Record<string, unknown>> = [];
+
+    const result = await handleDirectReasoningMode({
+      message: 'read the contents of package.json',
+      gateway: gateway({
+        operation: 'read',
+        summary: 'Read package.json',
+        resolvedContent: 'read the contents of package.json',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'direct',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Find relevant repo files and collect grounded repo evidence.',
+            expectedToolCategories: ['repo_inspect'],
+            required: true,
+          },
+          {
+            kind: 'read',
+            summary: 'Read package.json.',
+            expectedToolCategories: ['fs_read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return the requested file contents.',
+            required: true,
+          },
+        ],
+      }),
+      selectedExecutionProfile: profile({ preferredAnswerPath: 'direct', expectedContextPressure: 'low' }),
+      workspaceRoot: 'S:/Development/GuardianAgent',
+      maxTurns: 3,
+      maxTotalTimeMs: 120_000,
+    }, {
+      chat,
+      executeTool,
+      trace: {
+        record: (entry) => traceEntries.push(entry as unknown as Record<string, unknown>),
+      },
+    });
+
+    expect(result.content).toContain('guardianagent');
+    expect(synthesisPrompt).toContain('"name": "guardianagent"');
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(traceEntries.some((entry) => (
+      entry.stage === 'direct_reasoning_evidence_hydration'
+      && (entry.details as Record<string, unknown> | undefined)?.phase === 'required_search_skipped_read_evidence'
+    ))).toBe(true);
+  });
+
   it('canonicalizes nested top-level web paths for direct read and search tools', async () => {
     const executeTool = vi.fn(async () => ({
       success: true,

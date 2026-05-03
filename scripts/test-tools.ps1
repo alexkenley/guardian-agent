@@ -7,7 +7,7 @@
     Exercises every tool category by sending natural language prompts through
     POST /api/message (the LLM chat path). This tests whether tool descriptions
     are clear enough for the LLM to discover, select, and invoke the right tool
-    with correct arguments — the same path a real user takes.
+    with correct arguments - the same path a real user takes.
 
     Also tests the approval flow by switching between policy modes and
     approving/denying pending tool executions via the API.
@@ -45,6 +45,11 @@
     Print the generated harness identity and scratch path, then exit without
     starting the app or sending HTTP requests.
 
+.PARAMETER TimeoutResponseSec
+    Per-message HTTP timeout for LLM-path requests. Defaults to 300 seconds
+    because delegated discovery can legitimately outlive the old 120-second
+    client timeout.
+
 .EXAMPLE
     .\scripts\test-tools.ps1
 
@@ -66,16 +71,18 @@ param(
     [string]$RunId = $( if ($env:HARNESS_RUN_ID) { $env:HARNESS_RUN_ID } else { "tools-" + [guid]::NewGuid().ToString("N").Substring(0, 12) } ),
     [string]$TestDir = $( if ($env:HARNESS_TEST_DIR) { $env:HARNESS_TEST_DIR } else { "" } ),
     [switch]$UseUnixTmpPathStress,
-    [switch]$PreflightOnly
+    [switch]$PreflightOnly,
+    [int]$TimeoutResponseSec = $( if ($env:HARNESS_RESPONSE_TIMEOUT_SEC) { [int]$env:HARNESS_RESPONSE_TIMEOUT_SEC } else { 300 } )
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# ─── State ────────────────────────────────────────────────────
+# --- State ----------------------------------------------------
 $BaseUrl = "http://localhost:$Port"
 $TimeoutStartup = 30
-$TimeoutResponse = 120
+$TimeoutResponse = $TimeoutResponseSec
+$JobHistoryLimit = 200
 $AppProcess = $null
 $Pass = 0
 $Fail = 0
@@ -95,7 +102,7 @@ if (-not $TestDir) {
     }
 }
 
-# ─── Helpers ─────────────────────────────────────────────────
+# --- Helpers -------------------------------------------------
 function Write-Log($msg) { Write-Host "[tools] $msg" -ForegroundColor Cyan }
 function Write-Pass($name) {
     Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host $name
@@ -108,6 +115,14 @@ function Write-Fail($name, $reason) {
 function Write-Skip($name, $reason) {
     Write-Host "  SKIP " -ForegroundColor Yellow -NoNewline; Write-Host "$name - $reason"
     $script:Skip++; $script:Results += "SKIP: $name - $reason"
+}
+
+function First-NonEmpty {
+    param([object[]]$Values)
+    foreach ($value in $Values) {
+        if ($null -ne $value -and "$value".Trim().Length -gt 0) { return $value }
+    }
+    return $null
 }
 
 function New-HarnessSlug {
@@ -213,7 +228,7 @@ function Test-NotContains {
 }
 
 function Get-RecentJobs {
-    param([int]$Limit = 20)
+    param([int]$Limit = $script:JobHistoryLimit)
     try {
         $state = Invoke-RestMethod -Uri "$BaseUrl/api/tools?limit=$Limit" `
             -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 5
@@ -224,7 +239,7 @@ function Get-RecentJobs {
 
 function Test-ToolWasCalled {
     param([string]$ToolPattern, [string]$Name, $JobsBefore)
-    $jobsAfter = Get-RecentJobs
+    $jobsAfter = Get-RecentJobs -Limit $script:JobHistoryLimit
     # Find jobs that appeared after the prompt (not in the before snapshot)
     $beforeIds = @()
     if ($JobsBefore) { $beforeIds = $JobsBefore | ForEach-Object { $_.id } }
@@ -276,7 +291,7 @@ function Invoke-ApprovalDecision {
     catch { return @{ success = $false; error = $_.Exception.Message } }
 }
 
-# ─── Start the app ────────────────────────────────────────────
+# --- Start the app --------------------------------------------
 if (-not $SkipStart -and -not $PreflightOnly) {
     $existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "src[/\\]index\.ts|dist[/\\]index\.js" }
@@ -377,6 +392,7 @@ else {
 Write-Log "Harness run id: $RunId"
 Write-Log "Harness user id: $HarnessUserId"
 Write-Log "Scratch path: $TestDir"
+Write-Log "Message timeout: ${TimeoutResponse}s"
 if ($UseUnixTmpPathStress) {
     Write-Log "Unix-style /tmp path stress mode is enabled"
 }
@@ -385,7 +401,7 @@ if ($PreflightOnly) {
     exit 0
 }
 
-# ─── Cleanup on exit ─────────────────────────────────────────
+# --- Cleanup on exit -----------------------------------------
 $cleanupBlock = {
     if ($script:AppProcess -and -not $script:AppProcess.HasExited) {
         if ($script:Keep) {
@@ -402,7 +418,7 @@ $cleanupBlock = {
 
 try {
 
-# ─── LLM Provider Info ───────────────────────────────────────
+# --- LLM Provider Info ---------------------------------------
 Write-Host ""
 try {
     $providers = Invoke-RestMethod -Uri "$BaseUrl/api/providers" `
@@ -410,7 +426,7 @@ try {
     if ($providers -and $providers.Count -gt 0) {
         foreach ($p in $providers) {
             $locality = if ($p.locality) { $p.locality } else { "unknown" }
-            Write-Log "LLM Provider: $($p.name) ($($p.type)) — model: $($p.model), locality: $locality"
+            Write-Log "LLM Provider: $($p.name) ($($p.type)) - model: $($p.model), locality: $locality"
         }
     }
     else {
@@ -421,9 +437,9 @@ catch {
     Write-Log "LLM Provider: could not query /api/providers"
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # Set autonomous mode + sandbox for tool exercise
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 $null = Invoke-ToolPolicy @{
     mode = "autonomous"
     sandbox = @{
@@ -434,9 +450,9 @@ $null = Invoke-ToolPolicy @{
 }
 Write-Pass "setup: autonomous policy + sandbox for tool exercise"
 
-# ═══════════════════════════════════════════════════════════════
-# TOOL DISCOVERY — can the LLM find tools via find_tools?
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# TOOL DISCOVERY - can the LLM find tools via find_tools?
+# ===============================================================
 Write-Host ""
 Write-Log "=== Tool Discovery (find_tools) ==="
 
@@ -466,9 +482,9 @@ if (Test-ValidResponse $resp "discovery: automation tools") {
         "discovery: mentions task/workflow tools")
 }
 
-# ═══════════════════════════════════════════════════════════════
-# FILESYSTEM — read operations
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# FILESYSTEM - read operations
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Filesystem: Read Operations ==="
@@ -496,14 +512,16 @@ Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
 $resp = Send-Message "read the contents of package.json"
 if (Test-ValidResponse $resp "fs_read: package.json") {
-    [void](Test-Contains $resp "content" "name|version|dependencies|guardian" `
-        "fs_read: shows package.json content")
+    [void](Test-Contains $resp "content" "guardianagent" `
+        "fs_read: shows package name")
+    [void](Test-Contains $resp "content" "scripts|dependencies|devDependencies" `
+        "fs_read: shows package metadata")
     [void](Test-ToolWasCalled "fs_read" "fs_read: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
-# FILESYSTEM — write operations
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# FILESYSTEM - write operations
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Filesystem: Write Operations ==="
@@ -563,9 +581,9 @@ if (Test-ValidResponse $resp "doc_create: create markdown doc") {
     [void](Test-ToolWasCalled "doc_create|fs_write" "doc_create: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SHELL — safe command execution
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SHELL - safe command execution
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Shell Tool ==="
@@ -595,15 +613,15 @@ if (Test-ValidResponse $resp "shell_safe: git log") {
     [void](Test-ToolWasCalled "shell_safe" "shell_safe: git allowed" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # SYSTEM TOOLS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== System Tools ==="
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "show me the system information — OS, hostname, CPU, memory"
+$resp = Send-Message "show me the system information - OS, hostname, CPU, memory"
 if (Test-ValidResponse $resp "sys_info: system info") {
     [void](Test-ToolWasCalled "sys_info" "sys_info: tool was called" $jobs0)
 }
@@ -624,9 +642,9 @@ if (Test-ValidResponse $resp "sys_processes: process list") {
     [void](Test-ToolWasCalled "sys_processes|find_tools|shell_safe" "sys_processes: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # NETWORK TOOLS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Network Tools ==="
@@ -669,9 +687,9 @@ if (Test-ValidResponse $resp "net_connections: active connections") {
     [void](Test-ToolWasCalled "net_connections" "net_connections: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # MEMORY TOOLS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Memory Tools ==="
@@ -698,9 +716,9 @@ if (Test-ValidResponse $resp "memory_search: search memory") {
     [void](Test-ToolWasCalled "memory_search" "memory_search: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # WEB TOOLS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Web Tools ==="
@@ -713,9 +731,9 @@ if (Test-ValidResponse $resp "web_fetch: fetch health endpoint") {
     [void](Test-ToolWasCalled "web_fetch|web_search|find_tools" "web_fetch: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # THREAT INTEL TOOLS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Threat Intel Tools ==="
@@ -734,9 +752,9 @@ if (Test-ValidResponse $resp "intel_findings: list findings") {
     [void](Test-ToolWasCalled "intel_findings|find_tools" "intel_findings: tool was called" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # AUTOMATION TOOLS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Automation Tools ==="
@@ -755,9 +773,9 @@ if (Test-ValidResponse $resp "automation_list: starter examples") {
     [void](Test-ToolWasCalled "automation_list" "automation_list: tool was called for starter examples" $jobs0)
 }
 
-# ═══════════════════════════════════════════════════════════════
-# APPROVAL FLOW — switch to approve_by_policy, test approve/deny
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# APPROVAL FLOW - switch to approve_by_policy, test approve/deny
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
 Write-Log "=== Approval Flow ==="
@@ -783,7 +801,7 @@ if (Test-ValidResponse $resp "approval: read_only auto-executes") {
 
 Start-Sleep -Seconds 3
 
-# Mutating tool should hit pending_approval — but the LLM flow handles this
+# Mutating tool should hit pending_approval - but the LLM flow handles this
 # internally. We check for a pending approval via the tools API instead.
 # First, set fs_write to 'manual' to guarantee approval is needed
 [void](Invoke-ToolPolicy @{ toolPolicies = @{ fs_write = "manual" } })
@@ -791,7 +809,7 @@ Write-Pass "approval: fs_write set to manual"
 
 Start-Sleep -Seconds 2
 
-# Ask the LLM to write — this should create a pending approval
+# Ask the LLM to write - this should create a pending approval
 $jobs0 = Get-RecentJobs
 $resp = Send-Message "write a file at $TestDir/approval-test.txt with the content: testing approval flow"
 # The LLM response may mention that approval is needed
@@ -816,7 +834,7 @@ try {
             Write-Pass "approval: deny decision accepted"
         }
         else {
-            Write-Fail "approval: deny" ($decision.message ?? $decision.error ?? "unknown error")
+            Write-Fail "approval: deny" (First-NonEmpty @($decision.message, $decision.error, "unknown error"))
         }
     }
     else {
@@ -845,7 +863,7 @@ Start-Sleep -Seconds 2
 
 $jobs0 = Get-RecentJobs
 $resp = Send-Message "delete the file $TestDir/hello.txt"
-# Should fail — either the LLM reports it was blocked, or the tool returns failure
+# Should fail - either the LLM reports it was blocked, or the tool returns failure
 if ($resp.content) {
     Write-Pass "approval: deny-policy response received"
     # Verify the tool was denied in job history
@@ -862,9 +880,9 @@ else {
     Write-Pass "approval: response blocked (tool denied)"
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # CLEANUP: Restore policy, remove test files
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Cleanup ==="
@@ -876,9 +894,9 @@ Invoke-ToolPolicy @{
 } | Out-Null
 Write-Pass "cleanup: policy restored to defaults"
 
-# ═══════════════════════════════════════════════════════════════
-# JOB HISTORY — verify tool activity was tracked
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# JOB HISTORY - verify tool activity was tracked
+# ===============================================================
 Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Job History Verification ==="
@@ -905,7 +923,7 @@ catch {
     Write-Fail "job history" $_.Exception.Message
 }
 
-# ─── Summary ─────────────────────────────────────────────────
+# --- Summary -------------------------------------------------
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  PASS: $Pass  " -ForegroundColor Green -NoNewline
@@ -924,7 +942,7 @@ if ($Fail -gt 0) {
 }
 
 Write-Log "Full app log: $LogFile"
-Write-Log "Trace correlation: search intent-routing.jsonl for requestId prefix '$RunId-'"
+Write-Log "Trace correlation: search intent-routing.jsonl for requestId prefix $($RunId)-"
 
 } finally {
     & $cleanupBlock

@@ -241,6 +241,9 @@ Useful options:
 
 # Validate generated harness identity/path without starting the app or sending requests.
 .\scripts\test-tools.ps1 -RunId tools-preflight-001 -PreflightOnly
+
+# Increase the per-message timeout for slower delegated discovery providers.
+.\scripts\test-tools.ps1 -SkipStart -Port 3000 -RunId tools-slow-discovery-001 -TimeoutResponseSec 420
 ```
 
 Treat this suite as the Intent Gateway/tool-discovery lane, not the deterministic tool-contract lane. For product bugs, pair failures with trace rows by request ID before changing routing, prompts, or tool policy.

@@ -185,6 +185,7 @@ const DIRECT_REASONING_MAX_EVIDENCE_EXPANSION_READS_PER_ROUND = 8;
 const REPO_FILE_ROOTS = ['src', 'lib', 'pkg', 'internal', 'web', 'native', 'docs', 'scripts'];
 const DIRECT_REASONING_IMPLEMENTATION_SEARCH_ROOTS = ['src', 'web', 'native', 'scripts'];
 const REPO_FILE_PREFIX_PATTERN = `(?:${REPO_FILE_ROOTS.join('|')})`;
+const ROOT_REPO_FILE_PATTERN = /^[A-Za-z0-9][\w.-]*\.(?:json|md|yml|yaml|toml|lock|txt|js|mjs|cjs|ts|tsx|css|html)$/i;
 const CANONICAL_NON_SRC_REPO_ROOTS = ['web', 'native', 'docs', 'scripts'];
 
 export function shouldHandleDirectReasoningMode(input: {
@@ -256,6 +257,22 @@ function directReasoningRequiresToolEvidence(input: DirectReasoningInput): boole
 
 function directReasoningHasUsefulEvidence(evidence: DirectReasoningEvidenceEntry[]): boolean {
   return evidence.some((entry) => entry.references.length > 0 || entry.snippets.length > 0);
+}
+
+function directReasoningHasUsefulReadEvidence(evidence: DirectReasoningEvidenceEntry[]): boolean {
+  return evidence.some((entry) => (
+    entry.toolName === 'fs_read'
+    && entry.success !== false
+    && (entry.references.length > 0 || entry.snippets.length > 0)
+  ));
+}
+
+function directReasoningShouldTreatReadEvidenceAsComplete(
+  input: DirectReasoningInput,
+  evidence: DirectReasoningEvidenceEntry[],
+): boolean {
+  return input.gateway?.decision.operation === 'read'
+    && directReasoningHasUsefulReadEvidence(evidence);
 }
 
 export function buildDirectReasoningToolSet(): ToolDefinition[] {
@@ -768,7 +785,9 @@ export async function executeDirectReasoningLoop(input: {
     turn: Math.max(1, turns),
   });
   toolCallCount += requiredSearchEvidenceToolCalls;
+  const readEvidenceCompletesRequest = directReasoningShouldTreatReadEvidenceAsComplete(input.input, evidence);
   const shouldHydrateEvidence = directReasoningHasUsefulEvidence(evidence)
+    && !readEvidenceCompletesRequest
     && (
       !finalContent.trim()
       || requiredSearchEvidenceToolCalls > 0
@@ -1469,6 +1488,14 @@ async function ensureDirectReasoningRequiredSearchEvidence(input: {
   if (!directReasoningRequiresSearchEvidence(input.input)) {
     return 0;
   }
+  if (directReasoningShouldTreatReadEvidenceAsComplete(input.input, input.evidence)) {
+    recordDirectReasoningTrace(input.deps, input.input, 'direct_reasoning_evidence_hydration', {
+      phase: 'required_search_skipped_read_evidence',
+      turn: input.turn,
+      evidenceCount: input.evidence.length,
+    });
+    return 0;
+  }
   if (input.evidence.some((entry) => entry.toolName === 'fs_search')) {
     return 0;
   }
@@ -1973,7 +2000,11 @@ function buildDirectReasoningEvidenceEntry(
   }
 
   if (toolName === 'fs_read' && typeof output.content === 'string') {
-    const path = stringValue(output.path) || stringValue(args.path) || 'unknown';
+    const path = normalizeDirectReasoningEvidenceFileReference(stringValue(output.path))
+      ?? normalizeDirectReasoningEvidenceFileReference(stringValue(args.path))
+      ?? stringValue(output.path)
+      ?? stringValue(args.path)
+      ?? 'unknown';
     return {
       ...base,
       summary: `Read ${path} (${stringifyCompact(output.bytes ?? output.content.length)} bytes${output.truncated ? ', truncated' : ''}).`,
@@ -2056,8 +2087,8 @@ function createDirectReasoningToolArtifact(input: {
   }
 
   if (input.toolName === 'fs_read' && typeof output.content === 'string') {
-    const readPath = normalizeRepoFileReference(stringValue(output.path))
-      ?? normalizeRepoFileReference(stringValue(input.args.path))
+    const readPath = normalizeDirectReasoningEvidenceFileReference(stringValue(output.path))
+      ?? normalizeDirectReasoningEvidenceFileReference(stringValue(input.args.path))
       ?? stringValue(output.path)
       ?? stringValue(input.args.path)
       ?? 'unknown';
@@ -2453,7 +2484,7 @@ function collectDirectReasoningFileSummaries(evidence: DirectReasoningEvidenceEn
     const isSearchEvidence = entry.toolName === 'fs_search';
     const isListEvidence = entry.toolName === 'fs_list';
     for (const reference of entry.references) {
-      const file = normalizeRepoFileReference(reference);
+      const file = normalizeDirectReasoningEvidenceFileReference(reference);
       if (!file) continue;
       const summary = ensureSummary(file);
       summary.referenceCount += 1;
@@ -3005,13 +3036,14 @@ function selectDirectReasoningSynthesisArtifacts(
   const summaryScores = new Map(coverageSummaries
     .map((summary) => [summary.file, directReasoningFallbackFileScore(summary)]));
   const prioritizeSearchResults = directReasoningShouldPrioritizeSearchResultArtifacts(input);
+  const prioritizeReadResults = input.gateway?.decision.operation === 'read';
   const candidates = artifacts
     .filter((artifact) => artifact.artifactType !== 'EvidenceLedger' && artifact.artifactType !== 'SynthesisDraft')
     .map((artifact, index) => ({
       artifact,
       index,
       coverageFiles: directReasoningArtifactCoverageFiles(artifact, summaryScores),
-      score: directReasoningSynthesisArtifactScore(artifact, summaryScores, prioritizeSearchResults),
+      score: directReasoningSynthesisArtifactScore(artifact, summaryScores, prioritizeSearchResults, prioritizeReadResults),
     }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => (
@@ -3022,6 +3054,20 @@ function selectDirectReasoningSynthesisArtifacts(
 
   const selected: typeof candidates = [];
   const coveredFiles = new Set<string>();
+  if (prioritizeReadResults) {
+    for (const candidate of candidates) {
+      if (selected.length >= MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS) break;
+      if (
+        candidate.artifact.artifactType === 'FileReadSet'
+        && !selected.some((entry) => entry.artifact.artifactId === candidate.artifact.artifactId)
+      ) {
+        selected.push(candidate);
+        for (const file of candidate.coverageFiles) {
+          coveredFiles.add(file);
+        }
+      }
+    }
+  }
   if (prioritizeSearchResults) {
     for (const candidate of candidates) {
       if (selected.length >= MAX_DIRECT_REASONING_SYNTHESIS_ARTIFACTS) break;
@@ -3058,14 +3104,19 @@ function directReasoningSynthesisArtifactScore(
   artifact: ExecutionArtifact,
   summaryScores: Map<string, number>,
   prioritizeSearchResults = false,
+  prioritizeReadResults = false,
 ): number {
   const coverageFiles = directReasoningArtifactCoverageFiles(artifact, summaryScores);
   const refScore = coverageFiles.reduce((score, ref) => Math.max(score, summaryScores.get(ref) ?? 0), 0);
-  if (refScore <= 0 && !(prioritizeSearchResults && artifact.artifactType === 'SearchResultSet')) {
+  if (
+    refScore <= 0
+    && !(prioritizeSearchResults && artifact.artifactType === 'SearchResultSet')
+    && !(prioritizeReadResults && artifact.artifactType === 'FileReadSet')
+  ) {
     return 0;
   }
   const typeScore = artifact.artifactType === 'FileReadSet'
-    ? 1_000
+    ? (prioritizeReadResults ? 1_600 : 1_000)
     : artifact.artifactType === 'SearchResultSet'
       ? (prioritizeSearchResults ? 1_200 : 60)
       : 0;
@@ -3250,14 +3301,14 @@ function normalizeSearchMatchReference(
   const raw = stringValue(match.relativePath) || stringValue(match.path);
   const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+/, '');
   if (!normalized) return '';
-  const repoFile = normalizeRepoFileReference(normalized);
+  const repoFile = normalizeDirectReasoningEvidenceFileReference(normalized);
   if (repoFile) return repoFile;
   if (isAbsoluteFilesystemPath(raw)) return normalized;
   const searchRoot = normalizeRepoDirectoryReference(stringValue(args.path));
   if (!searchRoot || normalized.startsWith(`${searchRoot}/`)) {
     return normalized;
   }
-  return normalizeRepoFileReference(`${searchRoot}/${normalized}`) ?? `${searchRoot}/${normalized}`;
+  return normalizeDirectReasoningEvidenceFileReference(`${searchRoot}/${normalized}`) ?? `${searchRoot}/${normalized}`;
 }
 
 function isAbsoluteFilesystemPath(value: string): boolean {
@@ -3356,7 +3407,7 @@ function normalizeDirectReasoningListEntry(directory: string, entry: string): st
 }
 
 function extractFilePathFromSnippet(snippet: string): string | null {
-  return normalizeRepoFileReference(snippet);
+  return normalizeDirectReasoningEvidenceFileReference(snippet);
 }
 
 function normalizeRepoFileReference(value: string): string | null {
@@ -3365,6 +3416,21 @@ function normalizeRepoFileReference(value: string): string | null {
   const pattern = new RegExp(`(?:^|/)(${REPO_FILE_PREFIX_PATTERN}/[\\w./-]+\\.[A-Za-z0-9]+)(?=$|[:\\s)\\]},"'])`);
   const match = normalized.match(pattern);
   return match?.[1] ? canonicalizeRepoReference(match[1]) : null;
+}
+
+function normalizeRepoRootFileReference(value: string): string | null {
+  const normalized = value.trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/^\/+/, '')
+    .replace(/[:\s)\\]},"'].*$/g, '');
+  if (!normalized || normalized.includes('/')) return null;
+  return ROOT_REPO_FILE_PATTERN.test(normalized) ? normalized : null;
+}
+
+function normalizeDirectReasoningEvidenceFileReference(value: string): string | null {
+  return normalizeRepoFileReference(value) ?? normalizeRepoRootFileReference(value);
 }
 
 function normalizeRepoDirectoryReference(value: string): string | null {
@@ -3398,6 +3464,12 @@ function normalizeDirectReasoningReadReference(rawPath: string, input: DirectRea
   const direct = normalizeRepoFileReference(rawPath);
   if (direct) return direct;
 
+  const workspaceRelative = normalizeWorkspaceRelativeFileReference(rawPath, input);
+  if (workspaceRelative) return workspaceRelative;
+
+  const rootFile = normalizeRepoRootFileReference(rawPath);
+  if (rootFile) return rootFile;
+
   const defaultRoot = selectDefaultDirectReasoningSearchPath(input);
   if (defaultRoot !== '.') {
     const fromDefault = normalizeRepoFileReference(`${defaultRoot}/${rawPath}`);
@@ -3407,6 +3479,25 @@ function normalizeDirectReasoningReadReference(rawPath: string, input: DirectRea
   for (const root of DIRECT_REASONING_IMPLEMENTATION_SEARCH_ROOTS) {
     const candidate = normalizeRepoFileReference(`${root}/${rawPath}`);
     if (candidate) return candidate;
+  }
+  return null;
+}
+
+function normalizeWorkspaceRelativeFileReference(rawPath: string, input: DirectReasoningInput): string | null {
+  const normalizedPath = normalizePathForComparison(rawPath);
+  if (!normalizedPath) return null;
+  const workspaceRoots = [
+    input.workspaceRoot,
+    stringValue(input.toolRequest?.codeContext?.workspaceRoot),
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  for (const root of workspaceRoots) {
+    const normalizedRoot = normalizePathForComparison(root);
+    if (!normalizedRoot || !normalizedPath.startsWith(`${normalizedRoot}/`)) {
+      continue;
+    }
+    const relative = normalizedPath.slice(normalizedRoot.length + 1);
+    const repoFile = normalizeRepoFileReference(relative) ?? normalizeRepoRootFileReference(relative);
+    if (repoFile) return repoFile;
   }
   return null;
 }
