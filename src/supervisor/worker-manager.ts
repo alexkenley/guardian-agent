@@ -365,7 +365,33 @@ export class WorkerManager {
     this.reapInterval = setInterval(() => this.reapIdleWorkers(), 60_000);
   }
 
-  private buildCodeSessionRegistrySection(input: WorkerMessageRequest): PromptAssemblyAdditionalSection | null {
+  private shouldAttachCodeSessionRegistry(
+    input: WorkerMessageRequest,
+    intentDecision?: IntentGatewayDecision,
+  ): boolean {
+    const codeContext = input.message.metadata?.codeContext as ToolExecutionRequest['codeContext'] | undefined;
+    if (input.delegation?.codeSessionId || codeContext?.sessionId) {
+      return true;
+    }
+    const decision = intentDecision ?? readPreRoutedIntentGatewayMetadata(input.message.metadata)?.decision;
+    if (
+      decision?.route === 'coding_task'
+      || decision?.route === 'filesystem_task'
+      || decision?.route === 'coding_session_control'
+      || decision?.requiresRepoGrounding === true
+    ) {
+      return true;
+    }
+    return input.activeSkills?.some((skill) => skill.id === 'coding-workspace') ?? false;
+  }
+
+  private buildCodeSessionRegistrySection(
+    input: WorkerMessageRequest,
+    intentDecision?: IntentGatewayDecision,
+  ): PromptAssemblyAdditionalSection | null {
+    if (!this.shouldAttachCodeSessionRegistry(input, intentDecision)) {
+      return null;
+    }
     const toolExecutor = this.tools as ToolExecutor & {
       buildCodeSessionRegistryAdditionalSection?: (
         request?: Partial<import('../tools/types.js').ToolExecutionRequest>,
@@ -1244,7 +1270,7 @@ export class WorkerManager {
       const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
       let additionalSections = appendPromptAdditionalSection(
         input.additionalSections ?? [],
-        this.buildCodeSessionRegistrySection(input),
+        this.buildCodeSessionRegistrySection(input, effectiveIntentDecision ?? undefined),
       );
       let effectiveInput = input;
       if (preRoutedGateway && effectiveIntentDecision && effectiveIntentDecision !== intentDecision) {

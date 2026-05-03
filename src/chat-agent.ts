@@ -1024,10 +1024,24 @@ interface DegradedDirectIntentResponseInput {
       message,
       scopedCodeSession?.session,
     );
-    const referencedCodeSessionsSection = this.buildReferencedCodeSessionsSection(
-      scopedCodeSession?.session,
-      referencedCodeSessions,
-    );
+    const buildReferencedCodeSessionsSectionForPrompt = (
+      runtimeSkills: readonly ResolvedSkill[],
+      gateway?: IntentGatewayRecord | null,
+    ): PromptAssemblyAdditionalSection | undefined => {
+      const decision = gateway?.decision;
+      const codeGroundedTurn = decision?.route === 'coding_task'
+        || decision?.route === 'filesystem_task'
+        || decision?.route === 'coding_session_control'
+        || decision?.requiresRepoGrounding === true
+        || runtimeSkills.some((skill) => skill.id === 'coding-workspace');
+      if (!scopedCodeSession?.session && !codeGroundedTurn) {
+        return undefined;
+      }
+      return this.buildReferencedCodeSessionsSection(
+        scopedCodeSession?.session,
+        referencedCodeSessions,
+      );
+    };
     let preResolvedSkills: ResolvedSkill[] = [];
     const resolveSkillsForCurrentContext = (options?: {
       gateway?: IntentGatewayRecord | null;
@@ -1723,7 +1737,10 @@ interface DegradedDirectIntentResponseInput {
           skillPromptMaterial,
           earlyGateway?.decision,
           selectedExecutionProfile,
-          referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
+          (() => {
+            const section = buildReferencedCodeSessionsSectionForPrompt(activeSkills, earlyGateway);
+            return section ? [section] : undefined;
+          })(),
         );
     const baseSystemPrompt = enrichedSystemPrompt;
     enrichedSystemPrompt = this.buildAssembledSystemPrompt({
@@ -2049,7 +2066,10 @@ interface DegradedDirectIntentResponseInput {
           workerSkillPromptMaterial,
           earlyGateway?.decision,
           workerExecutionProfile,
-          referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
+          (() => {
+            const section = buildReferencedCodeSessionsSectionForPrompt(preResolvedSkills, earlyGateway);
+            return section ? [section] : undefined;
+          })(),
         );
         const workerContextAssemblyMeta = buildContextDiagnostics({
           promptKnowledge,

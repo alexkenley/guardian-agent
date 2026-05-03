@@ -1458,6 +1458,128 @@ describe('WorkerManager', () => {
     manager.shutdown();
   });
 
+  it('omits the code session registry for non-code provider status workers', async () => {
+    const { WorkerManager } = await import('./worker-manager.js');
+
+    const buildRegistrySection = vi.fn(() => ({
+      section: 'Code Session Registry',
+      content: '<code-session-registry>\ncurrentSessionId: code-1\n</code-session-registry>',
+      mode: 'metadata',
+      itemCount: 2,
+    }));
+    const intentRoutingTrace = {
+      record: vi.fn(),
+    };
+
+    const manager = new WorkerManager(
+      {
+        listAlwaysLoadedDefinitions: () => [],
+        buildCodeSessionRegistryAdditionalSection: buildRegistrySection,
+      } as never,
+      {
+        getFallbackProviderConfig: () => undefined,
+        auditLog: { record: vi.fn() },
+      } as never,
+      {
+        workerEntryPoint: 'src/worker/worker-entry.ts',
+        workerMaxMemoryMb: 2048,
+        workerIdleTimeoutMs: 300_000,
+        workerShutdownGracePeriodMs: 10,
+        capabilityTokenTtlMs: 600_000,
+        capabilityTokenMaxToolCalls: 0,
+      } as never,
+      undefined,
+      {
+        intentRoutingTrace,
+      },
+    );
+
+    await manager.handleMessage({
+      sessionId: 'tester:web',
+      agentId: 'local',
+      userId: 'tester',
+      grantedCapabilities: [],
+      message: {
+        id: 'm-provider-status',
+        userId: 'tester',
+        principalId: 'tester',
+        principalRole: 'owner',
+        surfaceId: 'web-chat',
+        channel: 'web',
+        content: 'Check whether Google Workspace and Microsoft 365 are connected. Do not read content.',
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'test-model',
+          latencyMs: 1,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'low',
+            operation: 'inspect',
+            summary: 'Check provider status.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            simpleVsComplex: 'complex',
+            plannedSteps: [
+              {
+                kind: 'read',
+                summary: 'Check connector authentication status.',
+                expectedToolCategories: ['gws_status', 'm365_status'],
+                required: true,
+              },
+              {
+                kind: 'answer',
+                summary: 'Return status summary.',
+                required: true,
+                dependsOn: ['step_1'],
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+      },
+      systemPrompt: 'system',
+      history: [],
+      knowledgeBases: [],
+      activeSkills: [
+        {
+          id: 'google-workspace',
+          name: 'Google Workspace',
+          description: 'Google status.',
+          summary: 'Google status.',
+          sourcePath: '/skills/google-workspace',
+          score: 10,
+        },
+      ],
+      additionalSections: [{
+        section: 'Existing Context',
+        content: 'existing',
+      }],
+      toolContext: '',
+      runtimeNotices: [],
+    });
+
+    expect(buildRegistrySection).not.toHaveBeenCalled();
+    const messageHandle = workerNotifications.find((entry) => entry.method === 'message.handle');
+    expect(messageHandle?.params.additionalSections).toEqual([{
+      section: 'Existing Context',
+      content: 'existing',
+    }]);
+    const runningTrace = intentRoutingTrace.record.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.stage === 'delegated_worker_running');
+    expect(runningTrace?.details).not.toHaveProperty('codeSessionRegistryAttached');
+
+    manager.shutdown();
+  });
+
   it('spawns separate workers for the same surface session when the agent lane changes', async () => {
     const { WorkerManager } = await import('./worker-manager.js');
     const sandbox = await import('../sandbox/index.js');

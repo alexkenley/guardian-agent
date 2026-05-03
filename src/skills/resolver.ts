@@ -133,8 +133,13 @@ const TOOL_CATEGORY_HINTS: Record<string, string[]> = {
 };
 
 const REPO_PATH_HINT_PATTERN = /\b(?:src|web|docs|scripts|skills|policies|native|test|tests|dist|package\.json|tsconfig(?:\.[a-z0-9_-]+)?\.json)(?:[\\/][^\s:;,)\]}]+)?/i;
+const STRONG_REPO_PATH_HINT_PATTERN = /\b(?:(?:src|web|docs|scripts|skills|policies|native|test|tests|dist)[\\/][^\s:;,)\]}]+|package\.json|tsconfig(?:\.[a-z0-9_-]+)?\.json)\b/i;
 const CODE_FILE_HINT_PATTERN = /\b[^\s:;,)\]}]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yaml|yml|rs|py|sh|html|css|scss)\b/i;
 const FILE_GROUNDED_CODING_ACTION_PATTERN = /\b(review|regressions?|missing tests?|implementation plan|inspect|explain|patch|diff|pull request|pr|refactor|bugfix)\b/i;
+const LOCAL_WORKSPACE_CONTEXT_PATTERN = /\b(?:repo|repository|codebase|source code|local code|this workspace|current workspace|workspace\/repo|workspace files?)\b/i;
+const STATUS_ONLY_REQUEST_PATTERN = /\b(status|connected|connection|authenticated|auth|health|sync health|enabled|scopes|configured)\b/i;
+const CAMPAIGN_ACTION_PATTERN = /\b(campaign|outreach|bulk[-\s]?email|mailing[-\s]?list|import contacts|send campaign|dry run)\b/i;
+const MANAGED_PROVIDER_STATUS_TARGET_PATTERN = /\b(google workspace|microsoft 365|m365|gmail|outlook|drive|onedrive|calendar|contacts)\b/i;
 
 function bonusForRole(route: string | undefined, role: LoadedSkill['manifest']['role']): number {
   if (!route) return 0;
@@ -380,7 +385,8 @@ function scoreRepoGroundingHints(
   let score = 0;
   let specificity = 0;
   const hasRepoPathHint = REPO_PATH_HINT_PATTERN.test(input.content) || CODE_FILE_HINT_PATTERN.test(input.content);
-  if (input.codeSessionAttached) {
+  const routeAllowsCodeSessionHint = input.intentRoute === 'coding_task' || input.intentRoute === 'coding_session_control';
+  if (input.codeSessionAttached && routeAllowsCodeSessionHint) {
     score += 2;
     specificity += 4;
   }
@@ -401,6 +407,37 @@ function scoreRepoGroundingHints(
 
 function shouldSuppressForClarification(input: SkillResolutionInput): boolean {
   return input.intentResolution === 'needs_clarification' && !CLARIFICATION_TURN_RELATIONS.has(input.intentTurnRelation ?? '');
+}
+
+function shouldSuppressForStatusOnlyRequest(
+  manifest: LoadedSkill['manifest'],
+  normalizedContent: string,
+  explicitMentionScore: number,
+): boolean {
+  if (manifest.requiredManagedProvider) return false;
+  if (manifest.risk !== 'operational') return false;
+  if (explicitMentionScore > 0) return false;
+  const campaignOrOutreachSkill = [...(manifest.tags ?? []), ...(manifest.triggers?.keywords ?? [])]
+    .some((value) => CAMPAIGN_ACTION_PATTERN.test(value));
+  if (!campaignOrOutreachSkill) return false;
+  if (CAMPAIGN_ACTION_PATTERN.test(normalizedContent)) return false;
+  return STATUS_ONLY_REQUEST_PATTERN.test(normalizedContent);
+}
+
+function shouldSuppressCodingWorkspaceForProviderStatus(
+  manifest: LoadedSkill['manifest'],
+  content: string,
+  normalizedContent: string,
+  explicitMentionScore: number,
+): boolean {
+  if (manifest.id !== 'coding-workspace') return false;
+  if (explicitMentionScore > 0) return false;
+  if (!STATUS_ONLY_REQUEST_PATTERN.test(normalizedContent)) return false;
+  if (!MANAGED_PROVIDER_STATUS_TARGET_PATTERN.test(normalizedContent)) return false;
+  const hasRepoPathHint = STRONG_REPO_PATH_HINT_PATTERN.test(content)
+    || CODE_FILE_HINT_PATTERN.test(content)
+    || LOCAL_WORKSPACE_CONTEXT_PATTERN.test(normalizedContent);
+  return !hasRepoPathHint && !FILE_GROUNDED_CODING_ACTION_PATTERN.test(content);
 }
 
 function shouldKeepSkillForAmbiguousClarification(skill: LoadedSkill, input: SkillResolutionInput): boolean {
@@ -445,6 +482,11 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
   let score = 0;
   let specificity = 0;
   const keywords = manifest.triggers?.keywords ?? [];
+  const explicitMention = scoreExplicitSkillMention(manifest, normalizedContent);
+
+  if (shouldSuppressCodingWorkspaceForProviderStatus(manifest, input.content, normalizedContent, explicitMention.score)) {
+    return { score: 0, specificity: 0 };
+  }
 
   if (manifest.tags?.length) {
     for (const tag of manifest.tags) {
@@ -455,7 +497,9 @@ function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): { score: n
     }
   }
 
-  const explicitMention = scoreExplicitSkillMention(manifest, normalizedContent);
+  if (shouldSuppressForStatusOnlyRequest(manifest, normalizedContent, explicitMention.score)) {
+    return { score: 0, specificity: 0 };
+  }
   score += explicitMention.score;
   specificity += explicitMention.specificity;
 

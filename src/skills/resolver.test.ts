@@ -783,6 +783,22 @@ This should not load.
     expect(resolved[0]?.id).toBe('google-workspace');
   });
 
+  it('keeps provider status checks from activating campaign skills through generic contacts wording', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 5 });
+
+    const resolvedIds = resolver.resolve(makeInput({
+      content: 'Check whether Google Workspace and Microsoft 365 are connected using status-only tools. Mention Contacts sync health but do not read content.',
+      intentRoute: 'workspace_task',
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    })).map((skill) => skill.id);
+
+    expect(resolvedIds).toContain('google-workspace');
+    expect(resolvedIds).toContain('microsoft-365');
+    expect(resolvedIds).not.toContain('outreach-campaigns');
+  });
+
   it('keeps prior active skills sticky across clarification answers', async () => {
     const registry = new SkillRegistry();
     await registry.loadFromRoots([join(process.cwd(), 'skills')]);
@@ -862,5 +878,38 @@ This should not load.
     expect(resolvedIds).toContain('coding-backend-orchestration');
     expect(resolvedIds).toContain('coding-workspace');
     expect(resolved[0]?.id).toBe('coding-backend-orchestration');
+  });
+
+  it('does not activate coding-workspace from an attached code session alone for non-coding turns', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 5 });
+
+    const resolvedIds = resolver.resolve(makeInput({
+      content: 'Show me my Google Workspace connection status.',
+      codeSessionAttached: true,
+      intentRoute: 'workspace_task',
+      enabledManagedProviders: new Set(['gws']),
+    })).map((skill) => skill.id);
+
+    expect(resolvedIds).toContain('google-workspace');
+    expect(resolvedIds).not.toContain('coding-workspace');
+  });
+
+  it('suppresses coding-workspace for managed-provider status checks even when stale routing says coding_task', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 5 });
+
+    const resolvedIds = resolver.resolve(makeInput({
+      content: 'Check whether Google Workspace and Microsoft 365 are connected using status-only tools. Do not read mailbox, calendar, Drive, OneDrive, contacts, docs, sheets, or message contents.',
+      codeSessionAttached: true,
+      intentRoute: 'coding_task',
+      enabledManagedProviders: new Set(['gws', 'm365']),
+    })).map((skill) => skill.id);
+
+    expect(resolvedIds).toContain('google-workspace');
+    expect(resolvedIds).toContain('microsoft-365');
+    expect(resolvedIds).not.toContain('coding-workspace');
   });
 });

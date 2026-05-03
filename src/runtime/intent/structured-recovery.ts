@@ -364,19 +364,28 @@ export function normalizeIntentGatewayDecision(
   } as IntentGatewayDecision)
     ? 'filesystem_task' as const
     : null;
-  const effectiveRoute = structuredWritePlanRoute ?? route;
+  const structuredToolBackedAnswerRoute = route === 'unknown'
+    && !structuredWritePlanRoute
+    && hasExplicitToolBackedAnswerPlan(effectivePlannedSteps)
+    ? 'general_assistant' as const
+    : null;
+  const effectiveRoute = structuredWritePlanRoute ?? structuredToolBackedAnswerRoute ?? route;
   const readOnlyEvidenceOperation = deriveReadOnlyEvidenceOperation({
     route: effectiveRoute,
     operation,
     plannedSteps: effectivePlannedSteps,
     parsed,
   });
+  const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(effectiveRoute, effectivePlannedSteps);
   const effectiveOperation = structuredWritePlanRoute && operation === 'unknown'
     ? 'create'
+    : structuredToolBackedAnswerRoute && operation === 'unknown'
+      ? 'inspect'
+    : toolBackedAnswerPlan && operation === 'unknown'
+      ? 'inspect'
     : readOnlyEvidenceOperation
       ? readOnlyEvidenceOperation
     : operation;
-  const toolBackedAnswerPlan = requiresToolBackedAnswerPlan(effectiveRoute, effectivePlannedSteps);
   const structurallyDirectAnswer = isStructurallyDirectAssistantTurn({
     executionClass,
     requiresRepoGrounding: effectiveRequiresRepoGrounding,
@@ -437,6 +446,8 @@ export function normalizeIntentGatewayDecision(
   const provenance = {
     route: structuredWritePlanRoute
       ? 'derived.workload'
+      : structuredToolBackedAnswerRoute
+      ? 'derived.workload'
       : route === normalizedParsedRoute
       ? classifierSource
       : clarificationOwnsRoute
@@ -445,6 +456,10 @@ export function normalizeIntentGatewayDecision(
         ? 'repair.structured'
         : 'resolver.clarification',
     operation: structuredWritePlanRoute && operation === 'unknown'
+      ? 'derived.workload'
+      : structuredToolBackedAnswerRoute && operation === 'unknown'
+      ? 'derived.workload'
+      : toolBackedAnswerPlan && operation === 'unknown'
       ? 'derived.workload'
       : readOnlyEvidenceOperation
       ? 'derived.workload'
@@ -978,6 +993,7 @@ function isToolBackedEvidenceCategory(category: string): boolean {
     || isMemoryToolCategory(normalized)
     || isRepoEvidenceCategory(normalized)
     || isDocumentSearchEvidenceCategory(normalized)
+    || isProviderStatusEvidenceCategory(normalized)
     || isWebEvidenceCategory(normalized)
     || normalized === 'second_brain'
     || normalized.startsWith('second_brain_');
@@ -1063,6 +1079,14 @@ function isDocumentSearchEvidenceCategory(category: string): boolean {
     || normalized === 'doc_search_status'
     || normalized === 'document_search'
     || normalized === 'document_sources';
+}
+
+function isProviderStatusEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'gws_status'
+    || normalized === 'm365_status'
+    || normalized === 'vercel_status'
+    || normalized === 'whm_status';
 }
 
 function inferSecondBrainReadToolCategories(
@@ -1272,7 +1296,8 @@ function inferSynthesizedEvidenceToolCategories(
   if (/\b(?:memory|remembered|saved marker)\b/i.test(normalized)) {
     categories.push('memory');
   }
-  if (/\b(?:repo|repository|workspace|codebase|source code|local code)\b/i.test(normalized)) {
+  const mentionsLocalWorkspace = /\b(?:repo|repository|codebase|source code|local code|this workspace|current workspace|workspace\/repo|workspace files?|workspace for)\b/i.test(normalized);
+  if (mentionsLocalWorkspace) {
     categories.push('repo_inspect');
   }
   if (/\bhttps?:\/\/|\b(?:web|internet|online|website|page title)\b/i.test(normalized)) {
@@ -1297,8 +1322,8 @@ function inferSynthesizedEvidenceToolCategories(
     categories.push('m365_status');
   }
   if (
-    /\b(?:second brain|appointment|reminder|task list|notes?|contacts?|library)\b/i.test(normalized)
-    || (!mentionsProviderConnector && /\bcalendar\b/i.test(normalized))
+    /\b(?:second brain|appointment|reminder|task list|notes?|library)\b/i.test(normalized)
+    || (!mentionsProviderConnector && /\b(?:calendar|contacts?)\b/i.test(normalized))
   ) {
     categories.push('second_brain');
   }

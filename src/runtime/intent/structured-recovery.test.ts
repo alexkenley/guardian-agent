@@ -541,7 +541,7 @@ describe('normalizeIntentGatewayDecision', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',
       confidence: 'low',
-      operation: 'unknown',
+      operation: 'inspect',
       summary: 'No explicit user request provided; continuity context and execution refs present but awaiting actual task.',
       turnRelation: 'new_request',
       resolution: 'needs_clarification',
@@ -566,7 +566,7 @@ describe('normalizeIntentGatewayDecision', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',
       confidence: 'low',
-      operation: 'inspect',
+      operation: 'unknown',
       summary: 'User asked to classify a request but did not provide the actual request content to classify',
       turnRelation: 'new_request',
       resolution: 'needs_clarification',
@@ -1215,6 +1215,100 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.executionClass).toBe('tool_orchestration');
     expect(decision.requiresToolSynthesis).toBe(true);
     expect(decision.requiresRepoGrounding).toBe(true);
+  });
+
+  it('does not treat Google Workspace status checks as local repo evidence', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Check whether Google Workspace and Microsoft 365 are connected.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Check whether Google Workspace and Microsoft 365 are connected using status-only tools.',
+          expectedToolCategories: ['gws_status', 'm365_status'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return a concise status summary.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+      sourceContent: 'Check whether Google Workspace and Microsoft 365 are connected using status-only tools. Do not read mailbox, calendar, Drive, OneDrive, contacts, docs, sheets, or message contents. Return a concise status summary.',
+    });
+
+    const categories = decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? []) ?? [];
+    expect(categories).toEqual(expect.arrayContaining(['gws_status', 'm365_status']));
+    expect(categories).not.toContain('repo_inspect');
+    expect(categories).not.toContain('second_brain');
+    expect(decision.requiresRepoGrounding).toBe(false);
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.operation).toBe('inspect');
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('repairs unknown provider status plans to a tool-backed general route', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Unknown request.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Check connector authentication status.',
+          expectedToolCategories: ['gws_status', 'm365_status'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return a concise status summary.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.primary',
+      sourceContent: 'Check whether Google Workspace and Microsoft 365 are authenticated/connected. Do not read Gmail, Drive, Docs, Sheets, Calendar, Contacts, OneDrive, Outlook mail, or Teams content. Just report connection/status for Google and Microsoft 365.',
+    });
+
+    const categories = decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? []) ?? [];
+    expect(decision.route).toBe('general_assistant');
+    expect(decision.operation).toBe('inspect');
+    expect(categories).toEqual(expect.arrayContaining(['gws_status', 'm365_status']));
+    expect(categories).not.toContain('repo_inspect');
+    expect(categories).not.toContain('second_brain');
+    expect(decision.executionClass).toBe('tool_orchestration');
+    expect(decision.preferredTier).toBe('external');
+    expect(decision.requiresRepoGrounding).toBe(false);
+    expect(decision.requiresToolSynthesis).toBe(true);
+    expect(decision.preferredAnswerPath).toBe('tool_loop');
+    expect(decision.provenance?.route).toBe('derived.workload');
+    expect(decision.provenance?.operation).toBe('derived.workload');
   });
 
   it('normalizes run-labeled read-only evidence plans to read/search semantics', () => {
