@@ -291,8 +291,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
         properties: {},
       },
     },
-    async (_args, request) => {
-      context.guardAction(request, 'read_docs', { provider: 'google-native', surface: 'gws_status' });
+    async (_args, _request) => {
       const googleSvc = context.getGoogleService();
       const services = googleSvc?.getEnabledServices() ?? [];
       const authenticated = googleSvc?.isAuthenticated() ?? false;
@@ -339,8 +338,7 @@ export function registerBuiltinWorkspaceTools(context: WorkspaceToolRegistrarCon
         properties: {},
       },
     },
-    async (_args, request) => {
-      context.guardAction(request, 'read_docs', { provider: 'microsoft-native', surface: 'm365_status' });
+    async (_args, _request) => {
       const msService = context.getMicrosoftService();
       const services = msService?.getEnabledServices() ?? [];
       const authenticated = msService?.isAuthenticated() ?? false;

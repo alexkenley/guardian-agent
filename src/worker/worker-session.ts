@@ -3594,12 +3594,16 @@ export class BrokeredWorkerSession {
         preferAnswerFirst,
         allowAnswerFirstCompletionWithToolExecutionCorrection: preferAnswerFirst,
         answerFirstCorrectionPrompt,
-        answerFirstFallbackContent: buildAnswerFirstSkillFallbackResponse(params.activeSkills, answerFirstOriginalRequest),
-        answerFirstResponseIsSufficient: (content) => isAnswerFirstSkillResponseSufficient(
-          params.activeSkills,
-          content,
-          answerFirstOriginalRequest,
-        ),
+        answerFirstFallbackContent: preferAnswerFirst
+          ? buildAnswerFirstSkillFallbackResponse(params.activeSkills, answerFirstOriginalRequest)
+          : undefined,
+        answerFirstResponseIsSufficient: preferAnswerFirst
+          ? (content) => isAnswerFirstSkillResponseSufficient(
+            params.activeSkills,
+            content,
+            answerFirstOriginalRequest,
+          )
+          : undefined,
         toolExecutionCorrectionPrompt,
         plannedTask: taskContract.plan,
         onToolEvent: recordDelegatedToolEvent,

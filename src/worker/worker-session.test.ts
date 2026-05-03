@@ -554,6 +554,126 @@ describe('BrokeredWorkerSession automation control', () => {
     });
   });
 
+  it('does not use verification-skill fallback after evidence-required connector status tools succeed', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const sawStatusResults = messages.some((message) => (
+        message.role === 'tool'
+        && (
+          String(message.content ?? '').includes('gws_status')
+          || String(message.content ?? '').includes('m365_status')
+        )
+      ));
+      if (sawStatusResults) {
+        return {
+          content: 'Google Workspace and Microsoft 365 are connected and authenticated.',
+          model: 'test-model',
+          finishReason: 'stop',
+          toolCalls: [],
+          providerLocality: 'external',
+          providerName: 'openrouter',
+        } as ChatResponse;
+      }
+      return {
+        content: '',
+        model: 'test-model',
+        finishReason: 'tool_calls',
+        toolCalls: [
+          { id: 'call-gws-status', name: 'gws_status', arguments: JSON.stringify({}) },
+          { id: 'call-m365-status', name: 'm365_status', arguments: JSON.stringify({}) },
+        ],
+        providerLocality: 'external',
+        providerName: 'openrouter',
+      } as ChatResponse;
+    });
+    const callTool = vi.fn(async (request: Record<string, unknown>) => ({
+      success: true,
+      status: 'succeeded',
+      message: `Tool '${String(request.toolName)}' completed.`,
+      output: {
+        configured: true,
+        authenticated: true,
+      },
+    }));
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        { name: 'gws_status', description: 'Report Google Workspace auth status.', parameters: { type: 'object', properties: {} } },
+        { name: 'm365_status', description: 'Report Microsoft 365 auth status.', parameters: { type: 'object', properties: {} } },
+      ],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      activeSkills: [{
+        id: 'verification-before-completion',
+        name: 'Verification Before Completion',
+        summary: 'Require proof before completion claims.',
+      }],
+      message: {
+        id: 'msg-verification-status-tool-loop',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'For verification only, check whether Google Workspace and Microsoft 365 are connected/authenticated. Summarize the status only.',
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Check connector status.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            requireExactFileReferences: false,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [
+              {
+                kind: 'read',
+                summary: 'Check Google Workspace and Microsoft 365 authentication status.',
+                expectedToolCategories: ['gws_status', 'm365_status'],
+                required: true,
+              },
+              {
+                kind: 'answer',
+                summary: 'Summarize the status only.',
+                required: true,
+                dependsOn: ['step_1'],
+              },
+            ],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    expect(result.content).toBe('Google Workspace and Microsoft 365 are connected and authenticated.');
+    expect(result.content).not.toContain('Do not call it done yet');
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'gws_status' }));
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'm365_status' }));
+    expect(result.metadata).toMatchObject({
+      workerExecution: {
+        completionReason: 'model_response',
+        successfulToolResultCount: 2,
+      },
+    });
+  });
+
   it('treats browser read receipts as evidence for read plus answer plans', async () => {
     const llmChat = vi.fn(async (messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

@@ -209,6 +209,33 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['provider_read']);
   });
 
+  it('defers provider-crud connector status evidence to tool orchestration', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'general_assistant',
+        operation: 'read',
+        executionClass: 'provider_crud',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Check whether Google Workspace and Microsoft 365 are connected.',
+            expectedToolCategories: ['gws_status', 'm365_status'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Report connector authentication status.',
+            required: true,
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
   it('maps security tasks to the direct security guardrail candidate', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

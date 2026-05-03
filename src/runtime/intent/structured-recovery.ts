@@ -341,6 +341,7 @@ export function normalizeIntentGatewayDecision(
     operation,
     personalItemType: entityResolution.entities.personalItemType,
     configuredSearchSources: repairContext?.configuredSearchSources,
+    sourceContent: repairContext?.sourceContent,
   });
   const searchSurfaceClarification = buildSearchSurfaceClarification({
     route,
@@ -807,6 +808,7 @@ function normalizePlannedStepsForDecision(
     operation: IntentGatewayDecision['operation'];
     personalItemType?: IntentGatewayDecision['entities']['personalItemType'];
     configuredSearchSources?: IntentGatewayRepairContext['configuredSearchSources'];
+    sourceContent?: string;
   },
 ): IntentGatewayPlannedStep[] {
   if (
@@ -816,9 +818,11 @@ function normalizePlannedStepsForDecision(
     && !isWebReadDecision(decision)
     && !isToolBackedReadAnswerDecision(decision)
   ) {
-    return steps;
+    return removeNonActionAnswerPrefaces(
+      removeProviderStatusSecondBrainDistractors(steps, decision.sourceContent),
+    );
   }
-  return steps.map((step) => {
+  const normalizedSteps = steps.map((step) => {
     if (
       isToolBackedReadAnswerDecision(decision)
       && step.kind === 'write'
@@ -878,6 +882,95 @@ function normalizePlannedStepsForDecision(
     }
     return step;
   });
+  return removeNonActionAnswerPrefaces(
+    removeProviderStatusSecondBrainDistractors(normalizedSteps, decision.sourceContent),
+  );
+}
+
+function removeNonActionAnswerPrefaces(steps: IntentGatewayPlannedStep[]): IntentGatewayPlannedStep[] {
+  if (!steps.some((step) => step.kind !== 'answer')) {
+    return steps;
+  }
+  const retainedIndexes: number[] = [];
+  const filtered = steps.filter((step, index) => {
+    const retain = step.kind !== 'answer' || !isNonActionAnswerPreface(step.summary);
+    if (retain) {
+      retainedIndexes.push(index);
+    }
+    return retain;
+  });
+  if (filtered.length === steps.length) {
+    return steps;
+  }
+  const stepIdMap = new Map<string, string>();
+  for (const [newIndex, oldIndex] of retainedIndexes.entries()) {
+    stepIdMap.set(`step_${oldIndex + 1}`, `step_${newIndex + 1}`);
+  }
+  return filtered.map((step) => {
+    const dependsOn = step.dependsOn
+      ?.map((stepId) => stepIdMap.get(stepId))
+      .filter((stepId): stepId is string => !!stepId);
+    if (!step.dependsOn || dependsOn?.length === step.dependsOn.length) {
+      return dependsOn && dependsOn.length > 0 ? { ...step, dependsOn } : step;
+    }
+    const { dependsOn: _dependsOn, ...rest } = step;
+    return dependsOn && dependsOn.length > 0 ? { ...rest, dependsOn } : rest;
+  });
+}
+
+function isNonActionAnswerPreface(summary?: string): boolean {
+  const normalized = collapseIntentGatewayWhitespace(summary ?? '')
+    .replace(/[.!?]+$/g, '')
+    .trim()
+    .toLowerCase();
+  return normalized === 'for verification only'
+    || normalized === 'verification only'
+    || normalized === 'for validation only'
+    || normalized === 'validation only'
+    || normalized === 'for testing only'
+    || normalized === 'testing only'
+    || normalized === 'as a test'
+    || normalized === 'this is a test';
+}
+
+function removeProviderStatusSecondBrainDistractors(
+  steps: IntentGatewayPlannedStep[],
+  sourceContent?: string,
+): IntentGatewayPlannedStep[] {
+  if (!hasProviderStatusEvidenceStep(steps) || hasExplicitSecondBrainRequest(sourceContent)) {
+    return steps;
+  }
+  return steps
+    .map((step) => {
+      if (step.kind === 'answer') return step;
+      const categories = step.expectedToolCategories ?? [];
+      if (categories.length <= 0) return step;
+      const filteredCategories = categories.filter((category) => !isSecondBrainEvidenceCategory(category));
+      if (filteredCategories.length === categories.length) return step;
+      if (filteredCategories.length <= 0) return null;
+      return {
+        ...step,
+        expectedToolCategories: filteredCategories,
+      };
+    })
+    .filter((step): step is IntentGatewayPlannedStep => !!step);
+}
+
+function hasProviderStatusEvidenceStep(steps: IntentGatewayPlannedStep[]): boolean {
+  return steps.some((step) => (
+    step.required !== false
+    && step.kind !== 'answer'
+    && (step.expectedToolCategories?.some(isProviderStatusEvidenceCategory) ?? false)
+  ));
+}
+
+function isSecondBrainEvidenceCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'second_brain' || normalized.startsWith('second_brain_');
+}
+
+function hasExplicitSecondBrainRequest(sourceContent?: string): boolean {
+  return /\bsecond\s+brain\b/i.test(sourceContent ?? '');
 }
 
 function isAutomationCatalogReadDecision(decision: {

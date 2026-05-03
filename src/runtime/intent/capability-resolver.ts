@@ -57,6 +57,9 @@ function preferredCandidatesForDecision(
       if (hasOnlyManagedSandboxStatusCategories(decision)) {
         return ['coding_session_control'];
       }
+      if (hasProviderStatusCategories(decision)) {
+        return [];
+      }
       return decision.executionClass === 'provider_crud'
         ? ['provider_read']
         : [];
@@ -274,6 +277,20 @@ function isManagedSandboxStatusCategory(category: string): boolean {
   return normalized === 'daytona_status'
     || normalized === 'managed_sandbox_status'
     || normalized === 'remote_sandbox_status';
+}
+
+function isProviderStatusCategory(category: string): boolean {
+  const normalized = category.trim();
+  return normalized === 'gws_status'
+    || normalized === 'm365_status'
+    || normalized === 'vercel_status'
+    || normalized === 'whm_status';
+}
+
+function hasProviderStatusCategories(decision: IntentGatewayDecision): boolean {
+  return requiredPlannedSteps(decision)
+    .some((step) => expectedCategoriesForStep(step)
+      .some((category) => isProviderStatusCategory(category)));
 }
 
 function hasOnlyManagedSandboxStatusCategories(decision: IntentGatewayDecision): boolean {

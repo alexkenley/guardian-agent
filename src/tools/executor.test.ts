@@ -6111,6 +6111,40 @@ describe('ToolExecutor', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('allows connector status checks for agents without document-read capability', async () => {
+    const root = createExecutorRoot();
+    const guard = vi.fn(() => {
+      throw new Error('status checks must not require document-read capability');
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      googleService: mockGoogleService(),
+      microsoftService: mockMicrosoftService(),
+    });
+
+    const googleRun = await executor.runTool({
+      toolName: 'gws_status',
+      args: {},
+      origin: 'assistant',
+      agentContext: { checkAction: guard },
+    });
+    const microsoftRun = await executor.runTool({
+      toolName: 'm365_status',
+      args: {},
+      origin: 'assistant',
+      agentContext: { checkAction: guard },
+    });
+
+    expect(googleRun.success).toBe(true);
+    expect(microsoftRun.success).toBe(true);
+    expect(guard).not.toHaveBeenCalled();
+  });
+
   it('includes Microsoft 365 status in the always-loaded workspace tools when connected', () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

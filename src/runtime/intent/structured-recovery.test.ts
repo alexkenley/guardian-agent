@@ -1311,6 +1311,140 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.operation).toBe('derived.workload');
   });
 
+  it('removes stray Second Brain evidence from connector-status-only plans', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'low',
+      operation: 'read',
+      summary: 'Check provider connector status.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'provider_crud',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Check Google Workspace and Microsoft 365 authentication status.',
+          expectedToolCategories: ['gws_status', 'm365_status'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Check calendar and contacts memory context.',
+          expectedToolCategories: ['second_brain'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Return status only.',
+          required: true,
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.primary',
+      sourceContent: 'Check whether Google Workspace and Microsoft 365 are authenticated or connected. Status only; do not read email, files, docs, contacts, or calendar contents.',
+    });
+
+    const categories = decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? []) ?? [];
+    expect(categories).toEqual(expect.arrayContaining(['gws_status', 'm365_status']));
+    expect(categories).not.toContain('second_brain');
+    expect(decision.plannedSteps?.filter((step) => step.kind !== 'answer')).toHaveLength(1);
+  });
+
+  it('removes non-action answer prefaces from tool-backed plans', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Check connector status.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          stepId: 'step_1',
+          kind: 'answer',
+          summary: 'For verification only',
+          required: true,
+        },
+        {
+          stepId: 'step_2',
+          kind: 'read',
+          summary: 'Check Google Workspace and Microsoft 365 authentication status.',
+          expectedToolCategories: ['gws_status', 'm365_status'],
+          required: true,
+          dependsOn: ['step_1'],
+        },
+        {
+          stepId: 'step_3',
+          kind: 'answer',
+          summary: 'Summarize the status only.',
+          required: true,
+          dependsOn: ['step_2'],
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.primary',
+      sourceContent: 'For verification only, check whether Google Workspace and Microsoft 365 are connected/authenticated. Do not read email, calendar, documents, contacts, or drive contents. Summarize the status only.',
+    });
+
+    expect(decision.plannedSteps?.map((step) => step.summary)).toEqual([
+      'Check Google Workspace and Microsoft 365 authentication status.',
+      'Summarize the status only.',
+    ]);
+    expect(decision.plannedSteps?.[0]?.dependsOn).toBeUndefined();
+    expect(decision.plannedSteps?.[1]?.dependsOn).toEqual(['step_1']);
+  });
+
+  it('keeps explicit Second Brain evidence alongside connector status', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'general_assistant',
+      confidence: 'high',
+      operation: 'read',
+      summary: 'Check connector status and Second Brain context.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Check Google Workspace status.',
+          expectedToolCategories: ['gws_status'],
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Read Second Brain routines.',
+          expectedToolCategories: ['second_brain'],
+          required: true,
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.primary',
+      sourceContent: 'Check Google Workspace auth and my Second Brain routines.',
+    });
+
+    const categories = decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? []) ?? [];
+    expect(categories).toEqual(expect.arrayContaining(['gws_status', 'second_brain']));
+  });
+
   it('normalizes run-labeled read-only evidence plans to read/search semantics', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'complex_planning_task',
