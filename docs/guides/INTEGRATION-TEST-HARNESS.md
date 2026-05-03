@@ -168,6 +168,7 @@ Core harness scripts include:
 | **`scripts/test-harness.ps1`** | Functional + security tests (PowerShell) | ~39 |
 | **`scripts/test-harness.sh`** | Functional + security tests (Bash) | ~39 |
 | **`scripts/test-tools.ps1`** | Tool exercise + approval flow tests (PowerShell) | ~50+ |
+| **`scripts/test-tool-contracts.mjs`** | Deterministic direct `/api/tools/run` contract harness with isolated fake provider; validates registry/preflight, filesystem, shell, system, network, SSRF blocking, critical-path denial, and job history without relying on LLM tool selection. | focused direct tool-contract assertions |
 | **`scripts/test-approvals.ps1`** | Approval UX: contextual prompts, multi-approval, policy modes (PowerShell) | ~45+ |
 | **`scripts/test-gws.ps1`** | Google Workspace tool + approval tests (PowerShell) | ~25 |
 | **`scripts/test-m365.mjs`** | Microsoft 365 tool registration, approval gating, schema, API routes (Node.js) | ~34 |
@@ -243,6 +244,14 @@ Useful options:
 ```
 
 Treat this suite as the Intent Gateway/tool-discovery lane, not the deterministic tool-contract lane. For product bugs, pair failures with trace rows by request ID before changing routing, prompts, or tool policy.
+
+### Deterministic Tool Contract Suite
+
+```powershell
+node scripts/test-tool-contracts.mjs
+```
+
+This lane starts an isolated GuardianAgent process with a fake provider and calls `/api/tools/run` directly. Use it before `test-tools.ps1` when you need to distinguish tool contract, policy, sandbox, and job-history bugs from LLM routing or discovery issues.
 
 ### Focused Security Suites
 
