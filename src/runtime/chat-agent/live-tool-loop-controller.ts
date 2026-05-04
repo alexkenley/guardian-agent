@@ -252,8 +252,20 @@ export async function runLiveToolLoopController(
   const tools = input.tools;
 
   if (shouldUseNoToolDirectAnswer(directIntentDecision)) {
-    const response = await chatFn(input.llmMessages, { tools: [] });
+    const directAnswerMessages = withNoToolDirectAnswerInstruction(input.llmMessages);
+    let response = await chatFn(directAnswerMessages, { tools: [] });
     finalContent = response.content;
+    if (shouldRetryNoToolDirectAnswer(finalContent, input)) {
+      response = await chatFn(
+        [
+          ...directAnswerMessages,
+          { role: 'assistant', content: response.content ?? '' },
+          { role: 'user', content: buildNoToolDirectAnswerCorrectionPrompt() },
+        ],
+        { tools: [] },
+      );
+      finalContent = response.content;
+    }
     return {
       finalContent: finalContent || 'I could not generate a final response for that request.',
       lastToolRoundResults,
@@ -958,11 +970,50 @@ function shouldUseNoToolDirectAnswer(
   decision: IntentGatewayDecision | undefined,
 ): boolean {
   if (!decision) return false;
-  if (decision.route === 'unknown' || decision.confidence === 'low') return false;
+  if (decision.route === 'unknown') return false;
+  if (decision.confidence === 'low' && decision.route !== 'general_assistant') return false;
   return decision.preferredAnswerPath === 'direct'
     && decision.requiresRepoGrounding !== true
     && decision.requiresToolSynthesis !== true
     && !hasRequiredToolBackedAnswerPlan(decision);
+}
+
+function withNoToolDirectAnswerInstruction(messages: ChatMessage[]): ChatMessage[] {
+  return [
+    ...messages,
+    {
+      role: 'system',
+      content: [
+        'Routing note: this turn is on the direct-answer path.',
+        'No tool calls are available or expected for this turn.',
+        'Answer now from the recent conversation context already provided.',
+        'Treat the current thread as primary evidence; do not substitute long-term memory, knowledge base material, app documentation, or unrelated workspace context for what the user discussed here.',
+        'Do not say you will search, fetch, browse, inspect files, or call tools.',
+      ].join(' '),
+    },
+  ];
+}
+
+function shouldRetryNoToolDirectAnswer(
+  content: string | undefined,
+  input: Pick<LiveToolLoopControllerInput, 'lacksUsableAssistantContent' | 'looksLikeOngoingWorkResponse'>,
+): boolean {
+  if (!content?.trim()) {
+    return false;
+  }
+  return input.looksLikeOngoingWorkResponse(content)
+    || (!input.lacksUsableAssistantContent(content) && looksLikeOngoingWorkResponseShape(content));
+}
+
+function buildNoToolDirectAnswerCorrectionPrompt(): string {
+  return [
+    'System correction: the gateway selected a direct answer for this turn, not a tool run.',
+    'Do not promise to call web_search, web_fetch, browser, repo, or other tools in this direct-answer path.',
+    'Answer the user now using the recent conversation context already provided.',
+    'Treat the current thread as primary evidence; do not substitute long-term memory, knowledge base material, app documentation, or unrelated workspace context for what the user discussed here.',
+    'If the user asked for analysis of prior results, choose one relevant prior area and provide the analysis.',
+    'If the existing context is not enough for a factual answer, say what is missing in plain language.',
+  ].join(' ');
 }
 
 function recoverResponseToolCalls(response: ChatResponse, llmToolDefs: LlmToolDefinition[]): ChatResponse {

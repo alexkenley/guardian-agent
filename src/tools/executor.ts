@@ -84,6 +84,7 @@ import { HybridBrowserService, type HybridBrowserMode } from './browser-hybrid.j
 import {
   DEFAULT_TOOL_ALLOWED_COMMANDS,
   type AssistantCloudConfig,
+  type GitHubConfig,
   type AssistantNetworkConfig,
   type BrowserConfig,
   type WebSearchConfig,
@@ -118,6 +119,8 @@ import type { WindowsDefenderProvider } from '../runtime/windows-defender-provid
 import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.js';
 import type { AutomationSaveInput } from '../runtime/automation-save.js';
 import type { AutomationOutputStore } from '../runtime/automation-output-store.js';
+import type { AuditEvent, AuditFilter } from '../guardian/audit-log.js';
+import type { IntentRoutingTraceLog } from '../runtime/intent-routing-trace.js';
 import type { PersistMemoryEntryResult } from '../runtime/memory-mutation-service.js';
 import type { PerformanceService } from '../runtime/performance-service.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
@@ -164,10 +167,13 @@ import { registerBuiltinSearchTools } from './builtin/search-tools.js';
 import { registerBuiltinSecondBrainTools } from './builtin/second-brain-tools.js';
 import { registerBuiltinWorkspaceTools } from './builtin/workspace-tools.js';
 import { registerBuiltinCloudTools } from './builtin/cloud-tools.js';
+import { registerBuiltinDiagnosticsTools } from './builtin/diagnostics-tools.js';
+import { registerBuiltinGitHubTools } from './builtin/github-tools.js';
 import { syncBuiltinBrowserTools } from './builtin/browser-tools.js';
 import { buildToolContext, type ToolContextCloudProfileSummary } from './tool-context.js';
 import type { ConfigUpdate, DashboardMutationResult, DashboardCodeSessionSandboxesResponse } from '../channels/web-types.js';
 import { resolveConversationSurfaceId } from '../runtime/channel-surface-ids.js';
+import type { GitHubServiceLike } from '../github/types.js';
 export { validateHostParam } from './builtin/network-system-tools.js';
 
 const MAX_JOBS = 200;
@@ -520,6 +526,10 @@ export interface ToolExecutorOptions {
   enableDirectPlaywrightFallback?: boolean;
   /** Cloud and hosting provider integrations. */
   cloudConfig?: AssistantCloudConfig;
+  /** GitHub developer/source-control integration. */
+  githubConfig?: GitHubConfig;
+  /** Test or runtime override for GitHub service. */
+  githubService?: GitHubServiceLike;
   /** Remote execution orchestration for bounded isolated jobs. */
   remoteExecutionService?: RemoteExecutionServiceLike;
   /** Tool categories to disable at startup. */
@@ -530,6 +540,10 @@ export interface ToolExecutorOptions {
   agentMemoryStore?: AgentMemoryStore;
   /** Private historical output store for saved automation runs. */
   automationOutputStore?: AutomationOutputStore;
+  /** Redacted intent-routing diagnostics for assistant issue drafting. */
+  intentRoutingTrace?: Pick<IntentRoutingTraceLog, 'getStatus' | 'listRecent'>;
+  /** Guardian/audit event summaries for assistant issue drafting. */
+  auditLog?: { query(filter: AuditFilter): AuditEvent[] };
   /** Dedicated memory store for backend-owned coding sessions. */
   codeSessionMemoryStore?: AgentMemoryStore;
   /** Backend-owned coding session store for multi-surface coding workflows. */
@@ -4831,6 +4845,14 @@ export class ToolExecutor {
     args: Record<string, unknown>,
     request?: Partial<ToolExecutionRequest>,
   ): Promise<string | null> {
+    if (toolName === 'github_issue_create') {
+      const owner = asString(args.owner).trim() || this.options.githubConfig?.defaultOwner?.trim() || '';
+      const repo = asString(args.repo).trim() || this.options.githubConfig?.defaultRepo?.trim() || '';
+      if (!owner || !repo) {
+        return 'GitHub owner and repository are required. Configure them in Cloud > Connections > GitHub, or pass owner and repo explicitly.';
+      }
+    }
+
     if (toolName === 'update_tool_policy') {
       const broadPolicyPathBlockReason = getBroadPolicyPathExpansionBlockReason(asString(args.action), args.value);
       if (broadPolicyPathBlockReason) return broadPolicyPathBlockReason;
@@ -6314,6 +6336,23 @@ export class ToolExecutor {
       asString,
       asStringArray,
       getPerformanceService: () => this.options.performanceService,
+    });
+
+    registerBuiltinDiagnosticsTools({
+      registry: this.registry,
+      asString,
+      asNumber,
+      intentRoutingTrace: this.options.intentRoutingTrace,
+      auditLog: this.options.auditLog,
+    });
+
+    registerBuiltinGitHubTools({
+      registry: this.registry,
+      githubConfig: this.options.githubConfig,
+      githubService: this.options.githubService,
+      asString,
+      asStringArray,
+      guardAction: (request, action, details) => this.guardAction(request, action, details),
     });
 
     registerBuiltinCloudTools({

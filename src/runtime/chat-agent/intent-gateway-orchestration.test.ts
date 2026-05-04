@@ -336,6 +336,52 @@ describe('intent-gateway-orchestration', () => {
     ]);
   });
 
+  it('keeps unknown-route clarifications off executable pending-action routes', () => {
+    const pendingActionInputs: Array<Record<string, unknown>> = [];
+    const gateway = makeGatewayRecord({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      resolution: 'needs_clarification',
+      missingFields: ['intent_route'],
+      summary: 'I am not sure what you want me to do. Could you clarify the request?',
+      provenance: {
+        route: 'classifier.primary',
+        operation: 'classifier.primary',
+      },
+    });
+
+    const response = buildGatewayClarificationResponse(
+      {
+        gateway,
+        surfaceUserId: 'user-1',
+        surfaceChannel: 'web',
+        surfaceId: 'web-guardian-chat',
+        message: makeMessage('Do the thing.'),
+        activeSkills: [],
+      },
+      {
+        enabledManagedProviders: new Set(['gws', 'm365']),
+        buildImmediateResponseMetadata: () => undefined,
+        setClarificationPendingAction: (_userId, _channel, _surfaceId, input) => {
+          pendingActionInputs.push(input as unknown as Record<string, unknown>);
+          return {};
+        },
+        recordIntentRoutingTrace: () => undefined,
+        toPendingActionEntities,
+      },
+    );
+
+    expect(response?.content).toBe('I am not sure what you want me to do. Could you clarify the request?');
+    expect(pendingActionInputs[0]).toMatchObject({
+      field: 'intent_route',
+      prompt: 'I am not sure what you want me to do. Could you clarify the request?',
+    });
+    expect(pendingActionInputs[0]?.route).toBeUndefined();
+    expect(pendingActionInputs[0]?.operation).toBeUndefined();
+    expect((pendingActionInputs[0]?.entities as Record<string, unknown> | undefined)?.intentRouteHint).toBeUndefined();
+  });
+
   it('keeps low-confidence intent-route clarifications on the origin surface', () => {
     const pendingActionInputs: Array<Record<string, unknown>> = [];
     const gateway = makeGatewayRecord({

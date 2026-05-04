@@ -632,6 +632,7 @@ const CATEGORY_NATURAL_LOCALITY: Record<string, 'local' | 'external'> = {
   forum: 'external',
   intel: 'external',
   search: 'external',
+  github: 'external',
 };
 
 function computeCategoryDefaults(

@@ -118,4 +118,31 @@ describe('search-intent parser', () => {
     expect(parseWebSearchIntent('Open https://httpbin.org/forms/post and list the interactive elements on the page.')).toBeNull();
     expect(parseWebSearchIntent('Go to https://example.com and click the More information link.')).toBeNull();
   });
+
+  it('extracts search text from go-out-to-the-internet phrasing', () => {
+    expect(parseWebSearchIntent(
+      'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+    )).toBe('random useful information from reputable websites. Give me the source links.');
+  });
+
+  it('extracts multi-topic web search text after a conversational greeting', () => {
+    expect(parseWebSearchIntent(
+      'Hi, can you use web search information on Apollo 13 moon mission, the history of KFC, and the latest scientific breakthroughs and pull me back facts about each with links.',
+    )).toBe('Apollo 13 moon mission, the history of KFC, and the latest scientific breakthroughs and pull me back facts about each with links.');
+  });
+
+  it('does not extract a query from vague random-website phrasing', () => {
+    expect(parseWebSearchIntent(
+      'Go out to the internet search on random websites and pull me back some information.',
+    )).toBeNull();
+  });
+
+  it('does not treat unresolved conversation references as web-search queries', () => {
+    expect(parseWebSearchIntent(
+      'Search for the thing we talked about before and summarize it.',
+    )).toBeNull();
+    expect(parseWebSearchIntent(
+      'Search for the thing we talked about before and give me the source links.',
+    )).toBeNull();
+  });
 });

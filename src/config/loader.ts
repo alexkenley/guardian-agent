@@ -766,6 +766,36 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (assistant.tools.webSearch?.openRouterApiKey?.trim()) {
     errors.push('assistant.tools.webSearch.openRouterApiKey is not allowed in config. Use assistant.tools.webSearch.openRouterCredentialRef with assistant.credentials.refs instead.');
   }
+  const github = assistant.tools.github;
+  if (github) {
+    if (!['cli', 'oauth', 'app'].includes(github.mode)) {
+      errors.push("assistant.tools.github.mode must be 'cli', 'oauth', or 'app'");
+    }
+    if (github.cliPath !== undefined && !github.cliPath.trim()) {
+      errors.push('assistant.tools.github.cliPath must be a non-empty string when provided');
+    }
+    if (github.timeoutMs !== undefined && github.timeoutMs < 1000) {
+      errors.push('assistant.tools.github.timeoutMs must be >= 1000');
+    }
+    if (github.oauthCallbackPort !== undefined && (github.oauthCallbackPort < 1 || github.oauthCallbackPort > 65535)) {
+      errors.push('assistant.tools.github.oauthCallbackPort must be between 1 and 65535');
+    }
+    if (github.defaultOwner !== undefined && !github.defaultOwner.trim()) {
+      errors.push('assistant.tools.github.defaultOwner must be a non-empty string when provided');
+    }
+    if (github.defaultRepo !== undefined && !github.defaultRepo.trim()) {
+      errors.push('assistant.tools.github.defaultRepo must be a non-empty string when provided');
+    }
+    if (github.clientId !== undefined && !github.clientId.trim()) {
+      errors.push('assistant.tools.github.clientId must be a non-empty string when provided');
+    }
+    if (github.clientSecret !== undefined && !github.clientSecret.trim()) {
+      errors.push('assistant.tools.github.clientSecret must be a non-empty string when provided');
+    }
+    if (github.scopes !== undefined && (!Array.isArray(github.scopes) || github.scopes.some((scope) => typeof scope !== 'string' || !scope.trim()))) {
+      errors.push('assistant.tools.github.scopes must be an array of non-empty strings when provided');
+    }
+  }
   const cloud = assistant.tools.cloud;
   if (cloud) {
     if (cloud.defaultRemoteExecutionTargetId !== undefined) {

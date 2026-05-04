@@ -252,6 +252,105 @@ describe('runLiveToolLoopController', () => {
     expect(executeModelTool.mock.calls.map((call) => call[0])).toEqual(['find_tools', 'code_edit']);
   });
 
+  it('keeps low-confidence general direct turns out of the tool loop', async () => {
+    const chatWithRoutingMetadata = vi.fn(async (_ctx, messages: ChatMessage[], chatOptions?: ChatOptions) => {
+      expect(chatOptions?.tools).toEqual([]);
+      const directInstruction = messages.at(-1)?.content ?? '';
+      expect(directInstruction).toContain('recent conversation context');
+      expect(directInstruction).toContain('long-term memory');
+      expect(directInstruction).toContain('current thread');
+      return {
+        response: {
+          content: 'Here is the direct analysis from the existing conversation.',
+          model: 'test-model',
+          finishReason: 'stop' as const,
+        },
+        providerName: 'openrouter',
+        providerLocality: 'external' as const,
+        usedFallback: false,
+        durationMs: 5,
+      };
+    });
+    const { input, tools } = baseInput(
+      'Okay, now pick one of those areas, do a deep dive into it and give me your analysis.',
+      {
+        chat: chatWithRoutingMetadata,
+        decision: directDecision({
+          route: 'general_assistant',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Continue the prior web research answer without fresh tool use.',
+          turnRelation: 'follow_up',
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          preferredAnswerPath: 'direct',
+        }),
+      },
+    );
+
+    const result = await runLiveToolLoopController(input as never);
+
+    expect(result.finalContent).toBe('Here is the direct analysis from the existing conversation.');
+    expect(chatWithRoutingMetadata).toHaveBeenCalledOnce();
+    expect(tools.listAlwaysLoadedDefinitions).not.toHaveBeenCalled();
+  });
+
+  it('retries no-tool direct answers that only promise a tool action', async () => {
+    const responses = [
+      'Will perform web_search.',
+      'Here is a direct analysis from the prior research results, without starting a new tool run.',
+    ];
+    const chatWithRoutingMetadata = vi.fn(async (_ctx, messages: ChatMessage[], chatOptions?: ChatOptions) => {
+      expect(chatOptions?.tools).toEqual([]);
+      const content = responses.shift() ?? '';
+      if (chatWithRoutingMetadata.mock.calls.length === 2) {
+        expect(messages.at(-1)?.content).toContain('not a tool run');
+        expect(messages.at(-1)?.content).toContain('recent conversation context');
+        expect(messages.at(-1)?.content).toContain('long-term memory');
+      }
+      return {
+        response: {
+          content,
+          model: 'test-model',
+          finishReason: 'stop' as const,
+        },
+        providerName: 'openrouter',
+        providerLocality: 'external' as const,
+        usedFallback: false,
+        durationMs: 5,
+      };
+    });
+    const { input, tools } = baseInput(
+      'Okay, now pick one of those areas, do a deep dive into it and give me your analysis.',
+      {
+        chat: chatWithRoutingMetadata,
+        decision: directDecision({
+          route: 'general_assistant',
+          confidence: 'low',
+          operation: 'inspect',
+          summary: 'Continue the prior web research answer without fresh tool use.',
+          turnRelation: 'follow_up',
+          executionClass: 'direct_assistant',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          preferredAnswerPath: 'direct',
+        }),
+      },
+    );
+    input.looksLikeOngoingWorkResponse = vi.fn((content?: string) => content === 'Will perform web_search.');
+
+    const result = await runLiveToolLoopController(input as never);
+
+    expect(result.finalContent).toBe(
+      'Here is a direct analysis from the prior research results, without starting a new tool run.',
+    );
+    expect(chatWithRoutingMetadata).toHaveBeenCalledTimes(2);
+    expect(tools.listAlwaysLoadedDefinitions).not.toHaveBeenCalled();
+  });
+
   it('eagerly exposes planned document search tools to tool-loop orchestration', async () => {
     const msg = message('Search documents for JSON files and list them out');
     const findToolsDefinition = {

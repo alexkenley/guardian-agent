@@ -177,6 +177,9 @@ export function inferSecondBrainQuery(
   if (personalItemType === 'library') {
     return inferLibraryReadQuery(content);
   }
+  if (personalItemType === 'note') {
+    return inferNoteReadQuery(content);
+  }
   if (personalItemType === 'person') {
     return inferPersonReadQuery(content);
   }
@@ -200,6 +203,21 @@ export function inferLibraryReadQuery(content: string | undefined): string | und
   const relatedMatch = collapsed.match(/\brelated\s+to\s+(.+?)(?:[.?!]|$)/i);
   if (relatedMatch?.[1]?.trim()) {
     return relatedMatch[1].trim();
+  }
+  const quotedMatch = collapsed.match(/["']([^"']+)["']/);
+  return quotedMatch?.[1]?.trim() || undefined;
+}
+
+export function inferNoteReadQuery(content: string | undefined): string | undefined {
+  const collapsed = collapseIntentGatewayWhitespace(content ?? '');
+  if (!collapsed) return undefined;
+  const topicMatch = collapsed.match(/\bnotes?\s+(?:about|on|related\s+to)\s+(.+?)(?=\s+\band\s+(?:tell|show|summari[sz]e|explain|list)\b|[.?!]|$)/i);
+  if (topicMatch?.[1]?.trim()) {
+    return topicMatch[1].trim();
+  }
+  const aboutMatch = collapsed.match(/\b(?:about|on|related\s+to)\s+(.+?)(?:[.?!]|$)/i);
+  if (aboutMatch?.[1]?.trim()) {
+    return aboutMatch[1].trim();
   }
   const quotedMatch = collapsed.match(/["']([^"']+)["']/);
   return quotedMatch?.[1]?.trim() || undefined;
@@ -354,7 +372,8 @@ export function isExplicitSecondBrainEntityRequest(
   if (['create', 'update', 'delete', 'save'].includes(operation)) {
     return true;
   }
-  return /\b(?:second brain|my tasks?|my notes?|my library|my briefs?|my calendar|my events?|my people|my contacts?|people in my second brain|contacts? in my second brain)\b/.test(normalized);
+  return /\b(?:second brain|my tasks?|my notes?|my library|my briefs?|my calendar|my events?|my people|my contacts?|people in my second brain|contacts? in my second brain)\b/.test(normalized)
+    || /\b(?:latest|recent|saved|personal)?\s*notes?\s+(?:about|on|related to)\b/.test(normalized);
 }
 
 export function pendingActionSuggestsRoutine(

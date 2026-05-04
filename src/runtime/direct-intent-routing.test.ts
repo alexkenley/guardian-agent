@@ -49,6 +49,8 @@ const ALL_CANDIDATES = [
   'workspace_read',
   'browser',
   'web_search',
+  'diagnostics_issue_submit',
+  'diagnostics_issue_draft',
   'security_guardrail',
 ] as const;
 
@@ -183,6 +185,29 @@ describe('resolveDirectIntentRoutingCandidates', () => {
       [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['security_guardrail']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps diagnostics issue drafting to the diagnostics issue draft candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'diagnostics_task', operation: 'draft' }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['diagnostics_issue_draft']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps reviewed diagnostics issue submission to the diagnostics issue submit candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({
+        route: 'diagnostics_task',
+        operation: 'send',
+        turnRelation: 'follow_up',
+        entities: { toolName: 'github_issue_create' },
+      }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['diagnostics_issue_submit']);
     expect(result.gatewayDirected).toBe(true);
   });
 
@@ -566,6 +591,39 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     );
     expect(result.candidates).toEqual(['provider_read']);
     expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('defers web-only general-assistant tool plans that require synthesis', () => {
+    const gateway = mockGateway({
+      route: 'general_assistant',
+      operation: 'inspect',
+      confidence: 'low',
+      plannedSteps: [
+        {
+          kind: 'search',
+          summary: 'Search the web for useful information.',
+          expectedToolCategories: ['web_search', 'browser'],
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Answer with source links.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    });
+    gateway.decision.executionClass = 'tool_orchestration';
+    gateway.decision.requiresToolSynthesis = true;
+    gateway.decision.preferredAnswerPath = 'tool_loop';
+
+    const result = resolveDirectIntentRoutingCandidates(
+      gateway,
+      [...ALL_CANDIDATES],
+    );
+
+    expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(false);
   });
 
   it('keeps low-confidence provider CRUD general-assistant reads on the provider_read candidate', () => {

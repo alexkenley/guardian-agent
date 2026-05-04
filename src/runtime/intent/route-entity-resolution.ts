@@ -38,6 +38,7 @@ import {
   normalizeSearchSourceType,
   normalizeUiSurface,
 } from './normalization.js';
+import { isMeaningfulWebSearchQuery, parseWebSearchIntent } from '../search-intent.js';
 import { collapseIntentGatewayWhitespace } from './text.js';
 import type {
   IntentGatewayDecision,
@@ -122,13 +123,22 @@ export function resolveIntentGatewayEntities(
       .filter(Boolean)
     : undefined;
   if (urls && urls.length > 0) provenance.urls = classifierSource;
-  const query = typeof parsed.query === 'string' && parsed.query.trim()
+  const parsedQuery = typeof parsed.query === 'string' && parsed.query.trim()
     ? parsed.query.trim()
+    : undefined;
+  const inferredSecondBrainQuery = parsedQuery
+    ? undefined
     : inferSecondBrainQuery(repairContext?.sourceContent, route, operation, personalItemType);
+  const inferredWebSearchQuery = parsedQuery || inferredSecondBrainQuery
+    ? undefined
+    : inferWebSearchQuery(rawSourceContent, route);
+  const query = parsedQuery ?? inferredSecondBrainQuery ?? inferredWebSearchQuery;
   if (query) {
-    provenance.query = typeof parsed.query === 'string' && parsed.query.trim()
+    provenance.query = parsedQuery
       ? classifierSource
-      : 'resolver.personal_assistant';
+      : inferredSecondBrainQuery
+        ? 'resolver.personal_assistant'
+        : 'resolver.web_search';
   }
   const inferredCodingBackendRequest = rawSourceContent && route === 'coding_task'
     ? inferExplicitCodingBackendRequest(rawSourceContent, normalizedSourceContent, operation)
@@ -360,6 +370,36 @@ export function resolveIntentGatewayEntities(
     entities,
     ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
   };
+}
+
+function inferWebSearchQuery(
+  sourceContent: string,
+  route: IntentGatewayDecision['route'],
+): string | undefined {
+  if (route !== 'search_task' && route !== 'browser_task') {
+    return undefined;
+  }
+  const explicitWebQuery = parseWebSearchIntent(sourceContent);
+  if (explicitWebQuery) {
+    return explicitWebQuery;
+  }
+  if (hasExplicitWebResearchInstruction(sourceContent)) {
+    return undefined;
+  }
+  const continuationQuery = cleanRoutedWebSearchQuery(sourceContent);
+  return isMeaningfulWebSearchQuery(continuationQuery) ? continuationQuery : undefined;
+}
+
+function cleanRoutedWebSearchQuery(sourceContent: string): string {
+  return collapseIntentGatewayWhitespace(sourceContent)
+    .replace(/^(?:now\s+)?(?:narrow|focus|filter|limit)\s+(?:that|this|it|the\s+results?)\s+(?:down\s+)?(?:to|on)\s+/i, '')
+    .replace(/\b(?:keep\s+it\s+)?(?:factual|concise|brief)\b.*$/i, '')
+    .trim();
+}
+
+function hasExplicitWebResearchInstruction(sourceContent: string): boolean {
+  return /\b(?:search|browse|research|look\s+up|find|go\s+out)\b.{0,80}\b(?:web|internet|online|websites?|sites?|pages?)\b/i.test(sourceContent)
+    || /\b(?:web|internet|online|websites?|sites?|pages?)\b.{0,80}\b(?:search|browse|research|look\s+up|find|go\s+out)\b/i.test(sourceContent);
 }
 
 function shouldKeepAutomationEntities(

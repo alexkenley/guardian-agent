@@ -53,6 +53,12 @@ const CLOUD_HELP = {
       whatCanDo: 'Connect or disconnect your Microsoft account, select which services to authorize, and test the connection.',
       howLinks: 'Once connected, Microsoft 365 tools (m365, outlook_send, outlook_draft) become available in chat, automations, and CLI.',
     },
+    'GitHub': {
+      whatItIs: 'This section configures OAuth-based access to GitHub for approved issue reporting and repository workflow context.',
+      whatSeeing: 'You are seeing the 3-step OAuth setup flow: register a GitHub OAuth App, enter its Client ID and Client Secret, then optionally add the repository owner and repo Guardian should use for repo actions.',
+      whatCanDo: 'Connect or disconnect your GitHub account, verify optional repository access, and provide the explicit repo target for approved issue creation.',
+      howLinks: 'Once connected, Guardian can draft diagnostic issues locally and publish them to the configured repo only after a separate external-post approval.',
+    },
     'Connection Model': {
       whatItIs: 'This section explains the data model for saved cloud profiles, including how credentials and advanced endpoint settings are treated.',
       whatSeeing: 'You are seeing guidance on stored credentials, preserved secrets, profile reuse, and when advanced endpoint overrides are appropriate.',
@@ -541,6 +547,7 @@ async function renderConnectionsTab(panel) {
     // Workspace integrations (OAuth PKCE) — above infrastructure providers
     panel.appendChild(createGoogleWorkspacePanel());
     panel.appendChild(createMicrosoft365Panel());
+    panel.appendChild(createGitHubPanel());
 
     // Infrastructure providers (token/credential based)
     for (const def of CLOUD_PROVIDER_DEFS) {
@@ -1607,6 +1614,228 @@ function createGoogleWorkspacePanel() {
 
   refreshNativeStatus();
 
+  return section;
+}
+
+function createGitHubPanel() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  let githubAuthAttempt = null;
+  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:0;';
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>GitHub</h3>
+      <span class="cfg-header-note">Issues, pull requests, workflow context</span>
+    </div>
+    <div class="cfg-center-body">
+      <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
+        GitHub integration provides approved issue reporting and repository workflow context.
+        It uses a GitHub OAuth App, encrypted token storage, and a separate approval before creating any issue.
+      </div>
+
+      <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:0;font-size:0.8rem;">
+        <strong style="color:var(--text-primary);">GitHub Setup (3 steps)</strong>
+        <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
+          <li style="margin-bottom:0.4rem;">
+            <strong>Register OAuth App:</strong>
+            Open <a href="https://github.com/settings/developers" target="_blank" rel="noopener" style="color:var(--accent);">GitHub Developer settings</a>,
+            choose <strong>OAuth Apps</strong>, then click <strong>New OAuth App</strong> or <strong>Register a new application</strong>.
+            <br>Name it anything, for example <strong>Guardian Agent</strong>.
+            For <strong>Homepage URL</strong>, use your Guardian dashboard URL, such as <code style="${inlineCode}">http://localhost:3000</code> for a local install.
+            <br>Set <strong>Authorization callback URL</strong> exactly to <code style="${inlineCode}">http://127.0.0.1:18434/callback</code>.
+            GitHub OAuth Apps only allow one callback URL, so create a separate OAuth App if you need another environment.
+          </li>
+          <li style="margin-bottom:0.3rem;">
+            <strong>Copy credentials:</strong>
+            After registration, copy the <strong>Client ID</strong>. Click <strong>Generate a new client secret</strong>, copy the secret immediately, and paste both values below.
+            Treat the client secret like a password; Guardian stores it through the local secure configuration path.
+          </li>
+          <li>
+            <strong>Connect:</strong>
+            Click <strong>Connect GitHub</strong> to link your account. The owner or organization and repository name are optional here; add them only when you want issue reporting or repo workflow actions.
+          </li>
+        </ol>
+        <div class="cfg-form-grid" style="margin-bottom:0.5rem;">
+          <div class="cfg-field">
+            <label style="font-size:0.72rem;">OAuth Client ID <span class="code-tooltip-icon" title="">&#9432;</span></label>
+            <input id="github-client-id" type="text" placeholder="GitHub OAuth app Client ID" autocomplete="off" />
+          </div>
+          <div class="cfg-field">
+            <label style="font-size:0.72rem;">OAuth Client Secret <span class="code-tooltip-icon" title="">&#9432;</span></label>
+            <input id="github-client-secret" type="password" placeholder="Leave blank to keep existing secret" autocomplete="off" />
+          </div>
+          <div class="cfg-field">
+            <label style="font-size:0.72rem;">Owner / Organization <span class="code-tooltip-icon" title="">&#9432;</span></label>
+            <input id="github-owner" type="text" placeholder="your-org-or-username" autocomplete="off" />
+          </div>
+          <div class="cfg-field">
+            <label style="font-size:0.72rem;">Repository <span class="code-tooltip-icon" title="">&#9432;</span></label>
+            <input id="github-repo" type="text" placeholder="your-repository" autocomplete="off" />
+          </div>
+        </div>
+        <div id="github-status" style="padding:0.75rem;background:var(--bg-primary);border:1px solid var(--border);font-size:0.8rem;">
+          Checking GitHub connection...
+        </div>
+        <div style="margin-top:0.75rem;font-size:0.78rem;color:var(--text-secondary);line-height:1.6;">
+          Connect GitHub to link the account. Add a repository target when you want approved issue reports or repository workflow context.
+        </div>
+        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="github-connect">Connect GitHub</button>
+          <button class="btn btn-secondary" id="github-refresh">Refresh Status</button>
+          <button class="btn btn-secondary" id="github-disconnect" style="display:none;">Disconnect</button>
+          <span id="github-status-badge" style="font-size:0.8rem;"></span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const renderStatus = (status) => {
+    const statusEl = section.querySelector('#github-status');
+    const badge = section.querySelector('#github-status-badge');
+    const disconnectBtn = section.querySelector('#github-disconnect');
+    const clientIdInput = section.querySelector('#github-client-id');
+    const ownerInput = section.querySelector('#github-owner');
+    const repoInput = section.querySelector('#github-repo');
+    if (!statusEl) return;
+    const accountReady = !!status.authenticated;
+    const repositoryConfigured = !!status.defaultRepository || !!status.repositoryConfigured;
+    const repositoryReady = !!status.repositoryAccessible;
+    const statusReady = accountReady && (!repositoryConfigured || repositoryReady);
+    if (status.clientId && clientIdInput && !clientIdInput.value) clientIdInput.value = status.clientId;
+    if (status.defaultRepository && ownerInput && repoInput && (!ownerInput.value || !repoInput.value)) {
+      const [owner, repo] = status.defaultRepository.split('/');
+      if (owner && !ownerInput.value) ownerInput.value = owner;
+      if (repo && !repoInput.value) repoInput.value = repo;
+    }
+    if (badge) {
+      badge.textContent = accountReady ? 'Connected' : status.authPending ? 'Connecting...' : 'Not connected';
+      badge.style.color = accountReady ? 'var(--success)' : '';
+    }
+    if (disconnectBtn) disconnectBtn.style.display = status.authenticated ? '' : 'none';
+    statusEl.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0.75rem;">
+        <div><strong>Status:</strong> <span style="color:${statusReady ? 'var(--success)' : 'var(--warning)'}">${statusReady ? 'Ready' : 'Needs attention'}</span></div>
+        <div><strong>Mode:</strong> OAuth</div>
+        <div><strong>Authenticated:</strong> ${status.authenticated ? 'yes' : 'no'}</div>
+        <div><strong>Repository:</strong> ${esc(status.defaultRepository || 'not configured')}</div>
+        <div><strong>Repo access:</strong> ${repositoryConfigured ? (status.repositoryAccessible ? 'yes' : 'no') : 'not checked'}</div>
+      </div>
+      <div style="margin-top:0.75rem;color:var(--text-secondary);">${esc(status.message || '')}</div>
+      ${status.repositoryUrl ? `<div style="margin-top:0.5rem;"><a href="${escAttr(status.repositoryUrl)}" target="_blank" rel="noopener">${esc(status.repositoryUrl)}</a></div>` : ''}
+    `;
+  };
+
+  function stopGitHubAuthAttempt() {
+    githubAuthAttempt?.stop?.();
+    githubAuthAttempt = null;
+  }
+
+  const refreshStatus = async () => {
+    const statusEl = section.querySelector('#github-status');
+    if (statusEl) statusEl.textContent = 'Checking GitHub connection...';
+    try {
+      renderStatus(await api.githubStatus());
+    } catch (err) {
+      if (statusEl) {
+        statusEl.innerHTML = `<span style="color:var(--error);">${esc(err instanceof Error ? err.message : String(err))}</span>`;
+      }
+    }
+  };
+
+  section.querySelector('#github-connect')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#github-connect');
+    const statusEl = section.querySelector('#github-status');
+    const clientId = section.querySelector('#github-client-id')?.value?.trim();
+    const clientSecret = section.querySelector('#github-client-secret')?.value?.trim();
+    const owner = section.querySelector('#github-owner')?.value?.trim();
+    const repo = section.querySelector('#github-repo')?.value?.trim();
+    if (!clientId) {
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--warning);">Please enter the GitHub OAuth Client ID.</div>';
+      return;
+    }
+    if ((owner && !repo) || (!owner && repo)) {
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--warning);">Enter both owner and repository, or leave both blank to connect only the GitHub account.</div>';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Starting Auth...';
+    stopGitHubAuthAttempt();
+    try {
+      const githubConfig = {
+        enabled: true,
+        mode: 'oauth',
+        clientId,
+        oauthCallbackPort: 18434,
+        scopes: ['repo', 'read:user'],
+      };
+      if (owner && repo) {
+        githubConfig.defaultOwner = owner;
+        githubConfig.defaultRepo = repo;
+      }
+      if (clientSecret) githubConfig.clientSecret = clientSecret;
+      await api.updateConfig({ assistant: { tools: { github: githubConfig } } });
+      const authStart = await api.githubAuthStart();
+      if (!authStart?.success || !authStart.authUrl) {
+        btn.disabled = false;
+        btn.textContent = 'Connect GitHub';
+        if (statusEl) {
+          statusEl.innerHTML = `<div style="color:var(--warning);">${esc(authStart?.message || 'GitHub authentication could not start. Check the OAuth Client ID and Client Secret.')}</div>`;
+        }
+        return;
+      }
+      const popup = window.open(authStart.authUrl, '_blank', 'width=600,height=700');
+      popup?.focus?.();
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--text-muted);">Opening GitHub login in a new window. Please complete the flow there.</div>';
+      githubAuthAttempt = startCloudAuthAttempt({
+        popupWindow: popup,
+        pollStatus: () => api.githubStatus(),
+        cancelPendingAuth: () => api.githubAuthCancel(),
+        onAuthenticated: async () => {
+          githubAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect GitHub';
+          await refreshStatus();
+        },
+        onAbandoned: async (reason) => {
+          githubAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect GitHub';
+          await refreshStatus();
+          if (statusEl) {
+            statusEl.innerHTML = reason === 'timed_out'
+              ? '<div style="color:var(--warning);">GitHub authentication timed out. Click Connect GitHub to try again.</div>'
+              : reason === 'popup_blocked'
+                ? '<div style="color:var(--warning);">The GitHub authentication window was blocked. Allow popups and click Connect GitHub again.</div>'
+                : '<div style="color:var(--warning);">The GitHub authentication window was closed before completion. Click Connect GitHub to try again.</div>';
+          }
+        },
+        onError: async (err) => {
+          githubAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect GitHub';
+          if (statusEl) statusEl.innerHTML = `<div style="color:var(--error);">${esc(err.message || 'Failed to monitor GitHub authentication.')}</div>`;
+        },
+      });
+    } catch (err) {
+      stopGitHubAuthAttempt();
+      btn.disabled = false;
+      btn.textContent = 'Connect GitHub';
+      if (statusEl) statusEl.innerHTML = `<div style="color:var(--error);">${esc(err.message || 'Failed to start GitHub authentication.')}</div>`;
+    }
+  });
+
+  section.querySelector('#github-refresh')?.addEventListener('click', refreshStatus);
+  section.querySelector('#github-disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect from GitHub? This will clear the stored tokens.')) return;
+    try {
+      stopGitHubAuthAttempt();
+      await api.githubDisconnect();
+      refreshStatus();
+    } catch (err) {
+      console.error('Failed to disconnect GitHub:', err);
+    }
+  });
+  refreshStatus();
   return section;
 }
 

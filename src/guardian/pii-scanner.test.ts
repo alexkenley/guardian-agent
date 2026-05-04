@@ -30,6 +30,16 @@ describe('PiiScanner', () => {
     expect(result.sanitized).not.toContain('jane@example.com');
   });
 
+  it('does not treat Apollo mission prose as a street address', () => {
+    const scanner = new PiiScanner({ entities: ['street_address'] });
+    const result = scanner.sanitizeContent(
+      'The Apollo 13 mission had to use command module LiOH filters in place of the lunar module filters.',
+    );
+
+    expect(result.matches).toHaveLength(0);
+    expect(result.sanitized).toContain('Apollo 13 mission');
+  });
+
   it('supports deterministic anonymization placeholders', () => {
     const scanner = new PiiScanner({ mode: 'anonymize', entities: ['email'] });
     const result = scanner.sanitizeContent('alice@example.com copied alice@example.com');

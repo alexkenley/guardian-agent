@@ -30,7 +30,11 @@ const DIRECT_REPLY_CONTEXT_CLAUSE_PATTERN = /^(?:for\s+(?:this|the)\s+(?:chat|co
 
 export function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
   const normalized = request.trim().toLowerCase();
-  if (!normalized || normalized.length > 64) return false;
+  if (!normalized) return false;
+  if (/\b(?:thing|one|item|request|topic|subject)\s+(?:we\s+)?(?:talked|discussed|mentioned)\s+(?:about\s+)?(?:before|earlier|previously)\b/.test(normalized)) {
+    return true;
+  }
+  if (normalized.length > 64) return false;
   return /^(?:yes|yeah|yep|no|nope|ok|okay|sure|actually|instead|use\b|switch\b|continue\b|resume\b|retry\b|again\b|same\b|that\b|those\b|it\b|them\b|this\b)/.test(normalized)
     || /\b(?:that|those|it|them|same\s+(?:one|workspace|session)|again)\b/.test(normalized);
 }

@@ -118,6 +118,42 @@ export async function handleWebProviderAdminRoutes(
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/github/status') {
+    if (!dashboard.onGitHubStatus) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    sendJSON(res, 200, await dashboard.onGitHubStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/github/auth/start') {
+    if (!dashboard.onGitHubAuthStart) {
+      sendJSON(res, 404, { error: 'Native GitHub integration not enabled' });
+      return true;
+    }
+    sendJSON(res, 200, await dashboard.onGitHubAuthStart());
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/github/auth/cancel') {
+    if (!dashboard.onGitHubAuthCancel) {
+      sendJSON(res, 404, { error: 'Native GitHub integration not enabled' });
+      return true;
+    }
+    sendJSON(res, 200, await dashboard.onGitHubAuthCancel());
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/github/disconnect') {
+    if (!dashboard.onGitHubDisconnect) {
+      sendJSON(res, 404, { error: 'Native GitHub integration not enabled' });
+      return true;
+    }
+    sendJSON(res, 200, await dashboard.onGitHubDisconnect());
+    return true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/microsoft/auth/start') {
     if (!dashboard.onMicrosoftAuthStart) {
       sendJSON(res, 404, { error: 'Native Microsoft integration not enabled' });

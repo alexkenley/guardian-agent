@@ -1552,6 +1552,34 @@ export interface CodingBackendsConfig {
   versionCheckIntervalMs?: number;
 }
 
+/** GitHub developer/source-control integration. */
+export interface GitHubConfig {
+  /** Enable GitHub tool integration. */
+  enabled: boolean;
+  /** Authentication/execution mode. */
+  mode: 'cli' | 'oauth' | 'app';
+  /** Default GitHub owner or organization for issue/PR operations. */
+  defaultOwner?: string;
+  /** Default GitHub repository for issue/PR operations. */
+  defaultRepo?: string;
+  /** OAuth app Client ID for native GitHub browser sign-in. */
+  clientId?: string;
+  /** OAuth app Client Secret for native GitHub browser sign-in. */
+  clientSecret?: string;
+  /** Local callback port for native OAuth. */
+  oauthCallbackPort?: number;
+  /** OAuth scopes to request. Defaults to repo and read:user. */
+  scopes?: string[];
+  /** GitHub CLI executable path. Default: gh. */
+  cliPath?: string;
+  /** Allow GitHub issue creation after normal external-post approval. */
+  allowIssueCreation?: boolean;
+  /** Allow GitHub pull request creation after normal external-post approval. */
+  allowPullRequestCreation?: boolean;
+  /** CLI operation timeout in milliseconds. */
+  timeoutMs?: number;
+}
+
 /** Assistant tool execution policy and sandbox settings. */
 export interface AssistantToolsConfig {
   /** Enable assistant tool runtime and LLM tool-calling. */
@@ -1582,6 +1610,8 @@ export interface AssistantToolsConfig {
   microsoft?: MicrosoftConfig;
   /** Cloud and hosting provider integrations. */
   cloud?: AssistantCloudConfig;
+  /** GitHub developer/source-control integration. */
+  github?: GitHubConfig;
   /** Native document search engine. Indexes local document collections for BM25 + vector hybrid search. */
   search?: import('../search/types.js').SearchConfig;
   /** External coding CLI backend orchestration (Claude Code, Codex, Gemini CLI, etc.). */
@@ -2166,6 +2196,16 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         awsProfiles: [],
         gcpProfiles: [],
         azureProfiles: [],
+      },
+      github: {
+        enabled: true,
+        mode: 'oauth',
+        oauthCallbackPort: 18434,
+        scopes: ['repo', 'read:user'],
+        cliPath: 'gh',
+        allowIssueCreation: true,
+        allowPullRequestCreation: false,
+        timeoutMs: 30000,
       },
       agentPolicyUpdates: {
         allowedPaths: false,

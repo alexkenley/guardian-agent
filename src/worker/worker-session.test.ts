@@ -996,8 +996,8 @@ describe('BrokeredWorkerSession automation control', () => {
       if (firstTool === 'route_intent') {
         return {
           content: JSON.stringify({
-            route: 'none',
-            confidence: 'low',
+            route: 'general_assistant',
+            confidence: 'high',
             summary: 'Stay in the normal assistant path.',
           }),
           model: 'test-model',
@@ -1058,14 +1058,14 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.metadata).not.toHaveProperty('pendingApprovals');
   });
 
-  it('treats narration-only replies as completed answer-only runs when the gateway falls back to a direct-answer contract', async () => {
+  it('treats narration-only replies as completed answer-only runs when the gateway routes to a direct-answer contract', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;
       if (firstTool === 'route_intent') {
         return {
           content: JSON.stringify({
-            route: 'none',
-            confidence: 'low',
+            route: 'general_assistant',
+            confidence: 'high',
             summary: 'Stay in the normal assistant path.',
           }),
           model: 'test-model',

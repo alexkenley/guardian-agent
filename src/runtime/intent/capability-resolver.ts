@@ -18,6 +18,8 @@ export type IntentCapabilityCandidate =
   | 'workspace_read'
   | 'browser'
   | 'web_search'
+  | 'diagnostics_issue_submit'
+  | 'diagnostics_issue_draft'
   | 'security_guardrail'
   | 'coding_session_control';
 
@@ -54,6 +56,9 @@ function preferredCandidatesForDecision(
     case 'personal_assistant_task':
       return ['personal_assistant'];
     case 'general_assistant':
+      if (shouldUseDirectWebSearchCandidate(decision)) {
+        return ['web_search'];
+      }
       if (hasOnlyManagedSandboxStatusCategories(decision)) {
         return ['coding_session_control'];
       }
@@ -73,6 +78,13 @@ function preferredCandidatesForDecision(
         : ['workspace_read', 'workspace_write'];
     case 'search_task':
       return shouldUseDirectWebSearchCandidate(decision) ? ['web_search'] : [];
+    case 'diagnostics_task':
+      if (shouldUseDiagnosticsIssueSubmitCandidate(decision)) {
+        return ['diagnostics_issue_submit'];
+      }
+      return shouldUseDiagnosticsIssueDraftCandidate(decision)
+        ? ['diagnostics_issue_draft']
+        : [];
     case 'security_task':
       return ['security_guardrail'];
     case 'memory_task':
@@ -110,11 +122,33 @@ function preferredCandidatesForDecision(
   }
 }
 
+function shouldUseDiagnosticsIssueSubmitCandidate(decision: IntentGatewayDecision): boolean {
+  if (decision.resolution !== 'ready') return false;
+  if (decision.operation === 'send') return true;
+  return decision.entities.toolName === 'github_issue_create';
+}
+
+function shouldUseDiagnosticsIssueDraftCandidate(decision: IntentGatewayDecision): boolean {
+  if (decision.resolution !== 'ready') return false;
+  if (decision.operation === 'draft' || decision.operation === 'create' || decision.operation === 'save') {
+    return true;
+  }
+  return decision.entities.toolName === 'guardian_issue_draft';
+}
+
 function shouldUseDirectWebSearchCandidate(decision: IntentGatewayDecision): boolean {
-  if (decision.confidence === 'low') return false;
-  if (decision.requiresToolSynthesis === true || decision.preferredAnswerPath === 'tool_loop') return false;
+  if (decision.requiresToolSynthesis === true || decision.preferredAnswerPath === 'tool_loop') {
+    return false;
+  }
   const nonAnswerSteps = requiredPlannedSteps(decision).filter((step) => step.kind !== 'answer');
-  if (nonAnswerSteps.length <= 0) return true;
+  const hasStructuredWebOnlyPlan = nonAnswerSteps.length > 0 && nonAnswerSteps.every((step) => {
+    const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
+    return categories.length > 0 && categories.every((category) => isWebSearchDirectCategory(category));
+  });
+  if (decision.confidence === 'low' && !hasStructuredWebOnlyPlan) return false;
+  if (decision.requiresRepoGrounding === true) return false;
+  if (nonAnswerSteps.length <= 0) return decision.route === 'search_task';
+  if (nonAnswerSteps.length > 1) return false;
   return nonAnswerSteps.every((step) => {
     const categories = expectedCategoriesForStep(step).map((category) => category.trim()).filter(Boolean);
     return categories.length > 0 && categories.every((category) => isWebSearchDirectCategory(category));

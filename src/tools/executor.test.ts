@@ -135,6 +135,215 @@ describe('ToolExecutor', () => {
     expect(names).toContain('llm_provider_update');
     expect(names).toContain('automation_output_search');
     expect(names).toContain('automation_output_read');
+    expect(names).toContain('guardian_issue_draft');
+    expect(names).toContain('github_status');
+    expect(names).toContain('github_issue_create');
+  });
+
+  it('checks GitHub status through the configured service', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      githubService: {
+        status: async () => ({
+          enabled: true,
+          mode: 'cli',
+          cliPath: 'gh',
+          installed: true,
+          authenticated: false,
+          defaultRepository: 'example-org/example-repo',
+          repositoryAccessible: false,
+          message: 'GitHub CLI is installed but not authenticated. Run `gh auth login`.',
+        }),
+        createIssue: async () => {
+          throw new Error('should not create issue during status');
+        },
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'github_status',
+      args: {},
+      origin: 'assistant',
+      agentId: 'assistant',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      installed: true,
+      authenticated: false,
+      defaultRepository: 'example-org/example-repo',
+    });
+  });
+
+  it('requires approval before creating a GitHub issue', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      githubConfig: {
+        defaultOwner: 'example-org',
+        defaultRepo: 'example-repo',
+      },
+      githubService: {
+        status: async () => ({
+          enabled: true,
+          mode: 'cli',
+          cliPath: 'gh',
+          installed: true,
+          authenticated: true,
+          repositoryAccessible: true,
+          defaultRepository: 'example-org/example-repo',
+          message: 'ready',
+        }),
+        createIssue: async () => {
+          throw new Error('issue creation must wait for approval');
+        },
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'github_issue_create',
+      args: {
+        title: '[Diagnostics] Bad route',
+        body: 'Redacted issue body',
+        labels: ['diagnostics'],
+      },
+      origin: 'assistant',
+      agentId: 'assistant',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('pending_approval');
+    expect(result.approvalId).toBeTruthy();
+  });
+
+  it('requires a configured GitHub repository before requesting issue creation approval', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'github_issue_create',
+      args: {
+        title: '[Diagnostics] Bad route',
+        body: 'Redacted issue body',
+        labels: ['diagnostics'],
+      },
+      origin: 'assistant',
+      agentId: 'assistant',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message).toContain('GitHub owner and repository are required');
+  });
+
+  it('runs the read-only Guardian issue draft tool without posting externally', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      intentRoutingTrace: {
+        getStatus: () => ({ enabled: true, filePath: '/tmp/intent-routing.jsonl' }),
+        listRecent: async () => [
+          {
+            id: 'trace-1',
+            timestamp: 1000,
+            stage: 'incoming_dispatch',
+            requestId: 'req-bad',
+            channel: 'web',
+            userId: 'owner',
+            contentPreview: 'Go search the web and bring back useful facts.',
+            details: {},
+          },
+          {
+            id: 'trace-2',
+            timestamp: 1100,
+            stage: 'clarification_requested',
+            requestId: 'req-bad',
+            channel: 'web',
+            userId: 'owner',
+            details: { summary: 'What should I search the web for?' },
+          },
+          {
+            id: 'trace-3',
+            timestamp: 1200,
+            stage: 'dispatch_response',
+            requestId: 'req-bad',
+            channel: 'web',
+            userId: 'owner',
+            details: { responsePreview: 'What should I search the web for?' },
+          },
+          {
+            id: 'trace-current',
+            timestamp: 1300,
+            stage: 'incoming_dispatch',
+            requestId: 'req-current',
+            channel: 'web',
+            userId: 'owner',
+            contentPreview: 'Report that as a bug.',
+            details: {},
+          },
+        ],
+      },
+      auditLog: {
+        query: () => [
+          {
+            id: 'audit-1',
+            timestamp: 1150,
+            type: 'action_allowed',
+            severity: 'info',
+            agentId: 'assistant-tools',
+            controller: 'GuardianAgent',
+            details: { actionType: 'web_search', apiKey: 'secret-value' },
+          },
+        ],
+      },
+    });
+
+    const result = await executor.executeModelTool(
+      'guardian_issue_draft',
+      { problem: 'The app asked an unhelpful web-search clarification.' },
+      {
+        origin: 'assistant',
+        requestId: 'req-current',
+        channel: 'web',
+        userId: 'owner',
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.message).toContain('No external issue was created');
+    const output = result.output as {
+      draft: { title: string; body: string; privacyNote: string };
+      evidence: { requestIds: string[] };
+    };
+    expect(output.evidence.requestIds).toEqual(['req-bad']);
+    expect(output.draft.title).toContain('unhelpful web-search clarification');
+    expect(output.draft.body).not.toContain('secret-value');
+    expect(output.draft.privacyNote).toContain('No external post has been made');
   });
 
   it('keeps code-session eager tools focused on planning, verification, and brokered file writes', () => {
@@ -10173,7 +10382,7 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(18);
+      expect(info.length).toBe(19);
       const names = info.map((c) => c.category);
       expect(names).toContain('coding');
       expect(names).toContain('filesystem');

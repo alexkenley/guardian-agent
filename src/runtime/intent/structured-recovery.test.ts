@@ -493,6 +493,71 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.summary).toContain('What should I search the web for?');
   });
 
+  it('repairs explicit look-up requests into web search even without web wording', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Direct fallback.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Look up recent reports about credential leaks in developer tools, summarize the defensive lessons, and do not include exploit steps.',
+      configuredSearchSources: [
+        {
+          id: 'docs',
+          name: 'Docs',
+          type: 'directory',
+          enabled: true,
+          indexedSearchAvailable: true,
+        },
+      ],
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('search_task');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('search_surface');
+    expect(decision.entities.query).toContain('credential leaks');
+    expect(decision.plannedSteps[0]?.expectedToolCategories).toContain('web_search');
+  });
+
+  it('keeps note lookups on the personal assistant surface instead of web search', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Fallback.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+    }, {
+      sourceContent: 'Find the latest notes about the intent gateway and tell me what still needs work.',
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.route).toBe('personal_assistant_task');
+    expect(decision.entities.personalItemType).toBe('note');
+    expect(decision.entities.query).toBe('the intent gateway');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('query');
+  });
+
   it('does not re-clarify resolved web route clarification answers', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'search_task',
@@ -599,7 +664,7 @@ describe('normalizeIntentGatewayDecision', () => {
 
     expect(decision.route).toBe('browser_task');
     expect(decision.resolution).toBe('ready');
-    expect(decision.operation).toBe('inspect');
+    expect(decision.operation).toBe('search');
     expect(decision.requiresToolSynthesis).toBe(true);
     expect(decision.plannedSteps[0]?.kind).toBe('search');
     expect(decision.plannedSteps[0]?.expectedToolCategories).toContain('web_search');
@@ -701,6 +766,95 @@ describe('normalizeIntentGatewayDecision', () => {
 
     expect(decision.resolution).toBe('ready');
     expect(decision.missingFields).not.toContain('search_surface');
+    expect(decision.missingFields).not.toContain('query');
+    expect(decision.entities.query).toContain('artificial intelligence');
+  });
+
+  it('adds web evidence to answer-only browser follow-up refinements', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'browser_task',
+      confidence: 'low',
+      operation: 'run',
+      summary: 'Narrow the previous web research.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'answer',
+          summary: 'Research artificial intelligence, sex work policy, and canary deployment strategies.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Keep it factual and cite sources.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Now narrow that down to artificial intelligence, sex work policy, and canary deployment strategies. Keep it factual and cite sources.',
+      continuity: {
+        continuityKey: 'default:owner',
+        linkedSurfaceCount: 1,
+        lastActionableRequest: 'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+      },
+    }, {
+      classifierSource: 'classifier.json_fallback',
+    });
+
+    expect(decision.route).toBe('browser_task');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.missingFields).not.toContain('query');
+    expect(decision.entities.query).toContain('artificial intelligence');
+    expect(decision.plannedSteps[0]?.kind).toBe('search');
+    expect(decision.plannedSteps[0]?.expectedToolCategories).toContain('web_search');
+  });
+
+  it('repairs unknown fallback web-research refinements using the previous web request', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'unknown',
+      confidence: 'low',
+      operation: 'unknown',
+      summary: 'Fallback.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'direct_assistant',
+      preferredTier: 'local',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      expectedContextPressure: 'low',
+      preferredAnswerPath: 'direct',
+      simpleVsComplex: 'simple',
+      planned_steps: [
+        {
+          kind: 'answer',
+          summary: 'Research artificial intelligence, sex work policy, and canary deployment strategies.',
+          required: true,
+        },
+      ],
+    }, {
+      sourceContent: 'Now narrow that down to artificial intelligence, sex work policy, and canary deployment strategies. Keep it factual and cite sources.',
+      continuity: {
+        continuityKey: 'default:owner',
+        linkedSurfaceCount: 1,
+        lastActionableRequest: 'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+      },
+    }, {
+      classifierSource: 'classifier.primary',
+    });
+
+    expect(decision.route).toBe('search_task');
+    expect(decision.operation).toBe('search');
+    expect(decision.resolution).toBe('ready');
+    expect(decision.entities.query).toContain('artificial intelligence');
+    expect(decision.plannedSteps[0]?.kind).toBe('search');
+    expect(decision.plannedSteps[0]?.expectedToolCategories).toContain('web_search');
   });
 
   it('preserves mixed automation creation and control plans as automation authoring', () => {

@@ -25,6 +25,8 @@ import {
 import {
   isRawCredentialDisclosureRequest,
   looksLikeSelfContainedDirectAnswerTurn,
+  looksLikeContextDependentPromptSelectionTurn,
+  isExplicitRepoInspectionRequest,
 } from './intent/request-patterns.js';
 import { getAmbiguousEmailProviderClarification } from './email-provider-routing.js';
 import type {
@@ -141,6 +143,7 @@ export class IntentGateway {
     decision = workingRecord.decision;
     decision = applyUncertainRepairedRouteGuard(input, decision);
     decision = applyMissingRepairedSearchTargetGuard(input, decision);
+    decision = applyUnresolvedContextReferenceGuard(input, decision);
     decision = repairAutomationClarificationFromRecentHistory(input, decision);
     if (needsAutomationNameRepair(decision)) {
       const repairedName = await repairAutomationName(input, decision, chat);
@@ -162,11 +165,99 @@ export class IntentGateway {
       }
     }
     decision = applyIntentRouteClarificationGuard(input, workingRecord, decision);
+    decision = repairUnavailableUnknownWithConversationContext(input, workingRecord, decision);
+    decision = applyUnknownRouteClarificationGuard(input, decision);
+    decision = repairMissingFieldClarificationPrompt(input, decision);
     return {
       ...workingRecord,
       decision,
     };
   }
+}
+
+function applyUnresolvedContextReferenceGuard(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (!shouldClarifyUnresolvedContextReference(input, decision)) {
+    return decision;
+  }
+  return {
+    ...decision,
+    summary: 'What should I check? Please point me at the item, page, message, file, or request you mean.',
+    resolution: 'needs_clarification',
+    missingFields: [...new Set([...decision.missingFields, 'reference_target'])],
+    executionClass: 'direct_assistant',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+  };
+}
+
+function shouldClarifyUnresolvedContextReference(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): boolean {
+  if (decision.resolution !== 'ready' || decision.turnRelation !== 'new_request') {
+    return false;
+  }
+  if (input.pendingAction || hasContinuityAnchor(input)) {
+    return false;
+  }
+  if (!isToolBackedContextReferenceDecision(decision)) {
+    return false;
+  }
+  if (!looksLikeContextDependentPromptSelectionTurn(input.content)) {
+    return false;
+  }
+  return !hasConcreteReferenceTarget(input, decision);
+}
+
+function hasContinuityAnchor(input: IntentGatewayInput): boolean {
+  const continuity = input.continuity;
+  return !!(
+    continuity?.lastActionableRequest
+    || continuity?.focusSummary
+    || continuity?.continuationStateKind
+    || (continuity?.activeExecutionRefs && continuity.activeExecutionRefs.length > 0)
+  );
+}
+
+function isToolBackedContextReferenceDecision(decision: IntentGatewayDecision): boolean {
+  if (decision.requiresRepoGrounding || decision.requiresToolSynthesis) {
+    return true;
+  }
+  return decision.route === 'security_task'
+    || decision.route === 'coding_task'
+    || decision.route === 'filesystem_task'
+    || decision.route === 'browser_task'
+    || decision.route === 'search_task'
+    || decision.route === 'memory_task';
+}
+
+function hasConcreteReferenceTarget(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): boolean {
+  const entities = decision.entities;
+  if (
+    entities.query
+    || (entities.urls && entities.urls.length > 0)
+    || entities.path
+    || entities.searchSourceId
+    || entities.searchSourceName
+    || entities.emailProvider
+    || entities.personalItemType
+  ) {
+    return true;
+  }
+  const content = input.content.trim();
+  return /\bhttps?:\/\//i.test(content)
+    || /\b(?:this|the)\s+(?:repo|repository|workspace|codebase|project)\b/i.test(content)
+    || isExplicitRepoInspectionRequest(content);
 }
 
 function buildContentPlanIntentGatewayRecord(
@@ -176,6 +267,7 @@ function buildContentPlanIntentGatewayRecord(
   const sourceContent = input.content;
   const repairContext = {
     sourceContent,
+    recentHistory: input.recentHistory,
     pendingAction: input.pendingAction,
     continuity: input.continuity,
   };
@@ -249,6 +341,7 @@ function normalizeIntentGatewayRecordDecisionForInput(
     } as Record<string, unknown>,
     {
       sourceContent: input.content,
+      recentHistory: input.recentHistory,
       pendingAction: input.pendingAction,
       continuity: input.continuity,
       enabledManagedProviders: input.enabledManagedProviders,
@@ -303,6 +396,126 @@ function applyMissingRepairedSearchTargetGuard(
     preferredAnswerPath: 'direct',
     simpleVsComplex: 'simple',
   };
+}
+
+function repairUnavailableUnknownWithConversationContext(
+  input: IntentGatewayInput,
+  record: IntentGatewayRecord,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (decision.route !== 'unknown') {
+    return decision;
+  }
+  if (record.available || record.model !== 'unknown') {
+    return decision;
+  }
+  if (
+    looksLikeContextDependentPromptSelectionTurn(input.content)
+    || !hasSubstantiveCurrentTurnForDirectFallback(input.content)
+  ) {
+    return decision;
+  }
+  if (input.pendingAction || !hasConversationContextForDirectFallback(input)) {
+    return decision;
+  }
+  return {
+    ...decision,
+    route: 'general_assistant',
+    confidence: 'low',
+    operation: decision.operation === 'unknown' ? 'read' : decision.operation,
+    summary: 'Answer the user from the current conversation context; ask plainly if that context is still insufficient.',
+    turnRelation: 'follow_up',
+    resolution: 'ready',
+    missingFields: [],
+    resolvedContent: input.content,
+    executionClass: 'direct_assistant',
+    preferredTier: 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+    provenance: {
+      ...(decision.provenance ?? {}),
+      route: 'repair.continuity',
+      operation: decision.operation === 'unknown'
+        ? 'repair.continuity'
+        : decision.provenance?.operation,
+      resolvedContent: 'repair.continuity',
+      executionClass: 'repair.continuity',
+      preferredTier: 'repair.continuity',
+      requiresRepoGrounding: 'repair.continuity',
+      requiresToolSynthesis: 'repair.continuity',
+      requireExactFileReferences: 'repair.continuity',
+      expectedContextPressure: 'repair.continuity',
+      preferredAnswerPath: 'repair.continuity',
+      simpleVsComplex: 'repair.continuity',
+    },
+    entities: {
+      ...decision.entities,
+    },
+  };
+}
+
+function hasSubstantiveCurrentTurnForDirectFallback(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 8 || trimmed.length >= 72;
+}
+
+function hasConversationContextForDirectFallback(input: IntentGatewayInput): boolean {
+  if (!hasContinuityAnchor(input)) {
+    return false;
+  }
+  if (input.continuity?.lastActionableRequest || input.continuity?.focusSummary) {
+    return true;
+  }
+  return (input.recentHistory ?? []).some((entry) => entry.role === 'assistant' && entry.content.trim().length > 0);
+}
+
+function applyUnknownRouteClarificationGuard(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (decision.route !== 'unknown') {
+    return decision;
+  }
+  const missingFields = new Set(decision.missingFields);
+  missingFields.add('intent_route');
+  return {
+    ...decision,
+    summary: buildUnknownRouteClarificationPrompt(input, decision),
+    resolution: 'needs_clarification',
+    missingFields: [...missingFields],
+    executionClass: 'direct_assistant',
+    preferredTier: 'local',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: false,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'low',
+    preferredAnswerPath: 'direct',
+    simpleVsComplex: 'simple',
+  };
+}
+
+function buildUnknownRouteClarificationPrompt(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): string {
+  const pendingPrompt = input.pendingAction?.field === 'intent_route'
+    ? input.pendingAction.prompt?.trim()
+    : '';
+  if (pendingPrompt) {
+    return pendingPrompt;
+  }
+  if (decision.summary.trim().endsWith('?')) {
+    return decision.summary.trim();
+  }
+  return 'I am not sure what you want me to do. Could you clarify the request?';
 }
 
 function shouldClarifyMissingRepairedSearchTarget(decision: IntentGatewayDecision): boolean {
@@ -363,6 +576,45 @@ function buildMissingRepairedSearchTargetPrompt(
     return 'I am not sure what to search for from the previous request. What useful information should I bring back?';
   }
   return 'What should I search for? A topic, question, file, or source is enough.';
+}
+
+function repairMissingFieldClarificationPrompt(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (decision.resolution !== 'needs_clarification') {
+    return decision;
+  }
+  const missingFields = new Set(decision.missingFields.map((field) => field.trim().toLowerCase()));
+  if (!missingFields.has('url') && !missingFields.has('urls')) {
+    return decision;
+  }
+  if (decision.route !== 'browser_task' && decision.route !== 'search_task') {
+    return decision;
+  }
+  return {
+    ...decision,
+    summary: buildMissingUrlClarificationPrompt(input, decision),
+  };
+}
+
+function buildMissingUrlClarificationPrompt(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): string {
+  const hasRecentHistory = (input.recentHistory ?? []).length > 0
+    || !!input.continuity?.lastActionableRequest
+    || !!input.continuity?.focusSummary
+    || (input.continuity?.activeExecutionRefs?.length ?? 0) > 0;
+  const wantsSummary = /\b(?:summari[sz]e|summary|full\s+contents?|contents?|fetch|read)\b/i.test(input.content)
+    || decision.operation === 'read';
+  if (hasRecentHistory && wantsSummary) {
+    return 'Which page should I fetch and summarize? Paste the URL or name one of the sources from the previous results.';
+  }
+  if (wantsSummary) {
+    return 'Which page should I fetch and summarize? Paste the URL or name the source.';
+  }
+  return 'Which page or URL should I open?';
 }
 
 function shouldClarifyUncertainRepairedRoute(
@@ -530,6 +782,9 @@ function readSatisfiedClarificationField(
       return decision.entities.sessionTarget?.trim() ? 'session_target' : null;
     case 'path':
       return decision.entities.path?.trim() ? 'path' : null;
+    case 'url':
+    case 'urls':
+      return decision.entities.urls?.some((url) => url.trim()) ? field.trim() : null;
     case 'intent_route':
       return hasSatisfiedIntentRouteClarification(decision, pendingAction) ? 'intent_route' : null;
     default:
@@ -565,6 +820,11 @@ function buildSatisfiedClarificationResolvedContent(
       return decision.entities.path?.trim()
         ? `Use path ${decision.entities.path.trim()} for this request: ${original}`
         : original;
+    case 'url':
+    case 'urls': {
+      const url = decision.entities.urls?.find((candidate) => candidate.trim());
+      return url ? `Use URL ${url.trim()} for this request: ${original}` : original;
+    }
     case 'intent_route':
       return original;
     default:
@@ -651,7 +911,14 @@ function repairAutomationClarificationFromRecentHistory(
   if (!isAutomationControlRoute) {
     return decision;
   }
-  if (decision.turnRelation === 'clarification_answer' || decision.turnRelation === 'correction') {
+  if (decision.turnRelation === 'correction') {
+    return decision;
+  }
+  if (
+    decision.turnRelation === 'clarification_answer'
+    && decision.operation !== 'unknown'
+    && decision.entities.automationName?.trim()
+  ) {
     return decision;
   }
 

@@ -41,7 +41,7 @@ export function looksLikeOngoingWorkResponse(content: string | undefined): boole
 
   const normalized = content.trim();
   const lower = normalized.toLowerCase();
-  const presentTenseActionStartPattern = /(?:^|[\.\?!]\s+)(?:creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking|listing|appending|continuing|renaming|moving|copying|deleting|running|opening)\b/i;
+  const presentTenseActionStartPattern = /(?:^|[\.\?!]\s+)(?:attempting|creating|writing|saving|searching|reviewing|inspecting|checking|loading|reading|looking|listing|appending|continuing|renaming|moving|copying|deleting|running|opening)\b/i;
   if (/<\/?think>/i.test(normalized)) {
     return true;
   }
@@ -74,6 +74,8 @@ export function looksLikeOngoingWorkResponse(content: string | undefined): boole
   const continuationMarkers = [
     /^(?:ok(?:ay)?|sure|alright|all right|right)[,:\s-]*(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
     /^(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
+    /^(?:we['’]ll|we will(?!\s+not)|let['’]s)\s+(?:search|fetch|browse|look|find|inspect|review|check|synthesize|analy[sz]e)\b/i,
+    /^(?:will perform|will call|will use|will run)\b/i,
     presentTenseActionStartPattern,
     /\b(?:now|next|first|then)\s+(?:i['’]ll|i will(?!\s+not)|let me)\b/i,
     /\b(?:let me|i['’]ll|i will(?!\s+not))\s+(?:inspect|check|review|verify|look|find|search|narrow|apply|restart|resume|write|create|read|use|try|run|continue|proceed|retry|delete|remove|append|save|deliver|provide|return)\b/i,

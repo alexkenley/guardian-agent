@@ -29,6 +29,7 @@ export type ToolCategory =
   | 'forum'
   | 'network'
   | 'cloud'
+  | 'github'
   | 'system'
   | 'memory'
   | 'search';
@@ -50,6 +51,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   forum: { label: 'Forum', description: 'Post responses to external forums (approval-gated).' },
   network: { label: 'Network', description: 'Local network diagnostics: ping, ARP, port check, DNS, traceroute.' },
   cloud: { label: 'Cloud & Hosting', description: 'Manage cloud and hosting providers such as cPanel/WHM.' },
+  github: { label: 'GitHub', description: 'Read GitHub repository context and create approved issues or pull requests.' },
   system: { label: 'System', description: 'OS info, resource usage, process listing, and service status.' },
   memory: { label: 'Memory', description: 'Search conversation history and manage persistent knowledge base.' },
   search: { label: 'Search', description: 'Hybrid search across indexed document collections (BM25 keyword + vector similarity).' },
@@ -173,11 +175,13 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'whm_backup',
     'whm_services',
   ],
+  github: ['github_status', 'github_issue_create'],
   system: [
     'sys_info',
     'sys_resources',
     'sys_processes',
     'sys_services',
+    'guardian_issue_draft',
     'performance_status_get',
     'performance_profile_apply',
     'performance_action_preview',

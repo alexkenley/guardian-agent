@@ -150,6 +150,16 @@ export function deriveWorkloadMetadata(
         preferredAnswerPath: 'chat_synthesis',
         simpleVsComplex: 'complex',
       };
+    case 'diagnostics_task':
+      return {
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'complex',
+      };
     case 'automation_authoring':
     case 'automation_output_task':
       return {

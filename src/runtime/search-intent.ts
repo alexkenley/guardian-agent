@@ -31,6 +31,56 @@ interface DirectFilesystemSaveIntentOptions {
   pathHint?: string;
 }
 
+const GENERIC_WEB_SEARCH_QUERY_WORDS = new Set([
+  'about',
+  'and',
+  'any',
+  'anything',
+  'back',
+  'before',
+  'bring',
+  'browse',
+  'find',
+  'for',
+  'from',
+  'give',
+  'information',
+  'internet',
+  'it',
+  'latest',
+  'link',
+  'links',
+  'look',
+  'me',
+  'online',
+  'page',
+  'pages',
+  'pull',
+  'random',
+  'read',
+  'research',
+  'results',
+  'return',
+  'search',
+  'site',
+  'sites',
+  'some',
+  'source',
+  'sources',
+  'stuff',
+  'summarise',
+  'summarize',
+  'talked',
+  'the',
+  'thing',
+  'things',
+  'various',
+  'we',
+  'web',
+  'website',
+  'websites',
+]);
+
 export function isDirectBrowserAutomationIntent(content: string): boolean {
   const text = content.trim();
   if (!text || text.length < 5) return false;
@@ -55,7 +105,7 @@ export function isDirectBrowserAutomationIntent(content: string): boolean {
  * or strong internet-oriented keywords to avoid hijacking normal chat.
  */
 export function parseWebSearchIntent(content: string): string | null {
-  const text = content.trim();
+  const text = stripConversationalSearchGreeting(content.trim());
   if (!text || text.length < 5) return null;
 
   if (isDirectBrowserAutomationIntent(text)) {
@@ -63,15 +113,15 @@ export function parseWebSearchIntent(content: string): string | null {
   }
 
   // Must NOT be a filesystem search (those are handled by parseDirectFileSearchIntent)
-  if (/\b(file|folder|directory|path|onedrive|drive|\.txt|\.json|\.ts|\.js|\.py)\b/i.test(text)) {
+  if (/\b(files?|folders?|directories|path|onedrive|drive|\.txt|\.json|\.ts|\.js|\.py)\b/i.test(text)) {
     return null;
   }
 
-  if (/^(?:hi|hello|hey)\b/i.test(text)) return null;
   if (/^(?:who|what)\s+are\s+you\b/i.test(text)) return null;
 
   const explicitSearchPatterns = [
     /^(?:please\s+)?(?:search|find|look\s*up|google|browse)\b/i,
+    /^(?:please\s+)?go\s+out\s+to\s+the\s+(?:web|internet|online)\b/i,
     /\b(?:search|look\s*up|google|browse)\b.*\b(?:web|internet|online)\b/i,
     /\bon\s+the\s+(?:web|internet|online)\b/i,
     /\bweb\s+search\b/i,
@@ -84,11 +134,29 @@ export function parseWebSearchIntent(content: string): string | null {
 
   const query = text
     .replace(/^(?:please|can you|could you|help me|i need to|i want to)\s+/i, '')
+    .replace(/^(?:use\s+)?web\s+search\s+(?:information|results?)\s+(?:about|on|for)\s+/i, '')
+    .replace(/^go\s+out\s+to\s+the\s+(?:web|internet|online)\s+(?:and\s+)?(?:search|find|look\s*up|pull|get|bring)?\s*(?:me|back)?\s*/i, '')
     .replace(/^(?:search|find|look\s*up|google|browse)\s+(?:for\s+|the\s+web\s+for\s+)?/i, '')
+    .replace(/^on\s+(?:the\s+)?/i, '')
     .replace(/\s+on\s+the\s+(?:web|internet|online)\s*$/i, '')
     .trim();
 
-  return query.length >= 3 ? query : null;
+  return isMeaningfulWebSearchQuery(query) ? query : null;
+}
+
+function stripConversationalSearchGreeting(content: string): string {
+  return content.replace(/^(?:hi|hello|hey)\b[\s,!.:-]*/i, '').trim();
+}
+
+export function isMeaningfulWebSearchQuery(query: string | null | undefined): query is string {
+  const normalized = query?.trim().toLowerCase() ?? '';
+  if (!normalized) return false;
+  if (/\bhttps?:\/\//i.test(normalized)) return true;
+  const tokens = normalized
+    .split(/[^a-z0-9+#]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+  return tokens.some((token) => !GENERIC_WEB_SEARCH_QUERY_WORDS.has(token));
 }
 
 export function parseDirectFileSearchIntent(

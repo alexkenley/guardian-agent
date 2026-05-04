@@ -307,7 +307,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredTier).toBe('external');
   });
 
-  it('returns an unknown decision when the model response is not structured', async () => {
+  it('turns unstructured unknown gateway output into a clarification blocker', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
       {
@@ -323,6 +323,10 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('unknown');
     expect(result.decision.confidence).toBe('low');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
   });
 
   it('recovers explicit repo file review requests when the model response is not structured', async () => {
@@ -652,13 +656,97 @@ describe('IntentGateway', () => {
     expect(result.mode).toBe('route_only_fallback');
     expect(result.available).toBe(false);
     expect(result.decision.route).toBe('unknown');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
     expect(result.decision.recoveryReason).toBeUndefined();
 
     const metadata = attachPreRoutedIntentGatewayMetadata(undefined, result);
     const restored = readPreRoutedIntentGatewayMetadata(metadata);
     expect(restored?.decision.route).toBe('unknown');
+    expect(restored?.decision.resolution).toBe('needs_clarification');
+    expect(restored?.decision.missingFields).toContain('intent_route');
     expect(restored?.decision.recoveryReason).toBeUndefined();
     expect(toIntentGatewayClientMetadata(restored)).not.toHaveProperty('recoveryReason');
+  });
+
+  it('falls back to direct conversation follow-up when routing is unavailable but continuity is present', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Do not search again. Based on this conversation, what should I trust least?',
+        channel: 'web',
+        recentHistory: [
+          {
+            role: 'user',
+            content: 'Go out to the internet and find me useful facts about Apollo 13, KFC history, and recent scientific breakthroughs. Include links.',
+          },
+          {
+            role: 'assistant',
+            content: 'Apollo 13 sources included NASA, Britannica, National Air and Space Museum, and Wikipedia. Recent scientific breakthroughs included Science and CAS.',
+          },
+        ],
+        continuity: {
+          continuityKey: 'shared-tier:owner',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The user is comparing source quality from a prior web-research conversation.',
+          lastActionableRequest: 'Fetch the full contents of one of the source pages you just used and summarize it.',
+          activeExecutionRefs: ['delegated_worker:research'],
+        },
+      },
+      async () => {
+        callCount += 1;
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).toEqual([]);
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+    expect(result.decision.provenance?.route).toBe('repair.continuity');
+  });
+
+  it('keeps vague context references as clarification blockers when routing is unavailable', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'asdf maybe the thing from before',
+        channel: 'web',
+        recentHistory: [
+          {
+            role: 'assistant',
+            content: 'The prior conversation compared Apollo 13 source quality after a web research run.',
+          },
+        ],
+        continuity: {
+          continuityKey: 'shared-tier:owner',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The user is comparing source quality from a prior web-research conversation.',
+          lastActionableRequest: 'Check your deep dive against the source page you fetched and correct any factual errors.',
+          activeExecutionRefs: ['delegated_worker:research'],
+        },
+      },
+      async () => {
+        callCount += 1;
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('unknown');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+    expect(result.decision.provenance?.route).not.toBe('repair.continuity');
   });
 
   it('derives a filesystem tool-loop workload from fallback write plans', async () => {
@@ -3143,6 +3231,188 @@ describe('IntentGateway', () => {
     expect(callCount).toBe(1);
   });
 
+  it('keeps contextual web-research analysis follow-ups on the direct conversation path', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Okay, now pick one of those areas, do a deep dive into it and give me your analysis.',
+        channel: 'web',
+        recentHistory: [
+          {
+            role: 'user',
+            content: 'Hi, can you search information on Apollo 13 moon mission, the history of KFC and the latest scientific breakthroughs and pull me back facts about each with links',
+          },
+          { role: 'user', content: 'Website.' },
+          {
+            role: 'assistant',
+            content: [
+              'Here are facts about each topic with source links:',
+              '## Apollo 13 Moon Mission',
+              'Source Links: https://www.nasa.gov/mission/apollo-13/',
+              '## History of KFC',
+              'Source Links: https://global.kfc.com/our-history',
+              '## Latest Scientific Breakthroughs',
+              '- HIV Prevention Breakthrough: Lenacapavir was named Science\'s 2024 Breakthrough of the Year.',
+              'Source Links: https://www.science.org/content/article/breakthrough-2024',
+            ].join('\n'),
+          },
+        ],
+        continuity: {
+          continuityKey: 'default:web-user',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['execution:web-search-1'],
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Unable to classify the request.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('keeps source-backed web-research refinements on the search path', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Now narrow that down to artificial intelligence, sex work policy, and canary deployment strategies. Keep it factual and cite sources.',
+        channel: 'web',
+        recentHistory: [
+          {
+            role: 'user',
+            content: 'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+          },
+          {
+            role: 'assistant',
+            content: [
+              'Here are useful source links:',
+              '1. Project.co - https://project.co/productivity-hacks/',
+              '2. The Guardian - https://www.theguardian.com/business/article/2024/jul/10/productivity-tips',
+            ].join('\n'),
+          },
+        ],
+        continuity: {
+          continuityKey: 'default:web-user',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['execution:web-search-1'],
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Unable to classify the request.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('search_task');
+    expect(result.decision.operation).toBe('search');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
+  it('extracts the query from greeted multi-topic web-search requests', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Hi, can you use web search information on Apollo 13 moon mission, the history of KFC, and the latest scientific breakthroughs and pull me back facts about each with links.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'search_task',
+          confidence: 'low',
+          operation: 'search',
+          summary: 'Search for the requested facts.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('search_task');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('query');
+    expect(result.decision.entities.query).toContain('Apollo 13 moon mission');
+    expect(result.decision.entities.query).toContain('history of KFC');
+  });
+
+  it('treats pasted prior web-result excerpts as clarification answers on the direct conversation path', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'HIV Prevention Breakthrough: Lenacapavir was named Science\'s 2024 Breakthrough of the Year, representing a new era in HIV prevention with off-the-charts success as PrEP.',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Website.' },
+          {
+            role: 'assistant',
+            content: [
+              '## Latest Scientific Breakthroughs',
+              '- HIV Prevention Breakthrough: Lenacapavir was named Science\'s 2024 Breakthrough of the Year, representing a new era in HIV prevention with off-the-charts success as PrEP.',
+              'Source Links: https://www.science.org/content/article/breakthrough-2024',
+            ].join('\n'),
+          },
+          {
+            role: 'assistant',
+            content: 'I can dive deeper. Which specific area would you like the deep-research analysis on?',
+          },
+        ],
+        continuity: {
+          continuityKey: 'default:web-user',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['execution:web-search-1'],
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'unknown',
+          confidence: 'low',
+          operation: 'unknown',
+          summary: 'Unable to classify the request.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
   it('classifies session listing as coding_session_control with navigate operation', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -3612,7 +3882,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
-  it('leaves standalone greetings unknown when every gateway pass returns structured unknown', async () => {
+  it('asks for clarification when every gateway pass returns structured unknown', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
       {
@@ -3636,6 +3906,9 @@ describe('IntentGateway', () => {
     expect(result.available).toBe(false);
     expect(result.decision.route).toBe('unknown');
     expect(result.decision.operation).toBe('unknown');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.requiresToolSynthesis).toBe(false);
     expect(result.decision.preferredAnswerPath).toBe('direct');
     expect(result.decision.simpleVsComplex).toBe('simple');
   });
@@ -3745,6 +4018,228 @@ describe('IntentGateway', () => {
     expect(result.decision.requiresRepoGrounding).toBe(false);
     expect(result.decision.requiresToolSynthesis).toBe(false);
     expect(result.decision.summary).toContain('What should I search the web for?');
+  });
+
+  it('keeps broad but useful web research ready when the request itself is the query', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Go out to the internet and find me random useful information from reputable websites. Give me the source links.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'search_task',
+          operation: 'search',
+          confidence: 'low',
+          summary: 'Search the web for useful information from reputable websites.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          planned_steps: [
+            {
+              kind: 'search',
+              summary: 'Search the web for useful information from reputable websites.',
+              expectedToolCategories: ['web_search'],
+              required: true,
+            },
+            {
+              kind: 'answer',
+              summary: 'Answer with source links.',
+              dependsOn: ['step_1'],
+              required: true,
+            },
+          ],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.provenance?.route).toBe('classifier.primary');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('query');
+    expect(result.decision.entities.query).toContain('reputable websites');
+  });
+
+  it('asks what to check for dangling safety references without continuity', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Can you check that and tell me if it is safe?',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'security_task',
+          operation: 'inspect',
+          confidence: 'medium',
+          summary: 'Inspect the referenced item for safety.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          executionClass: 'security_analysis',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('security_task');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('reference_target');
+    expect(result.decision.summary).toContain('What should I check?');
+  });
+
+  it('asks what to search for when memory routing targets an unresolved prior thing', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Search for the thing we talked about before and summarize it.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'memory_task',
+          operation: 'search',
+          confidence: 'high',
+          summary: 'Search memory for the previous conversation topic.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          executionClass: 'direct_assistant',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('memory_task');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('reference_target');
+    expect(result.decision.summary).toContain('What should I check?');
+  });
+
+  it('asks what to search for when web routing targets an unresolved prior thing', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Search for the thing we talked about before and give me the source links.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'search_task',
+          operation: 'search',
+          confidence: 'medium',
+          summary: 'Search the web for the previous conversation topic.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          executionClass: 'tool_orchestration',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          planned_steps: [
+            {
+              kind: 'search',
+              summary: 'Search the web for the previous topic.',
+              expectedToolCategories: ['web_search'],
+              required: true,
+            },
+          ],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('search_task');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('reference_target');
+    expect(result.decision.entities.query).toBeUndefined();
+    expect(result.decision.summary).toContain('What should I check?');
+  });
+
+  it('asks a concrete page question for browser read follow-ups that are missing a URL', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Fetch the full contents of one of those pages and summarize it.',
+        channel: 'web',
+        recentHistory: [
+          {
+            role: 'assistant',
+            content: 'Sources: https://example.com/report and https://example.com/blog',
+          },
+        ],
+        continuity: {
+          lastActionableRequest: 'Now narrow that down to artificial intelligence, sex work policy, and canary deployment strategies.',
+          activeExecutionRefs: ['delegated_worker:research'],
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'browser_task',
+          operation: 'read',
+          confidence: 'medium',
+          summary: 'Fetch and summarize the full contents of one of the previously cited web pages.',
+          turnRelation: 'follow_up',
+          resolution: 'needs_clarification',
+          missingFields: ['url'],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('browser_task');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('url');
+    expect(result.decision.summary).toContain('Which page should I fetch and summarize?');
+    expect(result.decision.summary).toContain('previous results');
+  });
+
+  it('resolves URL clarification answers back onto the original browser request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'https://example.com/report',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-url',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'url',
+          route: 'browser_task',
+          operation: 'read',
+          prompt: 'Which page should I fetch and summarize?',
+          originalRequest: 'Fetch the full contents of one of those pages and summarize it.',
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'browser_task',
+          operation: 'read',
+          confidence: 'high',
+          summary: 'Fetches and summarizes the supplied URL.',
+          turnRelation: 'clarification_answer',
+          resolution: 'ready',
+          urls: ['https://example.com/report'],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('browser_task');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).not.toContain('url');
+    expect(result.decision.entities.urls).toEqual(['https://example.com/report']);
+    expect(result.decision.resolvedContent).toContain('Use URL https://example.com/report');
+    expect(result.decision.resolvedContent).toContain('Fetch the full contents');
   });
 
   it('captures correction metadata and resolved content for coding backend repairs', async () => {

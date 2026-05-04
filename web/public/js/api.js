@@ -642,6 +642,10 @@ export const api = {
     body: JSON.stringify({ clientId, tenantId }),
   }),
   microsoftDisconnect: () => request('/api/microsoft/disconnect', { method: 'POST' }),
+  githubStatus: () => request('/api/github/status'),
+  githubAuthStart: () => request('/api/github/auth/start', { method: 'POST' }),
+  githubAuthCancel: () => request('/api/github/auth/cancel', { method: 'POST' }),
+  githubDisconnect: () => request('/api/github/disconnect', { method: 'POST' }),
 
   // Policy-as-Code Engine
   policyStatus: () => request('/api/policy/status'),

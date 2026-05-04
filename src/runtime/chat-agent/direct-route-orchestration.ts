@@ -41,6 +41,8 @@ export const CHAT_DIRECT_INTENT_CANDIDATES: readonly DirectIntentRoutingCandidat
   'workspace_read',
   'browser',
   'web_search',
+  'diagnostics_issue_submit',
+  'diagnostics_issue_draft',
   'security_guardrail',
 ];
 

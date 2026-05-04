@@ -1,24 +1,28 @@
 import type { ChatMessage, ChatOptions, ChatResponse } from '../../llm/types.js';
 
-export type IntentGatewayRoute =
-  | 'automation_authoring'
-  | 'automation_control'
-  | 'automation_output_task'
-  | 'ui_control'
-  | 'browser_task'
-  | 'personal_assistant_task'
-  | 'workspace_task'
-  | 'email_task'
-  | 'search_task'
-  | 'memory_task'
-  | 'filesystem_task'
-  | 'coding_task'
-  | 'coding_session_control'
-  | 'security_task'
-  | 'general_assistant'
-  | 'channel_delivery'
-  | 'complex_planning_task'
-  | 'unknown';
+export const INTENT_GATEWAY_ROUTE_VALUES = [
+  'automation_authoring',
+  'automation_control',
+  'automation_output_task',
+  'ui_control',
+  'browser_task',
+  'personal_assistant_task',
+  'workspace_task',
+  'email_task',
+  'search_task',
+  'memory_task',
+  'filesystem_task',
+  'coding_task',
+  'coding_session_control',
+  'diagnostics_task',
+  'security_task',
+  'general_assistant',
+  'channel_delivery',
+  'complex_planning_task',
+  'unknown',
+] as const;
+
+export type IntentGatewayRoute = typeof INTENT_GATEWAY_ROUTE_VALUES[number];
 
 export type IntentGatewayConfidence = 'high' | 'medium' | 'low';
 
@@ -81,8 +85,10 @@ export type IntentGatewayProvenanceSource =
   | 'resolver.automation'
   | 'resolver.provider_config'
   | 'resolver.tool_inventory'
+  | 'resolver.web_search'
   | 'resolver.clarification'
   | 'repair.structured'
+  | 'repair.continuity'
   | 'repair.automation_name'
   | 'derived.workload';
 
@@ -240,6 +246,7 @@ export interface IntentGatewayInput {
 
 export interface IntentGatewayRepairContext {
   sourceContent?: string;
+  recentHistory?: IntentGatewayInput['recentHistory'];
   pendingAction?: IntentGatewayInput['pendingAction'] | null;
   continuity?: IntentGatewayInput['continuity'] | null;
   configuredSearchSources?: IntentGatewayInput['configuredSearchSources'];

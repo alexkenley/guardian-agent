@@ -9037,8 +9037,11 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(staleWebIndex).toBe(-1);
     expect(configSurfaceIndex).toBeGreaterThan(-1);
     expect(codeAnswerIndex).toBeGreaterThan(configSurfaceIndex);
-    expect(messages.at(-2)?.content).toContain('run-timeline-context.js');
-    expect(messages.at(-1)?.content).toContain('Based on your last answer');
+    const latestUserMessageIndex = messages.findLastIndex((entry) => (
+      entry.role === 'user'
+      && entry.content.includes('Based on your last answer')
+    ));
+    expect(latestUserMessageIndex).toBeGreaterThan(codeAnswerIndex);
   });
 
   it('uses same-surface history for direct-assistant continuity without unrelated surface turns', async () => {
@@ -9335,7 +9338,8 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(messages.map((entry) => entry.content).join('\n')).not.toContain('marker-1234');
     expect(messages.map((entry) => entry.content).join('\n')).not.toContain('run-timeline-context.js');
     expect(messages.map((entry) => entry.content).join('\n')).not.toContain('STALE-MEMORY-MARKER');
-    expect(messages.at(-1)?.content).toBe('Reply with exactly: prod no context ok');
+    const latestUserMessage = messages.findLast((entry) => entry.role === 'user');
+    expect(latestUserMessage?.content).toBe('Reply with exactly: prod no context ok');
     expect(response.metadata?.contextAssembly).toMatchObject({
       knowledgeBaseLoaded: false,
     });

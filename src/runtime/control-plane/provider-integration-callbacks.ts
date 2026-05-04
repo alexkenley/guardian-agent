@@ -15,6 +15,8 @@ import type { GoogleAuth } from '../../google/google-auth.js';
 import type { GoogleService } from '../../google/google-service.js';
 import type { MicrosoftAuth } from '../../microsoft/microsoft-auth.js';
 import type { MicrosoftService } from '../../microsoft/microsoft-service.js';
+import { GitHubCliService } from '../../github/github-cli-service.js';
+import { GitHubOAuthService } from '../../github/github-oauth-service.js';
 import { resolveRuntimeCredentialView } from '../../runtime/credentials.js';
 import type { LocalSecretStore } from '../../runtime/secret-store.js';
 import type { WorkspaceIntegrationSyncHealthProvider } from '../../runtime/workspace-sync-health.js';
@@ -35,6 +37,10 @@ type ProviderIntegrationCallbacks = Pick<
   | 'onMicrosoftConfig'
   | 'onMicrosoftAuthCancel'
   | 'onMicrosoftDisconnect'
+  | 'onGitHubStatus'
+  | 'onGitHubAuthStart'
+  | 'onGitHubAuthCancel'
+  | 'onGitHubDisconnect'
   | 'onCloudTest'
 >;
 
@@ -107,6 +113,17 @@ function normalizeCloudProviderKey(providerKey: string): CloudProviderKey | unde
 export function createProviderIntegrationCallbacks(
   options: ProviderIntegrationCallbackOptions,
 ): ProviderIntegrationCallbacks {
+  let githubOAuthService: GitHubOAuthService | null = null;
+
+  const getGitHubService = (): GitHubCliService | GitHubOAuthService => {
+    const config = options.configRef.current.assistant.tools.github;
+    if (config?.mode === 'cli') return new GitHubCliService(config);
+    if (!githubOAuthService) {
+      githubOAuthService = new GitHubOAuthService(config);
+    }
+    return githubOAuthService;
+  };
+
   return {
     onGwsStatus: async () => {
       const status = await options.probeGwsCli(options.configRef.current);
@@ -312,6 +329,33 @@ export function createProviderIntegrationCallbacks(
       } catch (err) {
         return { success: false, message: err instanceof Error ? err.message : String(err) };
       }
+    },
+
+    onGitHubStatus: async () => {
+      const service = getGitHubService();
+      return service.status();
+    },
+
+    onGitHubAuthStart: async () => {
+      const config = options.configRef.current.assistant.tools.github;
+      githubOAuthService?.cancelPendingAuth('Starting a new GitHub connection flow.');
+      githubOAuthService = new GitHubOAuthService(config);
+      return githubOAuthService.startAuth();
+    },
+
+    onGitHubAuthCancel: async () => {
+      githubOAuthService?.cancelPendingAuth('GitHub connection flow was cancelled from the web UI.');
+      return { success: true, message: 'Cancelled pending GitHub auth flow.' };
+    },
+
+    onGitHubDisconnect: async () => {
+      const service = getGitHubService();
+      if (service instanceof GitHubOAuthService) {
+        await service.disconnect();
+        githubOAuthService = null;
+        return { success: true, message: 'Disconnected GitHub.' };
+      }
+      return { success: false, message: 'GitHub disconnect is only available for OAuth connections.' };
     },
 
     onCloudTest: async (providerKey: string, profileId: string) => {

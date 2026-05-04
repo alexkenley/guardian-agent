@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentContext, UserMessage } from '../../agent/types.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
+import { INTENT_GATEWAY_MISSING_SUMMARY } from '../intent/summary.js';
 import {
   buildChatDirectCodingRouteDeps,
   buildChatDirectRouteHandlers,
@@ -349,6 +350,352 @@ describe('chat direct route handlers', () => {
 
     expect(result).toContain("I can't follow instructions from untrusted web pages");
     expect(result).toContain('summarize external content as data');
+  });
+
+  it('wires diagnostics routing through the read-only issue draft tool', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-diagnostics',
+      message: 'Drafted a redacted issue report. No external issue was created.',
+      output: {
+        draft: {
+          title: '[Diagnostics] Last request lost context',
+          body: '## Problem Report\n\nThe assistant lost context.',
+          labels: ['diagnostics', 'user-reported'],
+          severity: 'medium',
+          privacyNote: 'No external post has been made.',
+        },
+        evidence: {
+          entriesAnalyzed: 7,
+          auditEventsAnalyzed: 2,
+          requestIds: ['req-bad'],
+        },
+      },
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+    } as never;
+    const decision: IntentGatewayDecision = {
+      route: 'diagnostics_task',
+      confidence: 'high',
+      operation: 'draft',
+      summary: 'Draft a GuardianAgent issue from diagnostics.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      entities: {},
+    } as IntentGatewayDecision;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      message: originalMessage,
+      routedMessage: {
+        ...routedMessage,
+        id: 'diagnostics-message',
+        content: 'Draft a GuardianAgent problem report from diagnostics.',
+      },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision,
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      runtimeDeps: runtimeDeps(tools),
+      codingRoutes: codingRoutes(tools),
+    });
+
+    const result = await handlers.diagnostics_issue_draft?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toMatchObject({
+      content: expect.stringContaining('Drafted a redacted GuardianAgent issue report. No GitHub issue was created.'),
+      metadata: {
+        diagnosticsIssueDraft: expect.objectContaining({
+          success: true,
+          jobId: 'job-diagnostics',
+          title: '[Diagnostics] Last request lost context',
+          requestIds: ['req-bad'],
+        }),
+        continuationState: {
+          kind: 'diagnostics_issue_draft',
+          payload: {
+            draft: expect.objectContaining({
+              title: '[Diagnostics] Last request lost context',
+              body: '## Problem Report\n\nThe assistant lost context.',
+              labels: ['diagnostics', 'user-reported'],
+              requestIds: ['req-bad'],
+            }),
+          },
+        },
+      },
+    });
+    expect(typeof result === 'object' ? result.content : result).toContain('## Problem Report');
+    expect(typeof result === 'object' ? result.content : result).toContain('Guardian will request approval before posting anything externally.');
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'guardian_issue_draft',
+      {
+        target: 'latest_completed_request',
+        problem: 'Draft a GuardianAgent issue from diagnostics.',
+      },
+      expect.objectContaining({
+        origin: 'assistant',
+        agentId: 'chat',
+        requestId: 'diagnostics-message',
+      }),
+    );
+  });
+
+  it('submits the reviewed diagnostics issue draft through the approval-gated GitHub tool', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: false,
+      status: 'pending_approval',
+      jobId: 'job-github-submit',
+      approvalId: 'approval-github-submit',
+      message: "Tool 'github_issue_create' is awaiting approval.",
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+    } as never;
+    const decision: IntentGatewayDecision = {
+      route: 'diagnostics_task',
+      confidence: 'high',
+      operation: 'send',
+      summary: 'Submit the reviewed GuardianAgent diagnostics issue draft.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      entities: { toolName: 'github_issue_create' },
+    } as IntentGatewayDecision;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      message: originalMessage,
+      routedMessage: {
+        ...routedMessage,
+        id: 'diagnostics-submit-message',
+        content: 'Submit this GitHub issue.',
+      },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision,
+      continuityThread: {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'diagnostics_issue_draft',
+          payload: {
+            draft: {
+              title: '[Diagnostics] Last request lost context',
+              body: '## Problem Report\n\nThe assistant lost context.',
+              labels: ['diagnostics', 'user-reported'],
+              severity: 'medium',
+              requestIds: ['req-bad'],
+              jobId: 'job-diagnostics',
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      runtimeDeps: runtimeDeps(tools),
+      codingRoutes: codingRoutes(tools),
+    });
+
+    const result = await handlers.diagnostics_issue_submit?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(result).toMatchObject({
+      content: "Tool 'github_issue_create' is awaiting approval.",
+      metadata: {
+        diagnosticsIssueSubmit: {
+          success: false,
+          status: 'pending_approval',
+          jobId: 'job-github-submit',
+          approvalId: 'approval-github-submit',
+          title: '[Diagnostics] Last request lost context',
+        },
+      },
+    });
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'github_issue_create',
+      {
+        title: '[Diagnostics] Last request lost context',
+        body: '## Problem Report\n\nThe assistant lost context.',
+        labels: ['diagnostics', 'user-reported'],
+      },
+      expect.objectContaining({
+        origin: 'assistant',
+        agentId: 'chat',
+        requestId: 'diagnostics-submit-message',
+      }),
+    );
+  });
+
+  it('does not submit a diagnostics issue when no reviewed draft is in continuation state', async () => {
+    const executeModelTool = vi.fn();
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+    } as never;
+    const decision: IntentGatewayDecision = {
+      route: 'diagnostics_task',
+      confidence: 'high',
+      operation: 'send',
+      summary: 'Submit the reviewed GuardianAgent diagnostics issue draft.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      entities: { toolName: 'github_issue_create' },
+    } as IntentGatewayDecision;
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      message: originalMessage,
+      routedMessage: {
+        ...routedMessage,
+        id: 'diagnostics-submit-message',
+        content: 'Submit this GitHub issue.',
+      },
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision,
+      continuityThread: null,
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      runtimeDeps: runtimeDeps(tools),
+      codingRoutes: codingRoutes(tools),
+    });
+
+    const result = await handlers.diagnostics_issue_submit?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(typeof result === 'object' ? result.content : result).toContain('do not have a reviewed GuardianAgent issue draft');
+    expect(executeModelTool).not.toHaveBeenCalled();
+  });
+
+  it('uses the user request instead of the generic missing-summary placeholder for diagnostics drafts', async () => {
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      status: 'succeeded',
+      output: {
+        draft: {
+          title: '[Diagnostics] Draft a GuardianAgent problem report',
+          body: '## Problem Report',
+          labels: ['diagnostics'],
+          severity: 'low',
+        },
+        evidence: {
+          entriesAnalyzed: 0,
+          auditEventsAnalyzed: 0,
+          requestIds: [],
+        },
+      },
+    }));
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool,
+    } as never;
+    const decision: IntentGatewayDecision = {
+      route: 'diagnostics_task',
+      confidence: 'low',
+      operation: 'draft',
+      summary: INTENT_GATEWAY_MISSING_SUMMARY,
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'tool_orchestration',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      entities: {},
+    } as IntentGatewayDecision;
+    const diagnosticsMessage = {
+      ...routedMessage,
+      id: 'diagnostics-message',
+      content: 'Draft a GuardianAgent problem report from diagnostics for the latest completed assistant request.',
+    };
+    const handlers = buildChatDirectRouteHandlers({
+      agentId: 'chat',
+      tools,
+      message: originalMessage,
+      routedMessage: diagnosticsMessage,
+      ctx,
+      userKey: 'owner:web',
+      conversationKey: { userId: 'owner', channel: 'web' },
+      stateAgentId: 'chat',
+      decision,
+      llmMessages: [],
+      defaultToolResultProviderKind: 'local',
+      sanitizeToolResultForLlm: vi.fn(),
+      chatWithFallback: vi.fn(),
+      executeStoredFilesystemSave: vi.fn(),
+      runtimeDeps: runtimeDeps(tools),
+      codingRoutes: codingRoutes(tools),
+    });
+
+    await handlers.diagnostics_issue_draft?.({
+      gatewayDirected: true,
+      gatewayUnavailable: false,
+      skipDirectWebSearch: false,
+    });
+
+    expect(executeModelTool).toHaveBeenCalledWith(
+      'guardian_issue_draft',
+      expect.objectContaining({
+        problem: diagnosticsMessage.content,
+      }),
+      expect.any(Object),
+    );
   });
 
   it('wires coding backend dispatch through shared route dependencies', async () => {

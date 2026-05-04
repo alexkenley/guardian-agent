@@ -90,7 +90,7 @@ const BUILTIN_PATTERNS: readonly PiiPattern[] = [
   {
     entity: 'street_address',
     label: 'Street Address',
-    regex: /\b(?:P\.?\s*O\.?\s*Box\s+\d{1,6}|(?:\d{1,6}\s+(?:[A-Za-z0-9.'#-]+\s+){0,5}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir|Way|Place|Pl|Terrace|Ter|Trail|Trl|Parkway|Pkwy)\b(?:\s+(?:Apt|Apartment|Suite|Ste|Unit|#)\s*[A-Za-z0-9-]+)?))/gi,
+    regex: /\b(?:P\.?\s*O\.?\s*Box\s+\d{1,6}|(?:\d{1,6}\s+(?:[A-Za-z0-9.'#-]+\s+){0,5}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir|Way|Place|Pl|Terrace|Ter|Trail|Trl|Parkway|Pkwy)\b(?:\s+(?:Apt|Apartment|Suite|Ste|Unit|#)\s*[A-Za-z0-9-]+)?))/g,
   },
   {
     entity: 'date_of_birth',

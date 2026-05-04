@@ -71,7 +71,7 @@ const GUIDE_PROMPT_STOP_WORDS = new Set([
 export function getReferenceGuide(): ReferenceGuide {
   return {
     title: 'Guardian Agent Reference Guide',
-    intro: 'Operator guide for setup, daily use, coding work, cloud connections, automations, and security controls across web, CLI, and Telegram. For source code, design docs, security policy, or contribution workflow, use the GitHub Repository section in this guide.',
+    intro: 'Operator guide for setup, daily use, coding work, cloud connections, automations, and security controls across web, CLI, and Telegram. For GitHub issue reporting and source-control workflow setup, use the GitHub Integration section in this guide.',
     categories: [
       {
         id: 'getting-started',
@@ -348,27 +348,41 @@ export function getReferenceGuide(): ReferenceGuide {
           },
           {
             id: 'github-repo',
-            title: 'GitHub Repository',
-            summary: 'Use the public repository for source code, technical documentation, security policy, and contribution workflow.',
+            title: 'GitHub Integration',
+            summary: 'Connect the GitHub account you want Guardian to use for source-control workflows. Add a repository target only when you want issue reporting or repo-specific actions. Guardian does not ship with a built-in organization or repository target.',
             sections: [
               {
-                title: 'Main Links',
+                title: 'OAuth App Setup (3 Steps)',
                 items: [
-                  'Repository: https://github.com/Threat-Vector-Security/guardian-agent',
-                  'Source code: https://github.com/Threat-Vector-Security/guardian-agent/tree/main/src',
-                  'README: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/README.md',
-                  'Security policy: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/SECURITY.md',
-                  'Second Brain as-built design: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/docs/design/SECOND-BRAIN-AS-BUILT.md',
-                  'Docs and technical notes: https://github.com/Threat-Vector-Security/guardian-agent/tree/main/docs',
-                  'Issues and pull requests: https://github.com/Threat-Vector-Security/guardian-agent/issues',
+                  'Step 1 — Register OAuth App: Open GitHub > Settings > Developer settings > OAuth Apps, then click "New OAuth App" or "Register a new application". You can create the OAuth App under your personal account or under an organization where you have admin access. Set Application name to something recognizable such as "Guardian Agent". Set Homepage URL to your Guardian dashboard URL, for example `http://localhost:3000` for a local install. Set Authorization callback URL exactly to `http://127.0.0.1:18434/callback`. GitHub OAuth Apps only allow one callback URL, so create a separate OAuth App for a different environment.',
+                  'Step 2 — Copy credentials: After registering the OAuth App, copy the Client ID. Click "Generate a new client secret", copy the secret immediately, and paste both values into Cloud > Connections > GitHub. Treat the client secret like a password.',
+                  'Step 3 — Connect: Click "Connect GitHub". A browser window opens for GitHub consent. The owner or organization and repository fields are optional during account connection; enter both only when you want issue reporting or repository workflow actions. Once connected, Guardian stores the token securely and does not ask you to authenticate again every time.',
+                ],
+              },
+              {
+                title: 'Repository Setup',
+                items: [
+                  'Open Configuration > Cloud > Connections > GitHub.',
+                  'Enter the owner or organization and repository name for the repo you want Guardian to use, or leave both blank if you only want account connection for now.',
+                  'Connect with GitHub OAuth, then confirm the status shows the account is connected. If a repository target is configured, confirm the repository access check passes.',
+                  'Guardian does not ship with a built-in organization or repository target. The repository is optional operator-provided configuration for repo-specific actions.',
                 ],
               },
               {
                 title: 'When To Use GitHub',
                 items: [
                   'Use this in-product guide for normal operation and day-to-day workflows.',
-                  'Use GitHub when you want source code, design docs, security notes, or deeper technical documentation that would clutter the operator guide.',
-                  'If you want to contribute, start from the repo README and docs folder, then use issues and pull requests from the repository.',
+                  'Use your configured GitHub repository when you want Guardian to create diagnostic issue drafts or publish approved issue reports.',
+                  'If you use Guardian with a source repository, keep project-specific contribution instructions in that repository README and docs folder.',
+                ],
+              },
+              {
+                title: 'Integrated Issue Reporting',
+                items: [
+                  'Configuration > Cloud > Connections shows GitHub account status and, when configured, repository access status.',
+                  'If GitHub is not authenticated, Guardian tells you how to sign in on this machine. Once connected, Guardian can check status without asking you to authenticate every time.',
+                  'When Guardian drafts a diagnostic issue, the draft stays local until you approve submission.',
+                  'Creating a GitHub issue is treated as an external post and still requires approval before anything is published.',
                 ],
               },
             ],
@@ -430,6 +444,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use `Runtime Execution` when you need to reconstruct what Guardian did, where a run paused, or which step failed.',
                   'Runtime Execution can also show delegated or child runs so you can tell whether background work finished.',
                   'System also includes `Routing Trace`, a compact view of recent request decisions when you need to understand why Guardian answered or resumed a request a certain way.',
+                  'When a request behaves incorrectly, you can ask Guardian to draft a problem report. The draft uses redacted diagnostics and does not open a GitHub issue unless you approve a separate external action.',
                   'System shows the global pending-approval queue alongside runtime state. Configuration > Tools is where you manage tool policy and recent tool jobs. Security is where you review alerts, posture, and security activity.',
                 ],
               },
@@ -1548,7 +1563,7 @@ export function formatGuideForPrompt(
   const lines = [
     'Use this Guardian product and operator guide only when the user asks how to use Guardian, navigate the app, or understand available product capabilities.',
     'Do not answer implementation, code-path, or architecture questions from this guide.',
-    'For source code and deeper technical documentation, point technical users to the GitHub Repository page in this guide.',
+    'For GitHub issue reporting and source-control workflow setup, point technical users to the GitHub Integration page in this guide.',
     `Guide overview: ${guide.intro}`,
   ];
 

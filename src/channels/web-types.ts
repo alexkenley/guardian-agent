@@ -1967,6 +1967,28 @@ export interface DashboardCallbacks {
   onMicrosoftAuthCancel?: () => Promise<{ success: boolean; message: string }>;
   /** Disconnect native Microsoft integration. */
   onMicrosoftDisconnect?: () => Promise<{ success: boolean; message: string }>;
+  /** GitHub integration status. */
+  onGitHubStatus?: () => Promise<{
+    enabled: boolean;
+    mode: 'cli' | 'oauth' | 'app';
+    cliPath: string;
+    installed: boolean;
+    authenticated: boolean;
+    authPending?: boolean;
+    tokenExpiry?: number;
+    clientId?: string;
+    defaultRepository?: string;
+    repositoryAccessible?: boolean;
+    repositoryUrl?: string;
+    version?: string;
+    message: string;
+  }>;
+  /** Start GitHub OAuth browser authentication. */
+  onGitHubAuthStart?: () => Promise<{ success: boolean; authUrl: string; state: string; message: string }>;
+  /** Cancel pending GitHub OAuth authentication. */
+  onGitHubAuthCancel?: () => Promise<{ success: boolean; message: string }>;
+  /** Disconnect native GitHub integration. */
+  onGitHubDisconnect?: () => Promise<{ success: boolean; message: string }>;
   /** Guardian Agent inline evaluation config and status. */
   onGuardianAgentStatus?: () => {
     enabled: boolean;

@@ -1,4 +1,5 @@
 import type { ChatResponse } from '../../llm/types.js';
+import { parseWebSearchIntent } from '../search-intent.js';
 import { parseStructuredJsonObject } from '../../util/structured-json.js';
 import {
   repairStructuredIntentGatewayOperation,
@@ -613,12 +614,124 @@ function repairTurnRelationForConversationReference(
   turnRelation: IntentGatewayDecision['turnRelation'],
   repairContext: IntentGatewayRepairContext | undefined,
 ): IntentGatewayDecision['turnRelation'] {
-  if (turnRelation !== 'new_request' || !repairContext?.continuity) {
+  if (turnRelation !== 'new_request' || !hasConversationRepairAnchor(repairContext)) {
     return turnRelation;
   }
-  return isConversationTranscriptReferenceRequest(repairContext.sourceContent)
-    ? 'follow_up'
-    : turnRelation;
+  if (isConversationTranscriptReferenceRequest(repairContext?.sourceContent)) {
+    return 'follow_up';
+  }
+  if (looksLikeAnswerToRecentAssistantClarification(repairContext)) {
+    return 'clarification_answer';
+  }
+  if (looksLikeRecentConversationContinuation(repairContext)) {
+    return 'follow_up';
+  }
+  return turnRelation;
+}
+
+function hasConversationRepairAnchor(
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  return !!(
+    repairContext?.pendingAction
+    || repairContext?.continuity
+    || (repairContext?.recentHistory?.length ?? 0) > 0
+  );
+}
+
+function looksLikeAnswerToRecentAssistantClarification(
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const lastAssistant = readLastAssistantTurn(repairContext);
+  if (!lastAssistant || !assistantTurnAskedForSelection(lastAssistant)) {
+    return false;
+  }
+  const sourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (!sourceContent) {
+    return false;
+  }
+  if (looksLikeStandaloneTaskCommand(sourceContent) && !contentAppearsInRecentAssistantTurn(sourceContent, repairContext)) {
+    return false;
+  }
+  return true;
+}
+
+function looksLikeRecentConversationContinuation(
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const sourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (!sourceContent) {
+    return false;
+  }
+  if (contentAppearsInRecentAssistantTurn(sourceContent, repairContext)) {
+    return true;
+  }
+  const lastAssistant = readLastAssistantTurn(repairContext);
+  if (!lastAssistant || !assistantTurnLooksLikeContextualResult(lastAssistant)) {
+    return false;
+  }
+  const normalized = sourceContent.toLowerCase();
+  const hasContextReference = /\b(?:that|those|these|them|it|same|one\s+of|previous|above|area|topic|source|result|results)\b/.test(normalized);
+  const asksForContinuation = /\b(?:pick|choose|select|continue|expand|deep\s+dive|dive\s+into|analy[sz]e|analysis|narrow|focus|summari[sz]e|fetch|read)\b/.test(normalized);
+  return hasContextReference && asksForContinuation;
+}
+
+function readLastAssistantTurn(
+  repairContext: IntentGatewayRepairContext | undefined,
+): string | undefined {
+  const history = repairContext?.recentHistory ?? [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (entry?.role === 'assistant' && entry.content.trim()) {
+      return entry.content;
+    }
+  }
+  return undefined;
+}
+
+function assistantTurnAskedForSelection(content: string): boolean {
+  const normalized = collapseIntentGatewayWhitespace(content).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /\?/.test(normalized) && /\b(?:which|what|where|who|specific|choose|pick|select|option|one|area|topic|source|page)\b/.test(normalized)
+    || /\b(?:let me know|tell me)\b.{0,120}\b(?:which|what|specific|one|area|topic|source|page|details?)\b/.test(normalized);
+}
+
+function assistantTurnLooksLikeContextualResult(content: string): boolean {
+  const normalized = collapseIntentGatewayWhitespace(content);
+  return /\bhttps?:\/\//i.test(normalized)
+    || /\b(?:source links?|sources?|results?|key facts?|takeaway)\b/i.test(normalized)
+    || /^#{1,3}\s+/m.test(content)
+    || /(?:^|\n)\s*(?:[-*]|\d+\.)\s+/.test(content);
+}
+
+function looksLikeStandaloneTaskCommand(content: string): boolean {
+  const normalized = collapseIntentGatewayWhitespace(content).toLowerCase();
+  return /^(?:check|search|find|create|update|delete|run|show|list|open|go|use|draft|send|write|summari[sz]e|analy[sz]e|inspect|review|explain|tell|read|fetch|look\s+up|browse)\b/.test(normalized);
+}
+
+function contentAppearsInRecentAssistantTurn(
+  sourceContent: string,
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const normalizedSource = normalizeConversationExcerptForMatch(sourceContent);
+  if (normalizedSource.length < 24) {
+    return false;
+  }
+  const probe = normalizedSource.slice(0, Math.min(normalizedSource.length, 160));
+  return (repairContext?.recentHistory ?? []).some((entry) => (
+    entry.role === 'assistant'
+    && normalizeConversationExcerptForMatch(entry.content).includes(probe)
+  ));
+}
+
+function normalizeConversationExcerptForMatch(content: string): string {
+  return collapseIntentGatewayWhitespace(content)
+    .toLowerCase()
+    .replace(/[*_`>#:[\](){}|~.,;!?-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function shouldRepairMissingCurrentRequestContentClarification(input: {
@@ -736,27 +849,17 @@ function synthesizeIntentGatewayPlannedSteps(input: {
   const sourceContent = collapseIntentGatewayWhitespace(input.sourceContent ?? '');
   if (!sourceContent) return [];
 
-  const sequentialClauses = splitSequentialRequestClauses(sourceContent);
-  if (sequentialClauses.length >= 2) {
-    return sequentialClauses.map((summary, index) => {
-      const kind = inferSynthesizedPlannedStepKind(summary, input.route, input.operation);
-      return {
-        kind,
-        summary,
-        required: true,
-        ...(index > 0 ? { dependsOn: [`step_${index}`] } : {}),
-        ...buildSynthesizedExpectedToolCategories(kind, summary),
-      };
-    });
-  }
-
   if (
     shouldSynthesizeWebResearchPlan({
       route: input.route,
       sourceContent,
       configuredSearchSources: input.configuredSearchSources,
     })
-    && input.requiresToolSynthesis
+    && (
+      input.requiresToolSynthesis
+      || input.route === 'search_task'
+      || input.route === 'browser_task'
+    )
     && hasMeaningfulResearchTarget(sourceContent)
   ) {
     return [
@@ -773,6 +876,20 @@ function synthesizeIntentGatewayPlannedSteps(input: {
         dependsOn: ['step_1'],
       },
     ];
+  }
+
+  const sequentialClauses = splitSequentialRequestClauses(sourceContent);
+  if (sequentialClauses.length >= 2) {
+    return sequentialClauses.map((summary, index) => {
+      const kind = inferSynthesizedPlannedStepKind(summary, input.route, input.operation);
+      return {
+        kind,
+        summary,
+        required: true,
+        ...(index > 0 ? { dependsOn: [`step_${index}`] } : {}),
+        ...buildSynthesizedExpectedToolCategories(kind, summary),
+      };
+    });
   }
 
   if (
@@ -1380,6 +1497,9 @@ function shouldSynthesizeWebResearchPlan(input: {
     return false;
   }
   if (!hasEnabledIndexedSearchSource(input.configuredSearchSources)) {
+    return true;
+  }
+  if (parseWebSearchIntent(input.sourceContent)) {
     return true;
   }
   return /\b(?:web|internet|online|website|websites|url|urls|browser|https?:\/\/)\b/i.test(input.sourceContent);

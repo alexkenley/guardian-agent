@@ -31,6 +31,7 @@ export function normalizeRoute(value: unknown): IntentGatewayRoute {
     case 'filesystem_task':
     case 'coding_task':
     case 'coding_session_control':
+    case 'diagnostics_task':
     case 'security_task':
     case 'general_assistant':
       return normalized;
@@ -78,6 +79,20 @@ export function normalizeRoute(value: unknown): IntentGatewayRoute {
       return 'coding_session_control';
     case 'security':
       return 'security_task';
+    case 'diagnostics':
+    case 'diagnostic':
+    case 'assistant_diagnostics':
+    case 'runtime_diagnostics':
+    case 'issue_report':
+    case 'bug_report':
+    case 'github_issue':
+    case 'github_issue_report':
+    case 'guardian_issue':
+    case 'guardian_agent_issue':
+    case 'guardianagent_issue':
+    case 'guardianagent_github_issue':
+    case 'guardian_agent_github_issue':
+      return 'diagnostics_task';
     case 'general':
     case 'assistant':
       return 'general_assistant';

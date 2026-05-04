@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   lacksUsableAssistantContent,
+  looksLikeOngoingWorkResponse,
   looksLikeRawToolMarkup,
 } from './assistant-response-shape.js';
 
@@ -40,5 +41,15 @@ describe('assistant-response-shape', () => {
     ].join('\n');
 
     expect(lacksUsableAssistantContent(content)).toBe(true);
+  });
+
+  it('treats bare tool promises as ongoing work rather than final answers', () => {
+    expect(looksLikeOngoingWorkResponse('Will perform web_search.')).toBe(true);
+    expect(looksLikeOngoingWorkResponse(
+      'Attempting to fetch NASA Apollo 13 page for verification.',
+    )).toBe(true);
+    expect(looksLikeOngoingWorkResponse(
+      'We\'ll search for detailed analyses of Apollo 13, fetch key pages, then synthesize a deep-dive report.',
+    )).toBe(true);
   });
 });

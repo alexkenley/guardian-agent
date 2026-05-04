@@ -209,6 +209,50 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['provider_read']);
   });
 
+  it('maps diagnostics issue drafting to the diagnostics issue draft candidate', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'diagnostics_task',
+        operation: 'draft',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      }),
+    )).toEqual(['diagnostics_issue_draft']);
+  });
+
+  it('maps initial GuardianAgent issue creation requests to the diagnostics draft candidate', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'diagnostics_task',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      }),
+    )).toEqual(['diagnostics_issue_draft']);
+  });
+
+  it('maps reviewed GuardianAgent issue submissions to the diagnostics submit candidate', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'diagnostics_task',
+        operation: 'send',
+        turnRelation: 'follow_up',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        entities: { toolName: 'github_issue_create' },
+      }),
+    )).toEqual(['diagnostics_issue_submit']);
+  });
+
   it('defers provider-crud connector status evidence to tool orchestration', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({
@@ -380,6 +424,65 @@ describe('resolveIntentCapabilityCandidates', () => {
             summary: 'Return the matching file paths.',
             required: true,
             dependsOn: ['step_1'],
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
+  it('defers web-only tool-loop search answer plans to orchestration', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        confidence: 'low',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search the web for useful reputable information.',
+            expectedToolCategories: ['web_search', 'browser'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Answer using the web results and include source links.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+    )).toEqual([]);
+  });
+
+  it('does not map multi-domain tool-loop answer plans to direct web search', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'general_assistant',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        requiresToolSynthesis: true,
+        preferredAnswerPath: 'tool_loop',
+        plannedSteps: [
+          {
+            kind: 'search',
+            summary: 'Search the web.',
+            expectedToolCategories: ['web_search'],
+            required: true,
+          },
+          {
+            kind: 'read',
+            summary: 'Inspect repo evidence.',
+            expectedToolCategories: ['repo_inspect'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Compare the evidence.',
+            required: true,
+            dependsOn: ['step_1', 'step_2'],
           },
         ],
       }),

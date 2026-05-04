@@ -24,6 +24,7 @@ import {
   isExplicitProviderConfigRequest,
 } from './entity-resolvers/provider-config.js';
 import { resolvePagedListContinuationRoute } from '../list-continuation.js';
+import { parseWebSearchIntent } from '../search-intent.js';
 import { getAmbiguousEmailProviderClarification } from '../email-provider-routing.js';
 import {
   isExplicitCodingExecutionRequest,
@@ -45,10 +46,19 @@ export function repairStructuredIntentGatewayRoute(
   repairContext: IntentGatewayRepairContext | undefined,
   parsed?: Record<string, unknown>,
 ): IntentGatewayDecision['route'] {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  const webResearchContinuation = isWebResearchContinuationRequest(rawSourceContent, repairContext);
+  if (
+    (route === 'unknown' || route === 'general_assistant')
+    && webResearchContinuation
+  ) {
+    return shouldUseFreshWebResearchForContinuation(rawSourceContent, repairContext)
+      ? 'search_task'
+      : 'general_assistant';
+  }
   if (turnRelation === 'clarification_answer' || turnRelation === 'correction') {
     return route;
   }
-  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
   const normalizedSourceContent = rawSourceContent.toLowerCase();
   const explicitComplexPlanning = isExplicitComplexPlanningRequest(rawSourceContent);
   const explicitAutomationAuthoring = isExplicitAutomationAuthoringRequest(rawSourceContent);
@@ -182,6 +192,17 @@ export function repairStructuredIntentGatewayRoute(
   if (isExplicitSecondBrainEntityRequest(sourceContent, operation)) {
     return 'personal_assistant_task';
   }
+  if (
+    (route === 'unknown' || route === 'general_assistant')
+    && webResearchContinuation
+  ) {
+    return shouldUseFreshWebResearchForContinuation(rawSourceContent, repairContext)
+      ? 'search_task'
+      : 'general_assistant';
+  }
+  if (route === 'unknown' && parseWebSearchIntent(rawSourceContent)) {
+    return 'search_task';
+  }
   if (turnRelation === 'follow_up'
     && (
       pendingActionSuggestsPersonalAssistantTask(repairContext)
@@ -199,10 +220,21 @@ export function repairStructuredIntentGatewayOperation(
   repairContext: IntentGatewayRepairContext | undefined,
   parsed?: Record<string, unknown>,
 ): IntentGatewayDecision['operation'] {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  if (
+    (route === 'search_task' || route === 'browser_task')
+    && (
+      operation === 'unknown'
+      || operation === 'inspect'
+      || operation === 'read'
+    )
+    && shouldUseFreshWebResearchForContinuation(rawSourceContent, repairContext)
+  ) {
+    return 'search';
+  }
   if (turnRelation === 'clarification_answer' || turnRelation === 'correction') {
     return operation;
   }
-  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
   const normalizedSourceContent = rawSourceContent.toLowerCase();
   if (
     route === 'coding_task'
@@ -253,6 +285,20 @@ export function repairStructuredIntentGatewayOperation(
   if (route === 'coding_task' && isExplicitRepoPlanningRequest(rawSourceContent)) {
     return 'inspect';
   }
+  if (
+    (route === 'search_task' || route === 'browser_task')
+    && (
+      operation === 'unknown'
+      || operation === 'inspect'
+      || operation === 'read'
+    )
+    && (
+      parseWebSearchIntent(rawSourceContent)
+      || shouldUseFreshWebResearchForContinuation(rawSourceContent, repairContext)
+    )
+  ) {
+    return 'search';
+  }
   if (route === 'general_assistant' && isExplicitProviderConfigRequest(rawSourceContent)) {
     return inferProviderConfigOperation(rawSourceContent, operation);
   }
@@ -286,6 +332,83 @@ function mentionsAutomationControlTerms(content: string | undefined): boolean {
   return /\bautomation\b/.test(normalized)
     || /\bworkflow\b/.test(normalized)
     || /\bautomations\b/.test(normalized);
+}
+
+function isWebResearchContinuationRequest(
+  rawSourceContent: string,
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const previous = repairContext?.continuity?.lastActionableRequest ?? '';
+  if (
+    !hasPriorWebResearchContext(repairContext, previous)
+  ) {
+    return false;
+  }
+  return /\b(?:narrow|focus|filter|limit|refine)\b.{0,80}\b(?:that|this|it|results?|research)\b/i.test(rawSourceContent)
+    || /\b(?:cite|source|sources|links?)\b/i.test(rawSourceContent)
+    || /\b(?:that|those|these|them|it|same|one\s+of|previous|above|area|topic|source|result|results)\b.{0,120}\b(?:pick|choose|select|continue|expand|deep\s+dive|dive\s+into|analy[sz]e|analysis|summari[sz]e|fetch|read)\b/i.test(rawSourceContent)
+    || /\b(?:pick|choose|select|continue|expand|deep\s+dive|dive\s+into|analy[sz]e|analysis|summari[sz]e|fetch|read)\b.{0,120}\b(?:that|those|these|them|it|same|one\s+of|previous|above|area|topic|source|result|results)\b/i.test(rawSourceContent)
+    || contentAppearsInRecentWebResearchAnswer(rawSourceContent, repairContext);
+}
+
+function shouldUseFreshWebResearchForContinuation(
+  rawSourceContent: string,
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  if (!isWebResearchContinuationRequest(rawSourceContent, repairContext)) {
+    return false;
+  }
+  return !!parseWebSearchIntent(rawSourceContent)
+    || /\b(?:narrow|focus|filter|limit|refine)\b.{0,80}\b(?:that|this|it|results?|research)\b/i.test(rawSourceContent)
+    || /\b(?:cite|source|sources|links?)\b/i.test(rawSourceContent)
+    || /\b(?:that|those|these|them|it|same|one\s+of|previous|above|source|page|url|link|result|results)\b.{0,120}\b(?:fetch|read|open|browse)\b/i.test(rawSourceContent)
+    || /\b(?:fetch|read|open|browse)\b.{0,120}\b(?:that|those|these|them|it|same|one\s+of|previous|above|source|page|url|link|result|results)\b/i.test(rawSourceContent);
+}
+
+function hasPriorWebResearchContext(
+  repairContext: IntentGatewayRepairContext | undefined,
+  previous: string,
+): boolean {
+  if (previous && (parseWebSearchIntent(previous) || WEB_RESEARCH_SURFACE_PATTERN.test(previous))) {
+    return true;
+  }
+  const history = repairContext?.recentHistory ?? [];
+  const priorUserAskedForWeb = history.some((entry) => (
+    entry.role === 'user'
+    && (parseWebSearchIntent(entry.content) || WEB_RESEARCH_SURFACE_PATTERN.test(entry.content))
+  ));
+  const priorAssistantReturnedSources = history.some((entry) => (
+    entry.role === 'assistant'
+    && WEB_RESEARCH_RESULT_PATTERN.test(entry.content)
+  ));
+  return priorUserAskedForWeb && priorAssistantReturnedSources;
+}
+
+const WEB_RESEARCH_SURFACE_PATTERN = /\b(?:web|internet|online|websites?|sources?|links?)\b/i;
+const WEB_RESEARCH_RESULT_PATTERN = /\bhttps?:\/\//i;
+
+function contentAppearsInRecentWebResearchAnswer(
+  rawSourceContent: string,
+  repairContext: IntentGatewayRepairContext | undefined,
+): boolean {
+  const sourceExcerpt = normalizeConversationExcerptForMatch(rawSourceContent);
+  if (sourceExcerpt.length < 24) {
+    return false;
+  }
+  const probe = sourceExcerpt.slice(0, Math.min(sourceExcerpt.length, 160));
+  return (repairContext?.recentHistory ?? []).some((entry) => (
+    entry.role === 'assistant'
+    && WEB_RESEARCH_RESULT_PATTERN.test(entry.content)
+    && normalizeConversationExcerptForMatch(entry.content).includes(probe)
+  ));
+}
+
+function normalizeConversationExcerptForMatch(content: string): string {
+  return collapseIntentGatewayWhitespace(content)
+    .toLowerCase()
+    .replace(/[*_`>#:[\](){}|~.,;!?-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function isExplicitRepoFileExtensionInventoryRequest(normalizedSourceContent: string): boolean {

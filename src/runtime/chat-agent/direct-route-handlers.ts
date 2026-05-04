@@ -23,6 +23,7 @@ import {
   tryDirectCodingBackendDelegation,
   type DirectCodingBackendDeps,
 } from './direct-coding-backend.js';
+import { tryDirectDiagnosticsIssueDraft, tryDirectDiagnosticsIssueSubmit } from './direct-diagnostics.js';
 import type { DirectIntentDispatchResult } from './direct-intent-dispatch.js';
 import { tryDirectGoogleWorkspaceRead, tryDirectGoogleWorkspaceWrite } from './direct-mailbox-runtime.js';
 import { tryDirectMemoryRead, tryDirectMemorySave } from './direct-memory.js';
@@ -383,6 +384,21 @@ export function buildChatDirectRouteHandlers(input: BuildChatDirectRouteHandlers
       defaultToolResultProviderKind: input.defaultToolResultProviderKind,
       sanitizeToolResultForLlm: input.sanitizeToolResultForLlm,
       chatWithFallback: input.chatWithFallback,
+    }),
+    diagnostics_issue_draft: () => tryDirectDiagnosticsIssueDraft({
+      agentId: input.agentId,
+      tools: input.tools,
+      message: input.routedMessage,
+      ctx: input.ctx,
+      decision: input.decision,
+    }),
+    diagnostics_issue_submit: () => tryDirectDiagnosticsIssueSubmit({
+      agentId: input.agentId,
+      tools: input.tools,
+      message: input.routedMessage,
+      ctx: input.ctx,
+      decision: input.decision,
+      continuityThread: input.continuityThread,
     }),
     security_guardrail: () => tryDirectSecurityGuardrail({
       message: input.routedMessage,

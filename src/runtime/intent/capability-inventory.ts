@@ -25,7 +25,8 @@ export const INTENT_GATEWAY_CAPABILITY_INVENTORY_PROMPT_LINES = [
   '- web_search and doc_search own search_task; web_fetch, chrome_job, and browser_* own browser_task.',
   '- gws and gws_schema own workspace_task; gmail_* owns email_task.',
   '- assistant_security_* and intel_* own security_task.',
-  '- Explicit cloud, system, network, contacts, campaign, forum, shell, or MCP tool invocations default to general_assistant unless a more specific route clearly owns the request.',
+  '- guardian_issue_draft owns diagnostics_task. User-facing requests to create, open, file, or prepare a GuardianAgent GitHub issue about app behavior should route to diagnostics_task first so Guardian drafts a redacted report before any external post. github_issue_create is only for submitting a reviewed GuardianAgent diagnostics draft and should also route to diagnostics_task.',
+  '- Explicit cloud, GitHub, system, network, contacts, campaign, forum, shell, or MCP tool invocations default to general_assistant unless a more specific route clearly owns the request.',
   '- External contact discovery, CSV import, and outreach campaign management are not Second Brain contact reads. Prefer general_assistant with tool orchestration for those requests.',
 ];
 
@@ -62,6 +63,10 @@ export function resolveRouteForExplicitToolName(
   if (!trimmed) return undefined;
   const category = getBuiltinToolCategory(trimmed);
   if (!category) return undefined;
+
+  if (trimmed === 'guardian_issue_draft' || trimmed === 'github_issue_create') {
+    return 'diagnostics_task';
+  }
 
   switch (category) {
     case 'filesystem':
@@ -103,6 +108,7 @@ export function resolveRouteForExplicitToolName(
     case 'forum':
     case 'network':
     case 'cloud':
+    case 'github':
     case 'system':
       return 'general_assistant';
     default:
