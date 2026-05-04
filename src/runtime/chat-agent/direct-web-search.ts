@@ -62,10 +62,44 @@ export async function tryDirectWebSearch(input: {
       undefined,
       input.fallbackProviderOrder,
     );
+    if (
+      isDegradedDirectWebSearchSynthesis(formatted.content)
+      || shouldUseGroundedSearchPayload(formatted.content, llmSearchPayload)
+    ) {
+      return llmSearchPayload;
+    }
     return formatted.content || llmSearchPayload;
   } catch {
     return llmSearchPayload;
   }
+}
+
+function isDegradedDirectWebSearchSynthesis(content: string | undefined): boolean {
+  const normalized = content?.trim() ?? '';
+  if (!normalized) return false;
+  if (/\bweb_search\s+query\s*:/i.test(normalized)) return true;
+  if (/^let'?s\s+call\s+(?:fs_search|web_search|doc_search)\.?$/i.test(normalized)) return true;
+  if (
+    normalized.length < 320
+    && /\b(?:i'?ll|i\s+will|we'?ll|we\s+will|let\s+me|let'?s)\b.{0,80}\b(?:fetch|search|look\s+up|browse|open|read|call|use|run)\b/i.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    normalized.length < 240
+    && /\b(?:call|use|run)\s+(?:the\s+)?(?:fs_search|web_search|doc_search)\b/i.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function shouldUseGroundedSearchPayload(content: string | undefined, groundedPayload: string): boolean {
+  const normalized = content?.trim() ?? '';
+  if (!normalized) return false;
+  if (!/\bhttps?:\/\//i.test(groundedPayload)) return false;
+  if (/\bhttps?:\/\//i.test(normalized)) return false;
+  return normalized.length < 500 || /\b(?:source|sources|citation|citations|link|links)\b/i.test(groundedPayload);
 }
 
 async function executeDirectWebSearch(input: {

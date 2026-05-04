@@ -4427,7 +4427,7 @@ export class ToolExecutor {
       return 'deny';
     }
     if (derivedFromTaintedContent) {
-      if (definition.risk !== 'read_only') {
+      if (definition.risk !== 'read_only' && !READ_LIKE_NETWORK_LOOKUP_TOOLS.has(definition.name)) {
         return 'require_approval';
       }
     }

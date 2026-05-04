@@ -40,4 +40,26 @@ describe('answer-first skill prioritization', () => {
     expect(shouldUseAnswerFirstForSkills(skills, request)).toBe(false);
     expect(buildAnswerFirstSkillFallbackResponse(skills, request)).toBeUndefined();
   });
+
+  it('does not activate the code-review answer-first contract for trace inspection requests', () => {
+    const request = 'Review the recent routing trace for the last failed assistant request and explain what happened.';
+    const skills = [
+      { id: 'coding-workspace' },
+      { id: 'code-review' },
+    ];
+
+    expect(shouldUseAnswerFirstForSkills(skills, request)).toBe(false);
+    expect(buildAnswerFirstSkillFallbackResponse(skills, request)).toBeUndefined();
+  });
+
+  it('still activates the code-review answer-first contract for patch review requests', () => {
+    const request = 'Review this patch for regressions and missing tests before merge.';
+    const skills = [
+      { id: 'coding-workspace' },
+      { id: 'code-review' },
+    ];
+
+    expect(shouldUseAnswerFirstForSkills(skills, request)).toBe(true);
+    expect(buildAnswerFirstSkillFallbackResponse(skills, request)).toContain('review findings');
+  });
 });

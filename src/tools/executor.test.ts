@@ -9250,6 +9250,23 @@ describe('ToolExecutor', () => {
         expect(run.status).toBe('succeeded');
         expect(run.approvalId).toBeUndefined();
         expect(fetchCount).toBe(1);
+
+        const taintedFollowUp = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'approval-free follow-up search', provider: 'duckduckgo' },
+          origin: 'assistant',
+          requestId: 'req-auto-web-search',
+          userId: 'owner',
+          principalId: 'owner',
+          channel: 'cli',
+          derivedFromTaintedContent: true,
+          contentTrustLevel: 'low_trust',
+          taintReasons: ['remote_tool'],
+        });
+
+        expect(taintedFollowUp.status).toBe('succeeded');
+        expect(taintedFollowUp.approvalId).toBeUndefined();
+        expect(fetchCount).toBe(2);
       } finally {
         globalThis.fetch = originalFetch;
       }

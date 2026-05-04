@@ -18,7 +18,9 @@ function selectPrimaryAnswerFirstSkill(
 ): AnswerFirstSkillId | null {
   const normalizedRequest = originalRequest?.trim().toLowerCase() ?? '';
   const looksLikeVerification = /\b(?:verified?|verification|before completion|done and passing|must be verified|claim .* done|full legitimate green|proof surface)\b/.test(normalizedRequest);
-  const looksLikeReview = /\bcode review\b|\breview this\b|\breview\b/.test(normalizedRequest);
+  const looksLikeReview = /\bcode review\b/.test(normalizedRequest)
+    || /\breview\s+(?:this|the)\s+(?:code|diff|patch|pull request|pr|change|changes)\b/.test(normalizedRequest)
+    || /\b(?:do|perform|run)\s+(?:a\s+)?review\b[^.!?\n]{0,120}\b(?:code|diff|patch|pull request|pr|change|changes)\b/.test(normalizedRequest);
   const looksLikePlan = /\b(?:implementation plan|write a plan|plan\b|break this down|before editing|acceptance gates)\b/.test(normalizedRequest);
 
   if (looksLikeVerification && skillIds.has('verification-before-completion')) {
