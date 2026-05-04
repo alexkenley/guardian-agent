@@ -10,8 +10,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 
-function toYamlPath(value) {
-  return value.replace(/\\/g, '/').replace(/"/g, '\\"');
+function toYamlString(value) {
+  return JSON.stringify(String(value));
 }
 
 async function getFreePort() {
@@ -196,8 +196,8 @@ assistant:
       doc_create: auto
       shell_safe: auto
     allowedPaths:
-      - "${toYamlPath(scratchRoot)}"
-      - "${toYamlPath(projectRoot)}"
+      - ${toYamlString(scratchRoot)}
+      - ${toYamlString(projectRoot)}
     allowedCommands:
       - echo
       - node
