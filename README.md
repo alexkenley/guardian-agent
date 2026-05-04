@@ -4,10 +4,10 @@
 
 <h1 align="center">GuardianAgent</h1>
 
-<h3 align="center">Security-first AI assistant with a Second Brain and operator tooling.</h3>
+<h3 align="center">Security-first AI agent platform for local LLMs, governed tool use, coding workflows, automations, and personal assistant work.</h3>
 
 <p align="center">
-  GuardianAgent combines a daily-use Second Brain with guarded power-user surfaces for coding, workstation operations, automations, security, network, and cloud operations. The same assistant is available in web, CLI, and Telegram, with approvals and policy boundaries enforced by the runtime.
+  GuardianAgent is a self-hosted AI assistant and agent orchestration runtime for local AI, managed-cloud, and frontier LLMs. It combines a daily-use Second Brain with guarded power-user surfaces for coding, workstation operations, workflow automation, security, network, and cloud operations. The same assistant is available in web, CLI, and Telegram, with tool approvals, sandboxing, prompt-injection defenses, audit trails, and policy boundaries enforced by the runtime.
 </p>
 
 <p align="center">
@@ -37,6 +37,10 @@
 - [License](#license)
 
 ## Product Overview
+
+GuardianAgent is built for people who want a local AI agent that can do real work without handing unchecked tool access to an LLM. It supports local LLM assistants through Ollama, hosted models through providers such as OpenAI, Anthropic, OpenRouter, NVIDIA Cloud, and Google Gemini, and a governed tool layer for search, coding, automation, integrations, shell-adjacent workflows, and operator tasks.
+
+Unlike a simple chatbot wrapper, GuardianAgent treats tool use as a controlled security boundary. The runtime routes intent through a shared gateway, gates non-read-only actions with approvals, applies sandbox and allowed-path policies, scans for prompt injection and secret leakage, and keeps MCP tools, package installs, browser actions, workspace access, and automations behind explicit guardrails.
 
 ### Second Brain
 
@@ -184,12 +188,16 @@ Second Brain screenshots are shown above in Product Overview. The gallery below 
 
 ## Core Capabilities
 
-- A daily-use Second Brain for planning, capture, retrieval, and personal context
-- Power-user surfaces for performance management, coding, security, network, cloud, and automations
-- A shared assistant across Web, CLI, and Telegram
-- Multi-provider LLM support with guarded tools, approvals, and policy controls
-- Search, integrations, and workflow automation without collapsing everything into raw shell access
-- Specs and architecture docs for the deeper implementation detail when you need it
+- Security-first AI agent platform for local, self-hosted, and hybrid LLM workflows
+- Local AI and Ollama support alongside OpenAI, Anthropic, OpenRouter, NVIDIA Cloud, Gemini, and other hosted providers
+- Governed tool use with approvals, sandboxing, allowed paths, command policy, and audit trails
+- Prompt-injection defenses, output scanning, secret redaction, trust-aware memory, and quarantined tool-result reinjection
+- AI coding assistant and repo-scoped Coding Workspace with editor, diffs, session-bound terminals, trust review, and verification surfaces
+- Daily-use Second Brain for planning, capture, retrieval, calendar-aware context, tasks, notes, people, routines, and briefs
+- Workflow automation and scheduled agent runs with bounded authority, run history, and approval-aware execution
+- MCP tool security, native integrations, search, browser/workspace tooling, and provider connectors behind the same runtime guardrails
+- Shared assistant across Web, CLI, and Telegram
+- Specs and architecture docs for deeper implementation detail when you need it
 
 ## Repository Status
 
