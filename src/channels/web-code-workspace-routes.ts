@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
+import { resolve, win32 } from 'node:path';
 import type { PrincipalRole } from '../tools/types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { readBody, sendJSON } from './web-json.js';
@@ -31,6 +32,36 @@ const WEB_CODE_CHANNEL = 'web';
 
 type DashboardCodeSessionSnapshot = NonNullable<ReturnType<NonNullable<DashboardCallbacks['onCodeSessionGet']>>>;
 
+async function listWindowsDriveRoots(): Promise<Array<{ name: string; type: 'dir'; path: string }>> {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const candidates = await Promise.all(letters.map(async (letter) => {
+    const root = `${letter}:\\`;
+    try {
+      await access(root);
+      return { name: `${letter}:`, type: 'dir' as const, path: root };
+    } catch {
+      return null;
+    }
+  }));
+  return candidates.filter((entry): entry is { name: string; type: 'dir'; path: string } => entry !== null);
+}
+
+function resolveLocalBrowsePath(requestedPath: string | undefined): { virtualRoot: boolean; path: string } {
+  const trimmed = trimOptionalString(requestedPath);
+  if (process.platform === 'win32') {
+    if (!trimmed || trimmed === '.') {
+      return { virtualRoot: false, path: resolve(process.cwd()) };
+    }
+    if (trimmed === '/' || trimmed === '\\') {
+      return { virtualRoot: true, path: '/' };
+    }
+    if (/^[a-zA-Z]:[\\/]*$/.test(trimmed)) {
+      return { virtualRoot: false, path: win32.parse(trimmed).root };
+    }
+  }
+  return { virtualRoot: false, path: resolve(trimmed || '.') };
+}
+
 function getWebCodeSessionSnapshot(
   context: WebCodeWorkspaceRoutesContext,
   input: { sessionId?: string; surfaceId?: string },
@@ -61,6 +92,37 @@ export async function handleWebCodeWorkspaceRoutes(
   context: WebCodeWorkspaceRoutesContext,
 ): Promise<boolean> {
   const { req, res, url, dashboard } = context;
+
+  if (req.method === 'POST' && url.pathname === '/api/code/fs/browse') {
+    const body = await readBody(req, context.maxBodyBytes);
+    const parsed = JSON.parse(body || '{}') as { path?: string };
+    const target = resolveLocalBrowsePath(parsed.path);
+    try {
+      if (target.virtualRoot) {
+        sendJSON(res, 200, {
+          success: true,
+          path: target.path,
+          entries: await listWindowsDriveRoots(),
+        });
+        return true;
+      }
+      const entries = await readdir(target.path, { withFileTypes: true });
+      sendJSON(res, 200, {
+        success: true,
+        path: target.path,
+        entries: entries
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => ({
+            name: entry.name,
+            type: 'dir',
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
+      });
+    } catch (err) {
+      sendJSON(res, 200, { success: false, error: err instanceof Error ? err.message : 'Failed to list directory' });
+    }
+    return true;
+  }
 
   if (req.method === 'POST' && url.pathname === '/api/code/fs/list') {
     const body = await readBody(req, context.maxBodyBytes);

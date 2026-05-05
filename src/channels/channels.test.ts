@@ -3417,6 +3417,28 @@ describe('WebChannel', () => {
     expect(body.error).toContain('Code session is required');
   });
 
+  it('lists local workspace roots before a code session exists', async () => {
+    web = new WebChannel({ port: 18992, authToken: TEST_TOKEN });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18992/api/code/fs/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ path: '.' }),
+    });
+    const body = await res.json() as {
+      success: boolean;
+      path: string;
+      entries: Array<{ name: string; type: string }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.path).toBe(process.cwd());
+    expect(body.entries.some((entry) => entry.type === 'dir' && entry.name === 'src')).toBe(true);
+  });
+
   it('requires a privileged ticket for sensitive memory config updates', async () => {
     const updates: unknown[] = [];
     web = new WebChannel({

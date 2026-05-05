@@ -4444,7 +4444,7 @@ function renderDirPicker() {
       <div class="code-dir-picker__list">
         ${path !== '/' ? `<button class="code-dir-picker__entry" type="button" data-code-dirpick-navigate="${escAttr(parentPath(path))}">..</button>` : ''}
         ${loading ? '<div class="empty-inline">Loading...</div>' : entries.filter((e) => e.type === 'dir').map((e) => `
-          <button class="code-dir-picker__entry" type="button" data-code-dirpick-navigate="${escAttr(joinWorkspacePath(path, e.name))}">${esc(e.name)}</button>
+          <button class="code-dir-picker__entry" type="button" data-code-dirpick-navigate="${escAttr(e.path || joinWorkspacePath(path, e.name))}">${esc(e.name)}</button>
         `).join('') || '<div class="empty-inline">No subdirectories.</div>'}
       </div>
       <div class="code-dir-picker__actions">
@@ -4473,12 +4473,12 @@ async function navigateDirPicker(dirPath) {
   saveState(codeState);
   rerenderFromState();
 
-  const result = await api.codeFsList(codeSurfacePayload({
+  const result = await api.codeFsBrowse(codeSurfacePayload({
     path: dirPath,
   })).catch((err) => ({ success: false, error: err.message }));
 
   if (!result?.success) {
-    codeState.dirPickerError = result?.message || 'Failed to list directory.';
+    codeState.dirPickerError = result?.message || result?.error || 'Failed to list directory.';
     codeState.dirPickerEntries = [];
   } else {
     codeState.dirPickerPath = result.path || dirPath;
@@ -8198,7 +8198,10 @@ function joinWorkspacePath(base, child) {
 function parentPath(value) {
   if (!value) return '.';
   const normalized = value.replace(/[\\/]+$/, '') || value;
-  if (/^[a-zA-Z]:$/.test(normalized) || normalized === '/' || normalized === '\\\\') {
+  if (/^[a-zA-Z]:$/.test(normalized)) {
+    return '/';
+  }
+  if (normalized === '/' || normalized === '\\\\') {
     return normalized;
   }
   const separator = normalized.includes('\\') && !normalized.includes('/') ? '\\' : '/';

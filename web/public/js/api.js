@@ -758,6 +758,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  codeFsBrowse: (payload) => request('/api/code/fs/browse', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   codeFsRead: (payload) => request('/api/code/fs/read', {
     method: 'POST',
     body: JSON.stringify(payload),
