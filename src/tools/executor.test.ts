@@ -5059,6 +5059,65 @@ describe('ToolExecutor', () => {
     });
   });
 
+  it('resolves assistant relative code_create paths inside codeContext workspace roots', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'autonomous',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_create',
+      args: {
+        path: 'src/client/App.tsx',
+        content: 'export default function App() { return null; }\n',
+        overwrite: true,
+      },
+      origin: 'assistant',
+      userId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: 'code-session-1' },
+    });
+
+    expect(result.success).toBe(true);
+    await expect(readFile(join(codeRoot, 'src', 'client', 'App.tsx'), 'utf-8'))
+      .resolves.toBe('export default function App() { return null; }\n');
+    expect(existsSync(join(globalRoot, 'src', 'client', 'App.tsx'))).toBe(false);
+  });
+
+  it('rejects assistant relative code_create paths without an active coding workspace', async () => {
+    const globalRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'autonomous',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_create',
+      args: {
+        path: 'src/client/App.tsx',
+        content: 'export default function App() { return null; }\n',
+        overwrite: true,
+      },
+      origin: 'assistant',
+      userId: 'web-code-harness',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(false);
+    expect(String(result.error || result.message || '')).toContain('active coding workspace');
+    expect(existsSync(join(globalRoot, 'src', 'client', 'App.tsx'))).toBe(false);
+  });
+
   it('requires approval for assistant raw filesystem writes in code session workspaces', async () => {
     const globalRoot = createExecutorRoot();
     const codeRoot = createExecutorRoot();

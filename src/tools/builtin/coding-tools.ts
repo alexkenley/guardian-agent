@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { scanWriteContent } from '../../guardian/argument-sanitizer.js';
 import type { ParsedCommand, ShellExecutionClass } from '../../guardian/shell-validator.js';
 import type { CodingBackendService } from '../../runtime/coding-backend-service.js';
@@ -1165,6 +1165,12 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
     async (args, request) => {
       const rawPath = requireString(args.path, 'path');
       const overwrite = !!args.overwrite;
+      if (request?.origin === 'assistant' && !isAbsolute(rawPath) && !context.getCodeWorkspaceRoot(request)) {
+        return {
+          success: false,
+          error: 'Relative code_create paths require an active coding workspace. Attach a code session or provide an absolute path.',
+        };
+      }
       const safePath = await context.resolveAllowedPath(rawPath, request);
       try {
         await stat(safePath);
@@ -1181,7 +1187,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       const delegate = context.registry.get('fs_write');
       if (!delegate) return { success: false, error: 'fs_write is not available' };
       const result = await delegate.handler({
-        path: rawPath,
+        path: safePath,
         content: requireStringAllowEmpty(args.content, 'content'),
         append: false,
       }, request);
