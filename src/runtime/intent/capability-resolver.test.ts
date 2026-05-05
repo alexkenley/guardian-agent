@@ -223,6 +223,21 @@ describe('resolveIntentCapabilityCandidates', () => {
     )).toEqual(['diagnostics_issue_draft']);
   });
 
+  it('maps diagnostics trace inspection to the trace inspect candidate', () => {
+    expect(resolveIntentCapabilityCandidates(
+      mockDecision({
+        route: 'diagnostics_task',
+        operation: 'inspect',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        entities: { toolName: 'guardian_trace_inspect' },
+      }),
+    )).toEqual(['diagnostics_trace_inspect']);
+  });
+
   it('maps initial GuardianAgent issue creation requests to the diagnostics draft candidate', () => {
     expect(resolveIntentCapabilityCandidates(
       mockDecision({

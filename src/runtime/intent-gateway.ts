@@ -142,8 +142,11 @@ export class IntentGateway {
     workingRecord = await confirmIntentGatewayDecisionIfNeeded(input, workingRecord, chat);
     decision = workingRecord.decision;
     decision = applyUncertainRepairedRouteGuard(input, decision);
+    decision = repairCodeSessionGroundingDecision(input, decision);
+    decision = repairMissingSearchQueryFromContent(input, decision);
     decision = applyMissingRepairedSearchTargetGuard(input, decision);
     decision = applyUnresolvedContextReferenceGuard(input, decision);
+    decision = repairDiagnosticsTraceInspection(decision);
     decision = repairAutomationClarificationFromRecentHistory(input, decision);
     if (needsAutomationNameRepair(decision)) {
       const repairedName = await repairAutomationName(input, decision, chat);
@@ -173,6 +176,54 @@ export class IntentGateway {
       decision,
     };
   }
+}
+
+function repairDiagnosticsTraceInspection(decision: IntentGatewayDecision): IntentGatewayDecision {
+  if (decision.route !== 'diagnostics_task') return decision;
+  if (decision.operation !== 'inspect' && decision.operation !== 'read' && decision.operation !== 'search') {
+    return decision;
+  }
+  const missingFieldText = decision.missingFields.join(' ').toLowerCase();
+  if (
+    decision.resolution !== 'needs_clarification'
+    && decision.entities.toolName !== 'guardian_trace_inspect'
+  ) {
+    return decision;
+  }
+  if (
+    decision.resolution === 'needs_clarification'
+    && !missingFieldText.includes('routing_trace')
+    && !missingFieldText.includes('trace')
+    && !missingFieldText.includes('time_window')
+  ) {
+    return decision;
+  }
+  return {
+    ...decision,
+    operation: decision.operation === 'search' ? 'inspect' : decision.operation,
+    summary: decision.summary?.trim() || 'Inspect Guardian routing trace evidence for recent assistant behavior.',
+    resolution: 'ready',
+    missingFields: [],
+    executionClass: 'tool_orchestration',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: true,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'tool_loop',
+    simpleVsComplex: 'complex',
+    entities: {
+      ...decision.entities,
+      toolName: 'guardian_trace_inspect',
+    },
+    provenance: {
+      ...(decision.provenance ?? {}),
+      operation: decision.operation === 'search' ? 'repair.structured' : decision.provenance?.operation,
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        toolName: 'repair.structured',
+      },
+    },
+  };
 }
 
 function applyUnresolvedContextReferenceGuard(
@@ -398,6 +449,37 @@ function applyMissingRepairedSearchTargetGuard(
   };
 }
 
+function repairMissingSearchQueryFromContent(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (!shouldClarifyMissingRepairedSearchTarget(decision)) {
+    return decision;
+  }
+  if (hasWebSearchPlannedStep(decision)) {
+    return decision;
+  }
+  if (!hasExtractableSearchQuery(input.content)) {
+    return decision;
+  }
+  return {
+    ...decision,
+    resolution: 'ready',
+    missingFields: decision.missingFields.filter((field) => field !== 'query'),
+    entities: {
+      ...decision.entities,
+      query: input.content.trim(),
+    },
+    provenance: {
+      ...(decision.provenance ?? {}),
+      entities: {
+        ...(decision.provenance?.entities ?? {}),
+        query: 'repair.structured',
+      },
+    },
+  };
+}
+
 function repairUnavailableUnknownWithConversationContext(
   input: IntentGatewayInput,
   record: IntentGatewayRecord,
@@ -406,7 +488,7 @@ function repairUnavailableUnknownWithConversationContext(
   if (decision.route !== 'unknown') {
     return decision;
   }
-  if (record.available || record.model !== 'unknown') {
+  if (record.available) {
     return decision;
   }
   if (
@@ -414,6 +496,15 @@ function repairUnavailableUnknownWithConversationContext(
     || !hasSubstantiveCurrentTurnForDirectFallback(input.content)
   ) {
     return decision;
+  }
+  if (hasActiveCodeSessionContinuity(input)) {
+    const codeSessionRepair = repairUnavailableCodeSessionWork(input, decision);
+    if (codeSessionRepair) {
+      return codeSessionRepair;
+    }
+    if (!looksLikeDirectContextQuestion(input.content)) {
+      return decision;
+    }
   }
   if (input.pendingAction || !hasConversationContextForDirectFallback(input)) {
     return decision;
@@ -456,6 +547,80 @@ function repairUnavailableUnknownWithConversationContext(
       ...decision.entities,
     },
   };
+}
+
+function repairUnavailableCodeSessionWork(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision | null {
+  const normalized = input.content.trim().toLowerCase();
+  if (!normalized) return null;
+  const asksForRepoOverview = /\b(?:overview|describe|summari[sz]e|what\s+type|what\s+kind)\b/.test(normalized)
+    && /\b(?:repo|repository|codebase|workspace|app|application)\b/.test(normalized);
+  const asksWorkspaceSearch = /\b(?:search|find|grep|look\s+for)\b/.test(normalized)
+    && /\b(?:workspace|repo|repository|codebase|selected\s+file|file|src|code)\b/.test(normalized);
+  const asksToModifySelectedCode = /\b(?:make|update|edit|change|modify|fix|patch|write|add|remove|delete)\b/.test(normalized)
+    && /\b(?:selected\s+file|answer|code|file|src|function|component|module)\b/.test(normalized);
+  if (!asksForRepoOverview && !asksWorkspaceSearch && !asksToModifySelectedCode && !isExplicitRepoInspectionRequest(input.content)) {
+    return null;
+  }
+  return {
+    ...decision,
+    route: 'coding_task',
+    confidence: 'low',
+    operation: asksToModifySelectedCode ? 'update' : asksWorkspaceSearch ? 'search' : 'inspect',
+    summary: asksToModifySelectedCode
+      ? 'Continue the requested edit in the active coding workspace.'
+      : 'Inspect the active coding workspace and answer from repo evidence.',
+    turnRelation: 'follow_up',
+    resolution: 'ready',
+    missingFields: [],
+    resolvedContent: input.content,
+    executionClass: 'repo_grounded',
+    preferredTier: 'external',
+    requiresRepoGrounding: true,
+    requiresToolSynthesis: true,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'chat_synthesis',
+    simpleVsComplex: 'complex',
+    provenance: {
+      ...(decision.provenance ?? {}),
+      route: 'repair.continuity',
+      operation: 'repair.continuity',
+      executionClass: 'repair.continuity',
+      requiresRepoGrounding: 'repair.continuity',
+      requiresToolSynthesis: 'repair.continuity',
+      preferredAnswerPath: 'repair.continuity',
+    },
+  };
+}
+
+function repairCodeSessionGroundingDecision(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision {
+  if (!hasActiveCodeSessionContinuity(input) || decision.route === 'coding_task') {
+    return decision;
+  }
+  if (
+    decision.route !== 'search_task'
+    && decision.route !== 'general_assistant'
+    && decision.route !== 'unknown'
+  ) {
+    return decision;
+  }
+  return repairUnavailableCodeSessionWork(input, decision) ?? decision;
+}
+
+function hasActiveCodeSessionContinuity(input: IntentGatewayInput): boolean {
+  return input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:')) ?? false;
+}
+
+function looksLikeDirectContextQuestion(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.endsWith('?') || /^(?:yeah|yes|ok|okay|but|so)\b/.test(normalized);
 }
 
 function hasSubstantiveCurrentTurnForDirectFallback(content: string): boolean {
@@ -576,6 +741,43 @@ function buildMissingRepairedSearchTargetPrompt(
     return 'I am not sure what to search for from the previous request. What useful information should I bring back?';
   }
   return 'What should I search for? A topic, question, file, or source is enough.';
+}
+
+function hasExtractableSearchQuery(content: string): boolean {
+  const normalized = content
+    .toLowerCase()
+    .replace(/^\[context:[^\]]+\]\s*/i, '')
+    .replace(/[^a-z0-9_.@/-]+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const stopWords = new Set([
+    'search',
+    'find',
+    'grep',
+    'look',
+    'for',
+    'the',
+    'this',
+    'that',
+    'workspace',
+    'repo',
+    'repository',
+    'codebase',
+    'tell',
+    'me',
+    'where',
+    'is',
+    'it',
+    'defined',
+    'give',
+    'brief',
+    'slow',
+    'summary',
+    'summarize',
+  ]);
+  return normalized
+    .split(/\s+/)
+    .some((token) => token.length >= 3 && !stopWords.has(token));
 }
 
 function repairMissingFieldClarificationPrompt(

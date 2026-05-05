@@ -1,4 +1,6 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { CodingBackendService } from './coding-backend-service.js';
 import type { CodingBackendTerminalControl } from '../channels/web-types.js';
@@ -395,6 +397,59 @@ describe('CodingBackendService', () => {
     expect(progressEvents.map((event) => event.kind)).toEqual(['started', 'progress', 'completed']);
     expect(progressEvents.every((event) => event.runId === 'req-1')).toBe(true);
     expect(progressEvents[2]?.detail).toContain('Done! Fixed the bug.');
+  });
+
+  it('prepends AGENTS.md instructions to coding backend tasks when available', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'guardian-coding-backend-'));
+    try {
+      await writeFile(join(workspaceRoot, 'AGENTS.md'), 'Always run the focused verifier.');
+
+      const runPromise = service.run({
+        task: 'continue the migration',
+        codeSessionId: 'session-1',
+        workspaceRoot,
+        requestId: 'req-instructions',
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+      const terminalId = mock.openedTerminals[0].terminalId;
+      const written = mock.writtenInputs[0]?.input ?? '';
+      expect(written).toContain('Workspace instructions loaded from AGENTS.md');
+      expect(written).toContain('Always run the focused verifier.');
+      expect(written).toContain('User task:');
+      expect(written).toContain('continue the migration');
+
+      mock.simulateOutput(terminalId, 'done\n');
+      mock.simulateExit(terminalId, 0);
+      await runPromise;
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('uses CLAUDE.md when AGENTS.md is unavailable', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'guardian-coding-backend-'));
+    try {
+      await writeFile(join(workspaceRoot, 'CLAUDE.md'), 'Use the project-local fallback instructions.');
+
+      const runPromise = service.run({
+        task: 'inspect the repo',
+        codeSessionId: 'session-1',
+        workspaceRoot,
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+      const terminalId = mock.openedTerminals[0].terminalId;
+      const written = mock.writtenInputs[0]?.input ?? '';
+      expect(written).toContain('Workspace instructions loaded from CLAUDE.md');
+      expect(written).toContain('Use the project-local fallback instructions.');
+
+      mock.simulateOutput(terminalId, 'done\n');
+      mock.simulateExit(terminalId, 0);
+      await runPromise;
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('reports failure on non-zero exit code', async () => {

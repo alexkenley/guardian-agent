@@ -250,6 +250,11 @@ export async function runLiveToolLoopController(
 
   const providerLocality = input.resolveToolResultProviderKind(ctx);
   const tools = input.tools;
+  const answerFirstOriginalRequest = stripLeadingContextPrefix(input.requestIntentContent);
+  const answerFirstFallbackResponse = buildAnswerFirstSkillFallbackResponse(
+    input.activeSkills,
+    answerFirstOriginalRequest,
+  );
 
   if (shouldUseNoToolDirectAnswer(directIntentDecision)) {
     const directAnswerMessages = withNoToolDirectAnswerInstruction(input.llmMessages);
@@ -265,6 +270,15 @@ export async function runLiveToolLoopController(
         { tools: [] },
       );
       finalContent = response.content;
+    }
+    if (
+      answerFirstFallbackResponse
+      && !isAnswerFirstSkillResponseSufficientForSkills(input.activeSkills, finalContent ?? '', answerFirstOriginalRequest)
+    ) {
+      finalContent = answerFirstFallbackResponse;
+    }
+    if (looksLikeClarificationDeadEnd(finalContent)) {
+      finalContent = buildRecentAssistantContextFallback(input.llmMessages, input.requestIntentContent) ?? finalContent;
     }
     return {
       finalContent: finalContent || 'I could not generate a final response for that request.',
@@ -322,13 +336,9 @@ export async function runLiveToolLoopController(
     const currentTaintReasons = new Set<string>();
     let seededAnswerFirstResponse: ChatResponse | null = null;
     let toolLoopPendingContinuation: Parameters<typeof finalizeToolLoopPendingApprovals>[0]['continuation'];
-    const answerFirstOriginalRequest = stripLeadingContextPrefix(input.requestIntentContent);
     const shouldPreferAnswerFirst = shouldUseAnswerFirstForSkills(input.activeSkills, answerFirstOriginalRequest);
     const answerFirstCorrectionPrompt = shouldPreferAnswerFirst
       ? buildAnswerFirstSkillCorrectionPrompt(input.activeSkills, stripLeadingContextPrefix(input.requestIntentContent))
-      : undefined;
-    const answerFirstFallbackResponse = shouldPreferAnswerFirst
-      ? buildAnswerFirstSkillFallbackResponse(input.activeSkills, stripLeadingContextPrefix(input.requestIntentContent))
       : undefined;
 
     if (shouldPreferAnswerFirst) {
@@ -1144,4 +1154,28 @@ function buildExplicitMemorySaveCorrectionPrompt(requestContent: string): string
     'Call memory_save now using the requested scope if one was specified.',
     `Original request: ${requestContent.trim()}`,
   ].join(' ');
+}
+
+function looksLikeClarificationDeadEnd(content: string | undefined): boolean {
+  const normalized = content?.trim().toLowerCase() ?? '';
+  if (!normalized) return false;
+  return normalized.includes('could you clarify')
+    || normalized.includes('please clarify')
+    || normalized.includes('not sure what you want');
+}
+
+function buildRecentAssistantContextFallback(
+  messages: ChatMessage[],
+  requestContent: string,
+): string | undefined {
+  const request = requestContent.trim();
+  if (!request.endsWith('?')) return undefined;
+  const latestAssistant = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant')
+    ?.content
+    ?.replace(/\s+/g, ' ')
+    .trim();
+  if (!latestAssistant) return undefined;
+  return `Based on the previous answer: ${latestAssistant.slice(0, 600)}`;
 }

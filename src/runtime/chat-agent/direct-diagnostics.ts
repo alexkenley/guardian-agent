@@ -7,6 +7,7 @@ import type { DirectIntentDispatchResult } from './direct-intent-dispatch.js';
 
 type DiagnosticsIssueDraftTools = Pick<ToolExecutor, 'executeModelTool' | 'isEnabled'> | null | undefined;
 type DiagnosticsIssueSubmitTools = Pick<ToolExecutor, 'executeModelTool' | 'isEnabled'> | null | undefined;
+type DiagnosticsTraceInspectTools = Pick<ToolExecutor, 'executeModelTool' | 'isEnabled'> | null | undefined;
 
 export const DIAGNOSTICS_ISSUE_DRAFT_CONTINUATION_KIND = 'diagnostics_issue_draft';
 
@@ -36,6 +37,20 @@ interface StoredDiagnosticsIssueDraft {
   jobId?: string;
 }
 
+interface DiagnosticsTraceInspectOutput {
+  traceEnabled?: boolean;
+  traceFilePath?: string;
+  entriesAnalyzed?: number;
+  requestIds?: string[];
+  latestRequestId?: string;
+  latestUserRequest?: string;
+  latestAssistantResponse?: string;
+  stages?: Record<string, number>;
+  blockers?: string[];
+  timeline?: string[];
+  summary?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -52,6 +67,10 @@ function asStringArray(value: unknown): string[] {
 
 function readDraftOutput(value: unknown): DiagnosticsIssueDraftOutput {
   return isRecord(value) ? value as DiagnosticsIssueDraftOutput : {};
+}
+
+function readTraceInspectOutput(value: unknown): DiagnosticsTraceInspectOutput {
+  return isRecord(value) ? value as DiagnosticsTraceInspectOutput : {};
 }
 
 function buildStoredDiagnosticsIssueDraft(
@@ -133,6 +152,97 @@ function formatDiagnosticsIssueDraft(output: DiagnosticsIssueDraftOutput): strin
       || 'Review this draft before approving any external issue creation.',
     'To submit it, ask Guardian to submit this GitHub issue. Guardian will request approval before posting anything externally.',
   ].join('\n');
+}
+
+function formatDiagnosticsTraceInspect(output: DiagnosticsTraceInspectOutput): string {
+  const requestIds = Array.isArray(output.requestIds) && output.requestIds.length > 0
+    ? output.requestIds.join(', ')
+    : '(none captured)';
+  const blockers = Array.isArray(output.blockers) && output.blockers.length > 0
+    ? output.blockers.map((blocker) => `- ${blocker}`).join('\n')
+    : '- No blocking trace stages were found in the selected window.';
+  const timeline = Array.isArray(output.timeline) && output.timeline.length > 0
+    ? output.timeline.slice(-8).map((line) => `- ${line}`).join('\n')
+    : '- No timeline entries were available.';
+
+  return [
+    output.traceEnabled === false
+      ? 'I could not access Guardian routing trace in this runtime.'
+      : 'I can read Guardian routing trace.',
+    '',
+    `**Trace source:** ${output.traceFilePath?.trim() || '(runtime trace store)'}`,
+    `**Entries analyzed:** ${output.entriesAnalyzed ?? 0}`,
+    `**Request IDs:** ${requestIds}`,
+    '',
+    `**What the trace shows:** ${output.summary?.trim() || 'No summary was available.'}`,
+    '',
+    '**Blockers:**',
+    blockers,
+    '',
+    '**Recent timeline:**',
+    timeline,
+  ].join('\n');
+}
+
+export async function tryDirectDiagnosticsTraceInspect(input: {
+  agentId: string;
+  tools?: DiagnosticsTraceInspectTools;
+  message: UserMessage;
+  ctx: AgentContext;
+  decision?: IntentGatewayDecision | null;
+}): Promise<DirectIntentDispatchResult | null> {
+  if (!input.tools?.isEnabled()) return null;
+  if (input.decision?.route !== 'diagnostics_task') return null;
+  if (input.decision.operation !== 'inspect' && input.decision.operation !== 'read' && input.decision.operation !== 'search') {
+    return null;
+  }
+
+  const requestId = asString((input.decision.entities as Record<string, unknown>).requestId).trim();
+  const result = await input.tools.executeModelTool(
+    'guardian_trace_inspect',
+    {
+      ...(requestId ? { requestId } : {}),
+      traceLimit: 80,
+    },
+    {
+      origin: 'assistant',
+      agentId: input.agentId,
+      userId: input.message.userId,
+      surfaceId: input.message.surfaceId,
+      principalId: input.message.principalId ?? input.message.userId,
+      principalRole: input.message.principalRole,
+      channel: input.message.channel,
+      requestId: input.message.id,
+      agentContext: { checkAction: input.ctx.checkAction },
+    },
+  );
+
+  if (result.success !== true) {
+    return {
+      content: asString(result.error) || asString(result.message) || 'I could not inspect the routing trace.',
+      metadata: {
+        diagnosticsTraceInspect: {
+          success: false,
+          status: result.status,
+          jobId: result.jobId,
+        },
+      },
+    };
+  }
+
+  const output = readTraceInspectOutput(result.output);
+  return {
+    content: formatDiagnosticsTraceInspect(output),
+    metadata: {
+      diagnosticsTraceInspect: {
+        success: true,
+        jobId: result.jobId,
+        entriesAnalyzed: output.entriesAnalyzed,
+        requestIds: output.requestIds,
+        blockers: output.blockers,
+      },
+    },
+  };
 }
 
 export async function tryDirectDiagnosticsIssueDraft(input: {

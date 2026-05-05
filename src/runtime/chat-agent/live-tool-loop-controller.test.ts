@@ -120,6 +120,80 @@ describe('runLiveToolLoopController', () => {
     expect(tools.listAlwaysLoadedDefinitions).not.toHaveBeenCalled();
   });
 
+  it('uses answer-first fallback for degraded direct no-tool verification replies', async () => {
+    const content = 'We are about to claim this fix is done and passing. What must be verified before completion?';
+    const { input } = baseInput(content, {
+      decision: directDecision({
+        route: 'general_assistant',
+        operation: 'read',
+        summary: 'Answer the verification follow-up directly.',
+        executionClass: 'direct_assistant',
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'direct',
+      }),
+      chat: vi.fn(async (_ctx, _messages, chatOptions) => {
+        expect(chatOptions?.tools).toEqual([]);
+        return {
+          response: { content: '', model: 'test-model', finishReason: 'stop' as const },
+          providerName: 'openrouter',
+          providerLocality: 'external' as const,
+          usedFallback: false,
+          durationMs: 5,
+        };
+      }),
+    });
+    input.activeSkills = [
+      { id: 'verification-before-completion', name: 'Verification', summary: 'Verify before completion.' },
+      { id: 'coding-workspace', name: 'Coding Workspace', summary: 'Coding workspace context.' },
+    ];
+
+    const result = await runLiveToolLoopController(input as never);
+
+    expect(result.finalContent).toContain('full legitimate green');
+    expect(result.finalContent).toContain('proof surface');
+  });
+
+  it('uses recent assistant context when direct no-tool follow-up asks for clarification', async () => {
+    const content = 'Yeah but what type of application is it?';
+    const { input } = baseInput(content, {
+      decision: directDecision({
+        route: 'general_assistant',
+        operation: 'read',
+        summary: 'Answer the context follow-up directly.',
+        executionClass: 'direct_assistant',
+        requiresToolSynthesis: false,
+        preferredAnswerPath: 'direct',
+      }),
+      chat: vi.fn(async (_ctx, _messages, chatOptions) => {
+        expect(chatOptions?.tools).toEqual([]);
+        return {
+          response: {
+            content: 'I am not sure what you want me to do. Could you clarify the request?',
+            model: 'test-model',
+            finishReason: 'stop' as const,
+          },
+          providerName: 'openrouter',
+          providerLocality: 'external' as const,
+          usedFallback: false,
+          durationMs: 5,
+        };
+      }),
+    });
+    input.llmMessages = [
+      { role: 'user', content: 'Give me a brief overview of this repo.' },
+      {
+        role: 'assistant',
+        content: 'This is Accomplish, a habit planning dashboard for routines, streaks, and weekly goals. Files inspected: README.md, package.json, src/App.tsx, src/routes/Dashboard.tsx.',
+      },
+      { role: 'user', content },
+    ];
+
+    const result = await runLiveToolLoopController(input as never);
+
+    expect(result.finalContent).toContain('Accomplish');
+    expect(result.finalContent).toContain('habit planning dashboard');
+  });
+
   it('does not let low-confidence unknown routing bypass model-requested tool loops', async () => {
     const msg = message('Make the answer 42 in the selected file.');
     const findToolsDefinition = {

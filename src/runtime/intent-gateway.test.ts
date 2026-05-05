@@ -62,6 +62,46 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('repairs diagnostics trace inspection clarifications into a ready trace inspect route', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Can you see the routing trace for Windows for Guardian Agent?',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'diagnostics_task',
+          operation: 'inspect',
+          confidence: 'low',
+          summary: 'Inspect Guardian routing trace evidence.',
+          turnRelation: 'new_request',
+          resolution: 'needs_clarification',
+          missingFields: [
+            'specific_routing_trace_id_or_time_window',
+            'clarification_on_whether_they_mean_intent_gateway_routing_or_full_request_trace',
+          ],
+          requiresToolSynthesis: true,
+          preferredAnswerPath: 'tool_loop',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision).toMatchObject({
+      route: 'diagnostics_task',
+      operation: 'inspect',
+      resolution: 'ready',
+      missingFields: [],
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+      entities: {
+        toolName: 'guardian_trace_inspect',
+      },
+    });
+  });
+
   it('uses a content-plan record for raw credential disclosure refusals without calling the model', async () => {
     const gateway = new IntentGateway();
     let called = false;
@@ -710,6 +750,94 @@ describe('IntentGateway', () => {
     expect(result.decision.requiresToolSynthesis).toBe(false);
     expect(result.decision.preferredAnswerPath).toBe('direct');
     expect(result.decision.provenance?.route).toBe('repair.continuity');
+  });
+
+  it('falls back to direct conversation follow-up when fallback output is unavailable with continuity present', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'We are about to claim this fix is done and passing. What must be verified before completion?',
+        channel: 'web',
+        recentHistory: [
+          {
+            role: 'user',
+            content: 'Write an implementation plan for adding archived routines to this app. Break this down before editing anything.',
+          },
+          {
+            role: 'assistant',
+            content: 'Implementation plan with acceptance gates and existing checks to reuse.',
+          },
+        ],
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 1,
+          focusSummary: 'The user is verifying whether a coding fix can be called complete.',
+          lastActionableRequest: 'Write an implementation plan for adding archived routines to this app.',
+          activeExecutionRefs: ['execution:sample'],
+        },
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          return {
+            content: JSON.stringify({
+              route: 'unknown',
+              confidence: 'low',
+              operation: 'unknown',
+              summary: 'Unable to classify.',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          };
+        }
+        return {
+          content: 'I am not sure what you want me to do. Could you clarify the request?',
+          model: 'test-model',
+          finishReason: 'stop',
+        };
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).toEqual([]);
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
+  it('repairs active code-session mutation turns to coding work on unavailable fallback output', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Make the answer 42 in the selected file.',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 1,
+          focusSummary: 'The user is editing a selected file in an attached coding workspace.',
+          lastActionableRequest: 'Make the answer 42 in the selected file.',
+          activeExecutionRefs: ['code_session:sample'],
+        },
+      },
+      async () => ({
+        content: 'I am not sure what you want me to do. Could you clarify the request?',
+        model: 'test-model',
+        finishReason: 'stop',
+      }),
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
   });
 
   it('keeps vague context references as clarification blockers when routing is unavailable', async () => {
@@ -2382,18 +2510,18 @@ describe('IntentGateway', () => {
     expect(primaryPrompt).toContain('Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks.');
     expect(primaryPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation');
     expect(primaryPrompt).toContain('Create the Pre-Meeting Brief routine in Second Brain.');
-    expect(primaryPrompt).toContain('Create an automation that checks WHM disk quota every day.');
+    expect(primaryPrompt).toContain('Create an automation that checks hosting disk quota every day.');
     expect(primaryPrompt).toContain('Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar');
     expect(primaryPrompt).toContain('Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.');
     expect(primaryPrompt).toContain('Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.');
-    expect(primaryPrompt).toContain('Example: "Show my library items about Harbor." -> route=personal_assistant_task, operation=read, personalItemType=library, query="Harbor".');
+    expect(primaryPrompt).toContain('Example: "Show my library items about launch planning." -> route=personal_assistant_task, operation=read, personalItemType=library, query="launch planning".');
     expect(primaryPrompt).toContain('Example: "Show the contacts in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.');
-    expect(primaryPrompt).toContain('Example: "Find the contact \\"Jordan Lee\\" in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person, query="Jordan Lee".');
+    expect(primaryPrompt).toContain('Example: "Find the contact \\"Example Contact\\" in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person, query="Example Contact".');
     expect(primaryPrompt).toContain('Example: "Show only my disabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=false.');
     expect(primaryPrompt).toContain('Example: "What routines are related to email or inbox processing?" -> route=personal_assistant_task, operation=read, personalItemType=routine, query="email or inbox processing".');
     expect(primaryPrompt).toContain('Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.');
-    expect(primaryPrompt).toContain('Example: "Create a contact in my Second Brain named Smoke Test Person with email smoke@example.com." -> route=personal_assistant_task, operation=create, personalItemType=person.');
+    expect(primaryPrompt).toContain('Example: "Create a contact in my Second Brain named Example Contact with email contact@example.com." -> route=personal_assistant_task, operation=create, personalItemType=person.');
     expect(primaryPrompt).toContain('Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('Example: "List my configured AI providers." -> route=general_assistant, operation=read, uiSurface=config');
     expect(primaryPrompt).toContain('SharePoint');
@@ -2408,13 +2536,13 @@ describe('IntentGateway', () => {
     expect(fallbackPrompt).toContain('Examples: "Give me a concise plan for organizing my week." -> route="general_assistant", operation="inspect"');
     expect(fallbackPrompt).toContain('Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".');
     expect(fallbackPrompt).toContain('Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".');
-    expect(fallbackPrompt).toContain('Examples: "Show my library items about Harbor." -> route="personal_assistant_task", operation="read", personalItemType="library", query="Harbor".');
+    expect(fallbackPrompt).toContain('Examples: "Show my library items about launch planning." -> route="personal_assistant_task", operation="read", personalItemType="library", query="launch planning".');
     expect(fallbackPrompt).toContain('Examples: "Show the contacts in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".');
-    expect(fallbackPrompt).toContain('Examples: "Find the contact \\"Jordan Lee\\" in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person", query="Jordan Lee".');
+    expect(fallbackPrompt).toContain('Examples: "Find the contact \\"Example Contact\\" in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person", query="Example Contact".');
     expect(fallbackPrompt).toContain('Examples: "Show only my disabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=false.');
     expect(fallbackPrompt).toContain('Examples: "What routines are related to email or inbox processing?" -> route="personal_assistant_task", operation="read", personalItemType="routine", query="email or inbox processing".');
     expect(fallbackPrompt).toContain('Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.');
-    expect(fallbackPrompt).toContain('Examples: "Create a contact in my Second Brain named Smoke Test Person with email smoke@example.com." -> route="personal_assistant_task", operation="create", personalItemType="person".');
+    expect(fallbackPrompt).toContain('Examples: "Create a contact in my Second Brain named Example Contact with email contact@example.com." -> route="personal_assistant_task", operation="create", personalItemType="person".');
   });
 
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {

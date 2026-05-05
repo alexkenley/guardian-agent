@@ -4,6 +4,10 @@ import {
   type DiagnosticsIssueDraftInput,
   type DiagnosticsIssueTarget,
 } from '../../runtime/diagnostics/issue-draft.js';
+import {
+  inspectDiagnosticsTrace,
+  type DiagnosticsTraceInspectInput,
+} from '../../runtime/diagnostics/trace-inspect.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
 
@@ -48,7 +52,69 @@ function normalizeIssueDraftInput(
   };
 }
 
+function normalizeTraceInspectInput(
+  args: Record<string, unknown>,
+  context: DiagnosticsToolRegistrarContext,
+): DiagnosticsTraceInspectInput {
+  const requestId = context.asString(args.requestId).trim();
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(args.traceLimit !== undefined ? { traceLimit: context.asNumber(args.traceLimit, 80) } : {}),
+  };
+}
+
 export function registerBuiltinDiagnosticsTools(context: DiagnosticsToolRegistrarContext): void {
+  context.registry.register(
+    {
+      name: 'guardian_trace_inspect',
+      description: 'Inspect GuardianAgent routing trace evidence for recent assistant behavior. Use when the user asks what happened, whether Guardian can see its routing trace, why a request was blocked, why routing chose a path, or why a delegated/coding run stalled. This is read-only and returns redacted trace summaries; it does not create an issue.',
+      shortDescription: 'Inspect recent Guardian routing trace evidence.',
+      risk: 'read_only',
+      category: 'system',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          requestId: {
+            type: 'string',
+            description: 'Optional specific requestId to inspect. Defaults to the latest non-current request window.',
+          },
+          traceLimit: {
+            type: 'number',
+            description: 'Maximum recent routing trace entries to inspect, 1-200. Default 80.',
+          },
+        },
+      },
+      examples: [
+        {
+          input: { traceLimit: 80 },
+          description: 'Inspect the latest routing trace window and explain what happened.',
+        },
+        {
+          input: { requestId: 'req-123' },
+          description: 'Inspect a specific request id from the routing trace.',
+        },
+      ],
+    },
+    async (args, request) => {
+      if (!context.intentRoutingTrace) {
+        return {
+          success: false,
+          error: 'Guardian diagnostics are not available in this runtime.',
+        };
+      }
+      const input = normalizeTraceInspectInput(args, context);
+      const result = await inspectDiagnosticsTrace(input, context, request.requestId);
+      return {
+        success: true,
+        message: 'Inspected the redacted routing trace.',
+        output: result,
+        verificationStatus: 'verified',
+        verificationEvidence: 'Read-only diagnostics summary built from redacted routing trace entries.',
+      };
+    },
+  );
+
   context.registry.register(
     {
       name: 'guardian_issue_draft',

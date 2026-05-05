@@ -18,6 +18,7 @@ export type IntentCapabilityCandidate =
   | 'workspace_read'
   | 'browser'
   | 'web_search'
+  | 'diagnostics_trace_inspect'
   | 'diagnostics_issue_submit'
   | 'diagnostics_issue_draft'
   | 'security_guardrail'
@@ -79,6 +80,9 @@ function preferredCandidatesForDecision(
     case 'search_task':
       return shouldUseDirectWebSearchCandidate(decision) ? ['web_search'] : [];
     case 'diagnostics_task':
+      if (shouldUseDiagnosticsTraceInspectCandidate(decision)) {
+        return ['diagnostics_trace_inspect'];
+      }
       if (shouldUseDiagnosticsIssueSubmitCandidate(decision)) {
         return ['diagnostics_issue_submit'];
       }
@@ -120,6 +124,17 @@ function preferredCandidatesForDecision(
     default:
       return [];
   }
+}
+
+function shouldUseDiagnosticsTraceInspectCandidate(decision: IntentGatewayDecision): boolean {
+  if (decision.resolution !== 'ready') return false;
+  if (decision.operation !== 'inspect' && decision.operation !== 'read' && decision.operation !== 'search') {
+    return false;
+  }
+  return decision.entities.toolName === 'guardian_trace_inspect'
+    || decision.requiresToolSynthesis === true
+    || decision.preferredAnswerPath === 'tool_loop'
+    || decision.operation === 'inspect';
 }
 
 function shouldUseDiagnosticsIssueSubmitCandidate(decision: IntentGatewayDecision): boolean {

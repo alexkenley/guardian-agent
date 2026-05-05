@@ -74,6 +74,8 @@ const MAX_TOOL_OUTPUT_CHARS = 8000;
 const MAX_PROGRESS_DETAIL_CHARS = 500;
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 min
 const OUTPUT_PROGRESS_THROTTLE_MS = 1_200;
+const WORKSPACE_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'] as const;
+const MAX_WORKSPACE_INSTRUCTION_CHARS = 16_000;
 
 /** Strip ANSI escape codes from terminal output. */
 function stripAnsi(text: string): string {
@@ -150,6 +152,39 @@ function buildTerminalInput(backend: CodingBackendConfig, command: string): stri
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+async function readWorkspaceInstructionFile(workspaceRoot: string): Promise<{ fileName: string; content: string } | null> {
+  const root = workspaceRoot.trim();
+  if (!root) return null;
+  for (const fileName of WORKSPACE_INSTRUCTION_FILES) {
+    try {
+      const content = (await readFile(join(root, fileName), 'utf8')).trim();
+      if (!content) continue;
+      return {
+        fileName,
+        content: truncateText(content, MAX_WORKSPACE_INSTRUCTION_CHARS),
+      };
+    } catch {
+      // Try the next supported workspace instruction file.
+    }
+  }
+  return null;
+}
+
+function buildTaskWithWorkspaceInstructions(
+  task: string,
+  instructions: { fileName: string; content: string } | null,
+): string {
+  if (!instructions) return task;
+  return [
+    `Workspace instructions loaded from ${instructions.fileName}. Follow these instructions for this run:`,
+    '',
+    instructions.content,
+    '',
+    'User task:',
+    task,
+  ].join('\n');
 }
 
 function extractProgressDetail(output: string, command: string): string | undefined {
@@ -593,17 +628,24 @@ export class CodingBackendService {
     const sessionId = `cb-${++this.sessionCounter}-${Date.now()}`;
     const timeoutMs = backend.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const shell = backend.shell || (process.platform === 'win32' ? 'wsl' : 'bash');
+    const workspaceInstructions = await readWorkspaceInstructionFile(params.workspaceRoot);
+    const task = buildTaskWithWorkspaceInstructions(params.task, workspaceInstructions);
     const assistantResponseCapture = backendSupportsAssistantResponseCapture(backend)
       ? await createAssistantResponseCapture(shell)
       : null;
     const assistantResponseArgs = assistantResponseCapture
       ? `--output-last-message ${shellQuote(assistantResponseCapture.shellPath)}`
       : '';
-    const command = buildCommand(backend, params.task, params.workspaceRoot, { assistantResponseArgs });
+    const command = buildCommand(backend, task, params.workspaceRoot, { assistantResponseArgs });
     const requestId = params.requestId?.trim() || undefined;
     const runId = requestId || `code-session:${params.codeSessionId}:backend:${sessionId}`;
 
-    log.info({ backendId: backend.id, sessionId, task: params.task.slice(0, 100) }, 'Launching coding backend');
+    log.info({
+      backendId: backend.id,
+      sessionId,
+      task: params.task.slice(0, 100),
+      workspaceInstructionFile: workspaceInstructions?.fileName,
+    }, 'Launching coding backend');
 
     // Open terminal
     const { terminalId } = await this.terminalControl.openTerminal({
