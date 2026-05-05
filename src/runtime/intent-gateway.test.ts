@@ -1001,6 +1001,45 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('inherits a resumable active execution for short continue turns even with stale continuation state', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Okay continue to the next step',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 2,
+          activeExecutionRefs: ['execution:exec-1'],
+          activeExecution: {
+            executionId: 'exec-1',
+            status: 'blocked',
+            route: 'coding_task',
+            operation: 'update',
+            summary: 'Continue the MusicApp project bootstrap after the package-install guard stopped the turn.',
+            originalUserContent: 'Start phase one',
+          },
+          continuationStateKind: 'm365_unread_list',
+        },
+      },
+      async () => {
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.missingFields).toEqual([]);
+    expect(result.decision.provenance).toMatchObject({
+      route: 'repair.continuity',
+      operation: 'repair.continuity',
+    });
+  });
+
   it('does not resurrect failed coding executions when classifiers are unavailable', async () => {
     const gateway = new IntentGateway();
 

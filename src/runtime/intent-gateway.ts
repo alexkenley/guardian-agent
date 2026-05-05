@@ -575,9 +575,13 @@ function repairUnavailableUnknownWithConversationContext(
   if (record.available) {
     return decision;
   }
+  const hasResumableActiveExecution = canRepairFromActiveExecution(input);
   if (
-    looksLikeContextDependentPromptSelectionTurn(input.content)
-    || !hasSubstantiveCurrentTurnForDirectFallback(input.content)
+    !hasResumableActiveExecution
+    && (
+      looksLikeContextDependentPromptSelectionTurn(input.content)
+      || !hasSubstantiveCurrentTurnForDirectFallback(input.content)
+    )
   ) {
     return decision;
   }
@@ -637,20 +641,26 @@ function repairUnavailableUnknownWithConversationContext(
   };
 }
 
+function canRepairFromActiveExecution(input: IntentGatewayInput): boolean {
+  const activeExecution = input.continuity?.activeExecution;
+  if (!activeExecution || !activeExecution.route) {
+    return false;
+  }
+  if (activeExecution.status === 'failed' || activeExecution.status === 'cancelled') {
+    return false;
+  }
+  return activeExecution.route !== 'unknown' && activeExecution.route !== 'general_assistant';
+}
+
 function repairUnavailableActiveExecutionWork(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
 ): IntentGatewayDecision | null {
+  if (!canRepairFromActiveExecution(input)) {
+    return null;
+  }
   const activeExecution = input.continuity?.activeExecution;
-  if (!activeExecution || !activeExecution.route) {
-    return null;
-  }
-  if (activeExecution.status === 'failed' || activeExecution.status === 'cancelled') {
-    return null;
-  }
-  if (activeExecution.route === 'unknown' || activeExecution.route === 'general_assistant') {
-    return null;
-  }
+  if (!activeExecution) return null;
   const operation = activeExecution.operation && activeExecution.operation !== 'unknown'
     ? activeExecution.operation
     : decision.operation !== 'unknown'
