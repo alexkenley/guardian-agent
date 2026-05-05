@@ -550,9 +550,30 @@ function shouldPreferManagedCloud(
     && !decision.requiresRepoGrounding;
 }
 
+function shouldPreferManagedCloudCodingRole(
+  decision: IntentGatewayDecision | null | undefined,
+  policy: AssistantModelSelectionConfig,
+  routeDecision: Partial<Pick<RouteDecision, 'reason'>> | null | undefined,
+): boolean {
+  if (!decision) return false;
+  if (policy.managedCloudRouting?.enabled === false) return false;
+  const explicitCodeSessionRoute = routeDecision?.reason === 'explicit attached coding session with gateway-first auto routing';
+  if (!explicitCodeSessionRoute && decision.entities.codingRemoteExecRequested !== true) {
+    return false;
+  }
+  return decision.route === 'coding_task'
+    && getManagedCloudRoutingRole({
+      decision,
+      preferredAnswerPath: isPreferredAnswerPath(decision.preferredAnswerPath)
+        ? decision.preferredAnswerPath
+        : 'tool_loop',
+    }) === 'coding';
+}
+
 function chooseExternalTier(input: {
   config: GuardianAgentConfig;
   decision: IntentGatewayDecision | null | undefined;
+  routeDecision: Partial<Pick<RouteDecision, 'reason'>> | null | undefined;
   mode: RoutingTierMode;
   policy: AssistantModelSelectionConfig;
 }): { tier: ProviderTier; reason: string } | null {
@@ -574,6 +595,12 @@ function chooseExternalTier(input: {
       : null;
   }
 
+  if (managedCloud && shouldPreferManagedCloudCodingRole(input.decision, input.policy, input.routeDecision)) {
+    return {
+      tier: 'managed_cloud',
+      reason: 'managed cloud coding role binding selected for coding workspace workload',
+    };
+  }
   if (frontier && shouldPreferFrontier(input.decision, input.policy)) {
     return {
       tier: 'frontier',
@@ -602,7 +629,7 @@ function chooseExternalTier(input: {
 
 function resolveSelectedTier(input: {
   config: GuardianAgentConfig;
-  routeDecision: Pick<RouteDecision, 'tier'> | null | undefined;
+  routeDecision: Partial<Pick<RouteDecision, 'tier' | 'reason'>> | null | undefined;
   decision: IntentGatewayDecision | null | undefined;
   mode: RoutingTierMode;
   policy: AssistantModelSelectionConfig;
@@ -614,6 +641,7 @@ function resolveSelectedTier(input: {
     const degraded = chooseExternalTier({
       config: input.config,
       decision: input.decision,
+      routeDecision: input.routeDecision,
       mode: 'managed-cloud-only',
       policy: input.policy,
     });
@@ -630,6 +658,7 @@ function resolveSelectedTier(input: {
     const forced = chooseExternalTier({
       config: input.config,
       decision: input.decision,
+      routeDecision: input.routeDecision,
       mode: input.mode,
       policy: input.policy,
     });
@@ -654,6 +683,7 @@ function resolveSelectedTier(input: {
     const degraded = chooseExternalTier({
       config: input.config,
       decision: input.decision,
+      routeDecision: input.routeDecision,
       mode: 'managed-cloud-only',
       policy: input.policy,
     });
@@ -669,6 +699,7 @@ function resolveSelectedTier(input: {
   const external = chooseExternalTier({
     config: input.config,
     decision: input.decision,
+    routeDecision: input.routeDecision,
     mode: input.mode,
     policy: input.policy,
   });
@@ -829,6 +860,8 @@ function deriveDelegatedExecutionDecision(input: {
   const mutateOperation = lenses.has('provider-admin') ? 'update' : 'run';
   const codingWorkspaceOperation = base.entities?.codingRemoteExecRequested === true
     ? 'run'
+    : base.route === 'coding_task' && base.operation === 'run'
+      ? 'run'
     : isExplicitWorkspaceMutationOperation(base.operation)
       ? base.operation
     : descriptor.role === 'implementer'
@@ -1013,6 +1046,19 @@ export function resolveDelegatedExecutionDecision(input: {
   });
 }
 
+function buildDelegatedProfileRouteDecision(input: {
+  delegatedDecision: IntentGatewayDecision;
+  orchestration?: OrchestrationRoleDescriptor | null;
+}): Partial<Pick<RouteDecision, 'tier' | 'reason'>> {
+  const lenses = new Set(input.orchestration?.lenses ?? []);
+  return {
+    tier: input.delegatedDecision.preferredTier,
+    ...(lenses.has('coding-workspace')
+      ? { reason: 'explicit attached coding session with gateway-first auto routing' }
+      : {}),
+  };
+}
+
 function buildProfileShape(input: {
   tier: ProviderTier;
   expectedContextPressure: IntentGatewayExpectedContextPressure;
@@ -1046,7 +1092,7 @@ function buildProfileShape(input: {
 
 export function selectExecutionProfile(input: {
   config: GuardianAgentConfig;
-  routeDecision: Pick<RouteDecision, 'tier'> | null | undefined;
+  routeDecision: Partial<Pick<RouteDecision, 'tier' | 'reason'>> | null | undefined;
   gatewayDecision: IntentGatewayDecision | null | undefined;
   mode: RoutingTierMode;
   forcedProviderName?: string | null;
@@ -1156,7 +1202,10 @@ export function selectDelegatedExecutionProfile(input: {
   const routingMode = parentProfile?.routingMode ?? input.mode ?? 'auto';
   const selected = selectExecutionProfile({
     config: input.config,
-    routeDecision: { tier: delegatedDecision.preferredTier },
+    routeDecision: buildDelegatedProfileRouteDecision({
+      delegatedDecision,
+      orchestration: input.orchestration,
+    }),
     gatewayDecision: delegatedDecision,
     mode: routingMode,
   });

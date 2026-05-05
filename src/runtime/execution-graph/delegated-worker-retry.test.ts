@@ -219,6 +219,41 @@ describe('delegated worker retry graph policy', () => {
     })).toBe(currentProfile);
   });
 
+  it('escalates coding-workspace quality retries to frontier when managed-cloud output lacks requested file references', () => {
+    const envelope = delegatedEnvelope({
+      taskContract: taskContract({
+        steps: [
+          { stepId: 'answer', kind: 'answer', summary: 'Answer from delegated evidence.' },
+        ],
+      }),
+    });
+    const failure = buildDelegatedRetryableFailure({
+      decision: 'insufficient',
+      reasons: ['The previous answer did not name the exact files or code paths that were requested.'],
+      retryable: true,
+      missingEvidenceKinds: ['file_reference_claim'],
+    }, envelope);
+    const currentProfile = managedCloudCodingProfile();
+
+    const selected = selectDelegatedRetryExecutionProfile({
+      config: retryProfileConfig(),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      intentDecision: gatewayDecision(),
+      currentProfile,
+      insufficiency: failure,
+    });
+
+    expect(selected).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      selectionSource: 'delegated_role',
+    });
+  });
+
   it('keeps answer-only delegated retries on the managed-cloud profile when the plan omitted an answer step', () => {
     const envelope = delegatedEnvelope({
       taskContract: taskContract({

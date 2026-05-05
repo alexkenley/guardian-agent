@@ -105,6 +105,29 @@ describe('resolveIntentGatewayEntities', () => {
     expect(result.entities.sessionTarget).toBeUndefined();
   });
 
+  it('does not re-match attached coding workspace phrasing when a code session is already attached', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      {
+        sourceContent: [
+          'Fresh bounded coding step for the attached MusicApp coding workspace.',
+          'Create dist/proof.txt containing exactly ok, then read it back.',
+        ].join(' '),
+        continuity: {
+          continuityKey: 'default:owner',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['code_session:music-app'],
+        },
+      },
+      'coding_task',
+      'create',
+      'derived.workload',
+    );
+
+    expect(result.entities.sessionTarget).toBeUndefined();
+    expect(result.provenance?.sessionTarget).toBeUndefined();
+  });
+
   it('preserves classifier-provided coding-task session targets when no source content is available', () => {
     const result = resolveIntentGatewayEntities(
       {

@@ -913,7 +913,7 @@ function isFixablePolicyBlockedToolResult(result: Record<string, unknown>): bool
   }
   const lower = collectToolResultText(result).toLowerCase();
   if (!lower) return false;
-  return /(update_tool_policy|allowed paths|allowedpaths|allowed domains|alloweddomains|allowed commands|outside allowed paths|outside the allowed paths|not in allowedpaths|not in the allowed paths|blocked by policy|tools policy)/.test(lower);
+  return /(update_tool_policy|allowed paths|allowedpaths|allowed domains|alloweddomains|allowed commands|outside allowed paths|outside the allowed paths|not in allowedpaths|not in the allowed paths|blocked by policy|blocked by tool policy|tool policy|tools policy)/.test(lower);
 }
 
 function collectToolResultText(result: Record<string, unknown>): string {

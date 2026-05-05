@@ -14,6 +14,7 @@ interface RequestedCodeContextLike {
 
 interface ResolvedCodeSessionLike {
   session: {
+    id?: string;
     resolvedRoot: string;
   };
   attachment?: {
@@ -86,6 +87,12 @@ export function shouldUseCodeSessionConversationForRequest(
   input: ShouldUseCodeSessionConversationInput,
 ): boolean {
   if (!input.resolvedCodeSession) return false;
+  if (!isResolvedCodeSessionCompatibleWithRequestedContext(
+    input.requestedCodeContext,
+    input.resolvedCodeSession,
+  )) {
+    return false;
+  }
   if (isImplicitSharedCodeContextMetadata(input.metadata)) {
     return false;
   }
@@ -110,12 +117,37 @@ function isSelfContainedNonWorkspaceRequest(content: string): boolean {
     || isRawCredentialDisclosureRequest(content);
 }
 
+export function isResolvedCodeSessionCompatibleWithRequestedContext(
+  requestedCodeContext: RequestedCodeContextLike | null | undefined,
+  resolvedCodeSession: ResolvedCodeSessionLike | null | undefined,
+): boolean {
+  const requestedSessionId = requestedCodeContext?.sessionId?.trim();
+  if (requestedSessionId) {
+    const resolvedSessionId = resolvedCodeSession?.session.id?.trim();
+    if (!resolvedSessionId || resolvedSessionId !== requestedSessionId) {
+      return false;
+    }
+  }
+  const requestedWorkspaceRoot = requestedCodeContext?.workspaceRoot?.trim();
+  if (!requestedWorkspaceRoot) return true;
+  const resolvedWorkspaceRoot = resolvedCodeSession?.session.resolvedRoot?.trim();
+  if (!resolvedWorkspaceRoot) return false;
+  return isPathInsideRoot(requestedWorkspaceRoot, resolvedWorkspaceRoot)
+    || isPathInsideRoot(resolvedWorkspaceRoot, requestedWorkspaceRoot);
+}
+
 export function shouldAttachCodeSessionForRequest(
   input: ShouldAttachCodeSessionForRequestInput,
 ): boolean {
   if (!input.resolvedCodeSession) return false;
   const gatewayDecision = input.gatewayDecision;
   if (gatewayDecision?.route === 'coding_session_control') {
+    return false;
+  }
+  if (!isResolvedCodeSessionCompatibleWithRequestedContext(
+    input.requestedCodeContext,
+    input.resolvedCodeSession,
+  )) {
     return false;
   }
   if (input.requestedCodeContext?.sessionId) {

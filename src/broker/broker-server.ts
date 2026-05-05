@@ -8,6 +8,7 @@ import { assignProvenance } from './provenance.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import { parseToolJobOutputPreview } from '../tools/job-results.js';
 import type { ChatMessage, ChatOptions, ChatResponse, LLMProvider } from '../llm/types.js';
+import { chatProviderWithTimeout } from '../llm/model-fallback.js';
 import { getProviderLocalityFromName } from '../runtime/model-routing-ux.js';
 import { stringifyJsonTransport, toJsonTransportValue } from './json-safe.js';
 
@@ -322,7 +323,12 @@ export class BrokerServer {
             const candidateProvider = this.runtime.getProvider(name);
             if (!candidateProvider) continue;
             try {
-              chatResponse = await candidateProvider.chat(chatMessages, chatOptions);
+              chatResponse = await chatProviderWithTimeout({
+                provider: candidateProvider,
+                providerName: name,
+                messages: chatMessages,
+                options: chatOptions,
+              });
               provider = candidateProvider;
               providerProfileName = name;
               break;

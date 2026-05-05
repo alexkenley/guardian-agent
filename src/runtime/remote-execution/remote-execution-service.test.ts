@@ -114,12 +114,18 @@ describe('RemoteExecutionService', () => {
     mkdirSync(join(root, 'src'), { recursive: true });
     mkdirSync(join(root, 'scripts'), { recursive: true });
     mkdirSync(join(root, 'node_modules', 'left-pad'), { recursive: true });
+    mkdirSync(join(root, 'AppData', 'Roaming'), { recursive: true });
+    mkdirSync(join(root, 'Microsoft', 'Windows', 'PowerShell'), { recursive: true });
+    mkdirSync(join(root, 'src', 'Microsoft'), { recursive: true });
     mkdirSync(join(root, '.git'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
     writeFileSync(join(root, 'src', 'index.ts'), 'export const value = 1;\n');
+    writeFileSync(join(root, 'src', 'Microsoft', 'legit.ts'), 'export const vendor = "Microsoft";\n');
     writeFileSync(join(root, 'scripts', 'run.sh'), '#!/bin/sh\necho hi\n');
     chmodSync(join(root, 'scripts', 'run.sh'), 0o755);
     writeFileSync(join(root, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
+    writeFileSync(join(root, 'AppData', 'Roaming', 'cache.txt'), 'profile cache\n');
+    writeFileSync(join(root, 'Microsoft', 'Windows', 'PowerShell', 'ModuleAnalysisCache'), 'profile cache\n');
     writeFileSync(join(root, '.git', 'config'), '[core]\n');
 
     let captured: RemoteExecutionPreparedRequest | null = null;
@@ -201,8 +207,11 @@ describe('RemoteExecutionService', () => {
     const remotePaths = captured!.stagedFiles.map((file) => file.remotePath).sort();
     expect(remotePaths).toContain('/workspace/package.json');
     expect(remotePaths).toContain('/workspace/src/index.ts');
+    expect(remotePaths).toContain('/workspace/src/Microsoft/legit.ts');
     expect(remotePaths).toContain('/workspace/scripts/run.sh');
     expect(remotePaths.some((filePath) => filePath.includes('node_modules'))).toBe(false);
+    expect(remotePaths.some((filePath) => filePath.includes('/AppData/'))).toBe(false);
+    expect(remotePaths.some((filePath) => filePath.includes('/Microsoft/Windows/'))).toBe(false);
     expect(remotePaths.some((filePath) => filePath.includes('/.git/'))).toBe(false);
     const scriptEntry = captured!.stagedFiles.find((file) => file.remotePath === '/workspace/scripts/run.sh');
     expect(scriptEntry?.mode).toBe(0o755);

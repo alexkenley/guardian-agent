@@ -1,6 +1,7 @@
 import {
   inferCodeSessionControlOperation,
   extractExplicitRemoteExecCommand,
+  inferExplicitCodingTaskOperation,
   inferExplicitFilesystemTaskOperation,
   isExplicitRemoteSandboxTaskRequest,
   isManagedSandboxStatusInspectionRequest,
@@ -236,6 +237,7 @@ export function repairStructuredIntentGatewayOperation(
     return operation;
   }
   const normalizedSourceContent = rawSourceContent.toLowerCase();
+  const inferredCodingTaskOperation = inferExplicitCodingTaskOperation(normalizedSourceContent, operation);
   if (
     route === 'coding_task'
     && (
@@ -244,6 +246,9 @@ export function repairStructuredIntentGatewayOperation(
     )
   ) {
     return 'run';
+  }
+  if (route === 'coding_task' && inferredCodingTaskOperation) {
+    return inferredCodingTaskOperation;
   }
   if (route === 'complex_planning_task' && isExplicitComplexPlanningRequest(rawSourceContent)) {
     return 'run';

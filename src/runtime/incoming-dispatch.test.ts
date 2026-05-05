@@ -229,7 +229,7 @@ describe('createIncomingDispatchPreparer', () => {
     const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
     const codeSessionStore = {
       resolveForRequest: vi.fn(() => ({
-        session: { agentId: 'pinned-worker' },
+        session: { id: 'session-1', agentId: 'pinned-worker' },
       })),
       getSession: vi.fn(() => null),
     };
@@ -256,6 +256,122 @@ describe('createIncomingDispatchPreparer', () => {
       tier: 'local',
     });
     expect(result.gateway).toEqual(createGatewayRecord());
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
+  it('honors explicit workspaceRoot metadata over stale attached code sessions', async () => {
+    const readCodeRequestMetadata = vi.fn(() => ({
+      workspaceRoot: 'S:\\Development\\GuardianAgent',
+    }));
+    const codeSessionStore = {
+      resolveForRequest: vi.fn(() => ({
+        session: {
+          id: 'music-session',
+          resolvedRoot: 'S:\\Development\\MusicApp',
+          workspaceRoot: 'S:\\Development\\MusicApp',
+        },
+        attachment: {
+          channel: 'web',
+          surfaceId: 'codex-live-api',
+        },
+      })),
+      getSession: vi.fn(() => null),
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord({
+        route: 'coding_task',
+        operation: 'inspect',
+        requiresRepoGrounding: true,
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      readCodeRequestMetadata,
+      codeSessionStore,
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything.',
+      userId: 'alex',
+      channel: 'web',
+      surfaceId: 'codex-live-api',
+      metadata: {
+        codeContext: {
+          workspaceRoot: 'S:\\Development\\GuardianAgent',
+        },
+      },
+    });
+
+    expect(result.decision).toEqual({
+      agentId: 'local-agent',
+      confidence: 'high',
+      reason: 'code workspace context with gateway-first auto routing',
+      tier: 'local',
+    });
+    expect(result.routedMessage.metadata?.codeContext).toEqual({
+      workspaceRoot: 'S:\\Development\\GuardianAgent',
+    });
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
+  it('honors explicit sessionId metadata over stale same-surface code sessions', async () => {
+    const readCodeRequestMetadata = vi.fn(() => ({
+      sessionId: 'accomplish-session',
+    }));
+    const codeSessionStore = {
+      resolveForRequest: vi.fn(({ requestedSessionId }: { requestedSessionId?: string }) => ({
+        session: requestedSessionId === 'accomplish-session'
+          ? {
+              id: 'accomplish-session',
+              resolvedRoot: 'C:\\Temp\\workspace',
+              workspaceRoot: 'C:\\Temp\\workspace',
+            }
+          : {
+              id: 'temp-install-session',
+              resolvedRoot: 'C:\\Temp\\guardian-ui-package-test',
+              workspaceRoot: 'C:\\Temp\\guardian-ui-package-test',
+            },
+        attachment: {
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        },
+      })),
+      getSession: vi.fn(() => null),
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord({
+        route: 'coding_task',
+        operation: 'inspect',
+        requiresRepoGrounding: true,
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      readCodeRequestMetadata,
+      codeSessionStore,
+      routingIntentGateway,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Give me a brief overview of this repo.',
+      userId: 'alex',
+      channel: 'web',
+      metadata: {
+        codeContext: {
+          sessionId: 'accomplish-session',
+        },
+      },
+    });
+
+    expect(result.decision).toEqual({
+      agentId: 'local-agent',
+      confidence: 'high',
+      reason: 'explicit attached coding session with gateway-first auto routing',
+      tier: 'local',
+    });
+    expect(codeSessionStore.resolveForRequest).toHaveBeenCalledWith(expect.objectContaining({
+      requestedSessionId: 'accomplish-session',
+      allowSharedAttachment: false,
+    }));
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
   });
 
@@ -362,6 +478,126 @@ describe('createIncomingDispatchPreparer', () => {
 
     expect(result.gateway?.decision.turnRelation).toBe('follow_up');
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
+  it('passes active execution state into cross-surface coding follow-up classification', async () => {
+    const linkedSession = {
+      id: 'session-1',
+      ownerUserId: 'web:alex',
+      ownerPrincipalId: 'alex-principal',
+      conversationUserId: 'code-session:session-1',
+      conversationChannel: 'code-session',
+      resolvedRoot: 'S:\\Development\\GuardianAgent',
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: IntentGatewayInput) => {
+        expect(input.continuity?.activeExecution).toMatchObject({
+          executionId: 'execution-1',
+          status: 'failed',
+          route: 'coding_task',
+          operation: 'update',
+          codeSessionId: 'session-1',
+        });
+        return createGatewayRecord({
+          route: 'coding_task',
+          operation: 'update',
+          summary: 'Continue the orchestration coding work.',
+          turnRelation: 'follow_up',
+          executionClass: 'repo_grounded',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+        });
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      routingIntentGateway,
+      continuityThreadStore: {
+        get: vi.fn(() => ({
+          continuityKey: 'chat:web:alex',
+          scope: {
+            assistantId: 'chat',
+            userId: 'web:alex',
+          },
+          linkedSurfaces: [
+            {
+              channel: 'web',
+              surfaceId: 'config-panel',
+              active: true,
+              lastSeenAt: 1,
+            },
+          ],
+          activeExecutionRefs: [
+            { kind: 'execution', id: 'execution-1' },
+            { kind: 'code_session', id: 'session-1' },
+          ],
+          focusSummary: 'Guardian orchestration coding work is active.',
+          createdAt: 1,
+          updatedAt: 1,
+          expiresAt: 2,
+        })),
+      },
+      executionStore: {
+        get: vi.fn(() => ({
+          executionId: 'execution-1',
+          requestId: 'request-1',
+          rootExecutionId: 'execution-1',
+          scope: {
+            assistantId: 'chat',
+            userId: 'web:alex',
+            channel: 'web',
+            surfaceId: 'config-panel',
+            codeSessionId: 'session-1',
+          },
+          status: 'failed',
+          intent: {
+            route: 'coding_task',
+            operation: 'update',
+            summary: 'Implement orchestration and coding workspace UX uplifts.',
+            originalUserContent: 'Read the design docs and make the uplifts.',
+          },
+          createdAt: 1,
+          updatedAt: 2,
+          failedAt: 2,
+        })),
+      },
+      codeSessionStore: {
+        resolveForRequest: vi.fn((input: { allowSharedAttachment?: boolean }) => (
+          input.allowSharedAttachment
+            ? {
+                session: linkedSession,
+                attachment: {
+                  channel: 'web',
+                  surfaceId: 'web-guardian-chat',
+                },
+              }
+            : null
+        )),
+        getSession: vi.fn(() => linkedSession),
+      },
+      summarizeContinuityThreadForGateway: vi.fn((thread) => thread ? ({
+        continuityKey: thread.continuityKey,
+        linkedSurfaceCount: thread.linkedSurfaces.length,
+        focusSummary: thread.focusSummary,
+        activeExecutionRefs: thread.activeExecutionRefs?.map((ref) => `${ref.kind}:${ref.id}`),
+      }) : null),
+      resolveSharedStateAgentId: vi.fn(() => 'chat'),
+      identity: {
+        resolveCanonicalUserId: () => 'web:alex',
+      },
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Yeah okay but I want this to be built into the orchestration harness.',
+      userId: 'alex',
+      principalId: 'alex-principal',
+      channel: 'web',
+      surfaceId: 'config-panel',
+    });
+
+    expect(result.gateway?.decision.route).toBe('coding_task');
+    expect(result.decision.reason).toBe('attached coding session with gateway-first auto routing');
   });
 
   it('does not inject stale continuity history into fresh unlinked surfaces', async () => {
@@ -1322,7 +1558,7 @@ describe('createIncomingDispatchPreparer', () => {
     const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
     const codeSessionStore = {
       resolveForRequest: vi.fn(() => ({
-        session: { agentId: 'pinned-worker' },
+        session: { id: 'session-1', agentId: 'pinned-worker' },
       })),
       getSession: vi.fn(() => null),
     };
@@ -1394,10 +1630,20 @@ describe('createIncomingDispatchPreparer', () => {
         preferredAnswerPath: 'tool_loop',
       })),
     };
-    const resolveForRequest = vi.fn((input: { allowSharedAttachment?: boolean }) => {
-      expect(input.allowSharedAttachment).toBe(false);
-      return null;
-    });
+    const resolveForRequest = vi.fn((input: { allowSharedAttachment?: boolean }) => (
+      input.allowSharedAttachment
+        ? {
+            session: {
+              id: 'session-1',
+              resolvedRoot: 'S:\\Development\\GuardianAgent',
+            },
+            attachment: {
+              channel: 'web',
+              surfaceId: 'web-guardian-chat',
+            },
+          }
+        : null
+    ));
     const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
       codeSessionStore: {
         resolveForRequest,
@@ -1419,6 +1665,12 @@ describe('createIncomingDispatchPreparer', () => {
       surfaceId: 'second-brain',
       touchAttachment: false,
       allowSharedAttachment: false,
+    }));
+    expect(resolveForRequest).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'web',
+      surfaceId: 'second-brain',
+      touchAttachment: false,
+      allowSharedAttachment: true,
     }));
     expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
     expect(result.decision).toEqual({

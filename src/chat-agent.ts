@@ -949,6 +949,14 @@ interface DegradedDirectIntentResponseInput {
     const pendingActionUserId = effectiveMessage.userId;
     const pendingActionChannel = effectiveMessage.channel;
     const pendingActionUserKey = `${pendingActionUserId}:${pendingActionChannel}`;
+    const surfaceConversationKey = {
+      agentId: stateAgentId,
+      userId: pendingActionUserId,
+      channel: resolveConversationHistoryChannel({
+        channel: pendingActionChannel,
+        surfaceId: pendingActionSurfaceId,
+      }),
+    };
     const effectiveCodeContext = resolvedCodeSession
       ? {
           sessionId: resolvedCodeSession.session.id,
@@ -1047,6 +1055,9 @@ interface DegradedDirectIntentResponseInput {
     };
     const buildScopedDirectIntentResponse = (input: Omit<DirectIntentResponseInput, 'surfaceUserId' | 'surfaceChannel' | 'surfaceId'>) => this.buildDirectIntentResponse({
       ...input,
+      conversationKey: input.candidate === 'coding_session_control'
+        ? surfaceConversationKey
+        : input.conversationKey,
       surfaceUserId: pendingActionUserId,
       surfaceChannel: pendingActionChannel,
       surfaceId: pendingActionSurfaceId,
@@ -1077,9 +1088,11 @@ interface DegradedDirectIntentResponseInput {
       if (!scopedCodeSession?.session && !codeGroundedTurn) {
         return undefined;
       }
+      const includeReferencedSessions = decision?.route === 'coding_session_control'
+        || !!decision?.entities.sessionTarget?.trim();
       return this.buildReferencedCodeSessionsSection(
         scopedCodeSession?.session,
-        referencedCodeSessions,
+        includeReferencedSessions ? referencedCodeSessions : [],
       );
     };
     let preResolvedSkills: ResolvedSkill[] = [];
@@ -1264,7 +1277,7 @@ interface DegradedDirectIntentResponseInput {
     if (workspaceSwitchContinuation) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
-          conversationKey,
+          surfaceConversationKey,
           message.content,
           workspaceSwitchContinuation.content,
         );

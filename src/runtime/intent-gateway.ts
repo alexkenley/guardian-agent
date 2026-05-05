@@ -14,6 +14,11 @@ import {
   inferAutomationEnabledState,
 } from './intent/entity-resolvers/automation.js';
 import {
+  hasExplicitRepoPathReference,
+  inferExplicitCodingTaskOperation,
+  inferExplicitFilesystemTaskOperation,
+} from './intent/entity-resolvers/coding.js';
+import {
   normalizeIntentGatewayDecision,
   parseStructuredContent,
   parseStructuredToolArguments,
@@ -27,6 +32,7 @@ import {
   looksLikeSelfContainedDirectAnswerTurn,
   looksLikeContextDependentPromptSelectionTurn,
   isExplicitRepoInspectionRequest,
+  isExplicitWorkspaceScopedRepoWorkRequest,
 } from './intent/request-patterns.js';
 import { getAmbiguousEmailProviderClarification } from './email-provider-routing.js';
 import type {
@@ -375,7 +381,85 @@ function buildContentPlanIntentGatewayRecord(
     }, 'content-plan:raw-credential-disclosure-refusal');
   }
 
+  const hasAttachedCodeSessionRef = input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:')) === true
+    || !!input.continuity?.activeExecution?.codeSessionId;
+  const normalizedSourceForContinuity = sourceContent.toLowerCase();
+  const activeExecution = input.continuity?.activeExecution;
+  const canUseFreshCodeSessionContentPlan = !activeExecution
+    || asksNotToResumePriorCodingExecution(normalizedSourceForContinuity);
+  if (
+    hasAttachedCodeSessionRef
+    && canUseFreshCodeSessionContentPlan
+    && isExplicitBoundedCodeSessionFileMutation(sourceContent)
+    && isExplicitWorkspaceScopedRepoWorkRequest(sourceContent)
+  ) {
+    const normalizedSourceContent = sourceContent.toLowerCase();
+    const operation = (
+      hasExplicitRepoPathReference(normalizedSourceContent)
+        ? inferExplicitFilesystemTaskOperation(normalizedSourceContent, 'unknown')
+        : null
+    ) ?? inferExplicitCodingTaskOperation(normalizedSourceContent, 'unknown') ?? 'update';
+    return normalize({
+      route: 'coding_task',
+      confidence: 'high',
+      operation,
+      summary: 'Run the explicit coding workspace request against the attached code session.',
+      turnRelation: input.continuity?.activeExecution?.codeSessionId || input.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:'))
+        ? 'follow_up'
+        : 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Inspect the relevant workspace context before changing files.',
+          required: true,
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'write',
+          summary: 'Apply the requested workspace change.',
+          required: true,
+          expectedToolCategories: [operation === 'delete' ? 'delete' : 'write', 'repo_mutation'],
+        },
+        {
+          kind: 'read',
+          summary: 'Read back the changed artifact or collect equivalent verification evidence.',
+          required: true,
+          dependsOn: ['step_2'],
+          expectedToolCategories: ['read', 'repo_inspect'],
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the completed change and verification evidence.',
+          required: true,
+          dependsOn: ['step_3'],
+          expectedToolCategories: ['answer'],
+        },
+      ],
+      entities: {},
+    }, 'content-plan:explicit-code-session-work');
+  }
+
   return null;
+}
+
+function isExplicitBoundedCodeSessionFileMutation(content: string): boolean {
+  const normalized = content.toLowerCase();
+  if (!hasExplicitRepoPathReference(normalized)) return false;
+  const hasMutation = /\b(?:create|add|make|write|touch|update|edit|append|delete|remove)\b/.test(normalized);
+  if (!hasMutation) return false;
+  const hasExactContentInstruction = /\b(?:containing|with\s+content|exact(?:ly)?|write\s+.+?\s+to)\b/.test(normalized);
+  const hasVerificationInstruction = /\b(?:read\s+(?:it|the\s+file)\s+back|read\s+back|verify|confirm)\b/.test(normalized);
+  return hasExactContentInstruction && hasVerificationInstruction;
 }
 
 function normalizeIntentGatewayRecordDecisionForInput(
@@ -497,6 +581,10 @@ function repairUnavailableUnknownWithConversationContext(
   ) {
     return decision;
   }
+  const activeExecutionRepair = repairUnavailableActiveExecutionWork(input, decision);
+  if (activeExecutionRepair) {
+    return activeExecutionRepair;
+  }
   if (hasActiveCodeSessionContinuity(input)) {
     const codeSessionRepair = repairUnavailableCodeSessionWork(input, decision);
     if (codeSessionRepair) {
@@ -549,27 +637,201 @@ function repairUnavailableUnknownWithConversationContext(
   };
 }
 
+function repairUnavailableActiveExecutionWork(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): IntentGatewayDecision | null {
+  const activeExecution = input.continuity?.activeExecution;
+  if (!activeExecution || !activeExecution.route) {
+    return null;
+  }
+  if (activeExecution.status === 'failed' || activeExecution.status === 'cancelled') {
+    return null;
+  }
+  if (activeExecution.route === 'unknown' || activeExecution.route === 'general_assistant') {
+    return null;
+  }
+  const operation = activeExecution.operation && activeExecution.operation !== 'unknown'
+    ? activeExecution.operation
+    : decision.operation !== 'unknown'
+      ? decision.operation
+      : defaultOperationForRoute(activeExecution.route);
+  const workload = workloadForActiveExecutionRoute(activeExecution.route);
+  return {
+    ...decision,
+    route: activeExecution.route,
+    confidence: 'low',
+    operation,
+    summary: activeExecution.summary?.trim()
+      || summaryForActiveExecutionRoute(activeExecution.route),
+    turnRelation: 'follow_up',
+    resolution: 'ready',
+    missingFields: [],
+    resolvedContent: input.content,
+    executionClass: workload.executionClass,
+    preferredTier: workload.preferredTier,
+    requiresRepoGrounding: workload.requiresRepoGrounding,
+    requiresToolSynthesis: workload.requiresToolSynthesis,
+    requireExactFileReferences: workload.requireExactFileReferences,
+    expectedContextPressure: workload.expectedContextPressure,
+    preferredAnswerPath: workload.preferredAnswerPath,
+    simpleVsComplex: 'complex',
+    provenance: {
+      ...(decision.provenance ?? {}),
+      route: 'repair.continuity',
+      operation: 'repair.continuity',
+      resolvedContent: 'repair.continuity',
+      executionClass: 'repair.continuity',
+      preferredTier: 'repair.continuity',
+      requiresRepoGrounding: 'repair.continuity',
+      requiresToolSynthesis: 'repair.continuity',
+      requireExactFileReferences: 'repair.continuity',
+      expectedContextPressure: 'repair.continuity',
+      preferredAnswerPath: 'repair.continuity',
+      simpleVsComplex: 'repair.continuity',
+    },
+  };
+}
+
+function defaultOperationForRoute(route: IntentGatewayDecision['route']): IntentGatewayDecision['operation'] {
+  switch (route) {
+    case 'filesystem_task':
+    case 'workspace_task':
+    case 'email_task':
+    case 'search_task':
+    case 'memory_task':
+    case 'diagnostics_task':
+    case 'security_task':
+      return 'inspect';
+    case 'automation_authoring':
+    case 'complex_planning_task':
+      return 'create';
+    case 'automation_control':
+    case 'coding_session_control':
+      return 'update';
+    case 'coding_task':
+      return 'update';
+    default:
+      return 'read';
+  }
+}
+
+function workloadForActiveExecutionRoute(
+  route: IntentGatewayDecision['route'],
+): Pick<
+  IntentGatewayDecision,
+  | 'executionClass'
+  | 'preferredTier'
+  | 'requiresRepoGrounding'
+  | 'requiresToolSynthesis'
+  | 'requireExactFileReferences'
+  | 'expectedContextPressure'
+  | 'preferredAnswerPath'
+> {
+  if (route === 'coding_task') {
+    return {
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+    };
+  }
+  if (route === 'security_task') {
+    return {
+      executionClass: 'security_analysis',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
+    };
+  }
+  if (route === 'general_assistant' || route === 'channel_delivery' || route === 'unknown') {
+    return {
+      executionClass: 'direct_assistant',
+      preferredTier: 'external',
+      requiresRepoGrounding: false,
+      requiresToolSynthesis: false,
+      requireExactFileReferences: false,
+      expectedContextPressure: 'medium',
+      preferredAnswerPath: 'direct',
+    };
+  }
+  return {
+    executionClass: 'tool_orchestration',
+    preferredTier: 'external',
+    requiresRepoGrounding: false,
+    requiresToolSynthesis: true,
+    requireExactFileReferences: false,
+    expectedContextPressure: 'medium',
+    preferredAnswerPath: 'tool_loop',
+  };
+}
+
+function summaryForActiveExecutionRoute(route: IntentGatewayDecision['route']): string {
+  if (route === 'coding_task') {
+    return 'Continue the active coding workspace request from execution state.';
+  }
+  if (route === 'complex_planning_task') {
+    return 'Continue the active planning request from execution state.';
+  }
+  return 'Continue the active execution from shared orchestration state.';
+}
+
 function repairUnavailableCodeSessionWork(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
 ): IntentGatewayDecision | null {
   const normalized = input.content.trim().toLowerCase();
   if (!normalized) return null;
+  const inferredFilesystemOperation = hasExplicitRepoPathReference(normalized)
+    ? inferExplicitFilesystemTaskOperation(normalized, decision.operation)
+    : null;
+  const inferredCodingOperation = inferredFilesystemOperation
+    ?? inferExplicitCodingTaskOperation(normalized, decision.operation);
+  if (
+    asksNotToResumePriorCodingExecution(normalized)
+    && !isFreshExplicitCodeSessionWorkRequest(input, inferredFilesystemOperation, inferredCodingOperation)
+  ) {
+    return null;
+  }
   const asksForRepoOverview = /\b(?:overview|describe|summari[sz]e|what\s+type|what\s+kind)\b/.test(normalized)
     && /\b(?:repo|repository|codebase|workspace|app|application)\b/.test(normalized);
   const asksWorkspaceSearch = /\b(?:search|find|grep|look\s+for)\b/.test(normalized)
     && /\b(?:workspace|repo|repository|codebase|selected\s+file|file|src|code)\b/.test(normalized);
   const asksToModifySelectedCode = /\b(?:make|update|edit|change|modify|fix|patch|write|add|remove|delete)\b/.test(normalized)
     && /\b(?:selected\s+file|answer|code|file|src|function|component|module)\b/.test(normalized);
-  if (!asksForRepoOverview && !asksWorkspaceSearch && !asksToModifySelectedCode && !isExplicitRepoInspectionRequest(input.content)) {
+  const asksToMutateWorkspaceArtifact = inferredCodingOperation === 'create'
+    || inferredCodingOperation === 'update'
+    || inferredCodingOperation === 'delete'
+    || inferredCodingOperation === 'save';
+  if (
+    !asksForRepoOverview
+    && !asksWorkspaceSearch
+    && !asksToModifySelectedCode
+    && !asksToMutateWorkspaceArtifact
+    && !isExplicitRepoInspectionRequest(input.content)
+  ) {
     return null;
   }
+  const operation = asksToModifySelectedCode || asksToMutateWorkspaceArtifact
+    ? inferredCodingOperation ?? 'update'
+    : asksWorkspaceSearch
+      ? 'search'
+      : inferredCodingOperation ?? 'inspect';
   return {
     ...decision,
     route: 'coding_task',
     confidence: 'low',
-    operation: asksToModifySelectedCode ? 'update' : asksWorkspaceSearch ? 'search' : 'inspect',
-    summary: asksToModifySelectedCode
+    operation,
+    plannedSteps: shouldDropIncompatibleCodeSessionPlannedSteps(decision, operation)
+      ? []
+      : decision.plannedSteps,
+    summary: asksToModifySelectedCode || asksToMutateWorkspaceArtifact
       ? 'Continue the requested edit in the active coding workspace.'
       : 'Inspect the active coding workspace and answer from repo evidence.',
     turnRelation: 'follow_up',
@@ -596,12 +858,49 @@ function repairUnavailableCodeSessionWork(
   };
 }
 
+function asksNotToResumePriorCodingExecution(normalized: string): boolean {
+  return /\b(?:do\s+not|don't|dont)\s+resume\b/.test(normalized)
+    || /\btreat\s+this\s+as\s+a\s+fresh\b/.test(normalized)
+    || /\bfresh\s+bounded\s+coding\s+step\b/.test(normalized)
+    || /\bfresh\s+planning\s+request\b/.test(normalized);
+}
+
+function isFreshExplicitCodeSessionWorkRequest(
+  input: IntentGatewayInput,
+  filesystemOperation: IntentGatewayDecision['operation'] | null,
+  codingOperation: IntentGatewayDecision['operation'] | null,
+): boolean {
+  const operation = filesystemOperation ?? codingOperation;
+  if (!operation || operation === 'unknown') return false;
+  if (filesystemOperation) return true;
+  return isExplicitRepoInspectionRequest(input.content);
+}
+
+function shouldDropIncompatibleCodeSessionPlannedSteps(
+  decision: IntentGatewayDecision,
+  operation: IntentGatewayDecision['operation'],
+): boolean {
+  if (!decision.plannedSteps?.length) return false;
+  if (operation !== 'create' && operation !== 'update' && operation !== 'delete' && operation !== 'save') {
+    return false;
+  }
+  return decision.plannedSteps.some((step) => (
+    step.expectedToolCategories?.some((category) => {
+      const normalized = category.trim().toLowerCase();
+      return normalized === 'web_search' || normalized === 'browser';
+    }) === true
+  ));
+}
+
 function repairCodeSessionGroundingDecision(
   input: IntentGatewayInput,
   decision: IntentGatewayDecision,
 ): IntentGatewayDecision {
-  if (!hasActiveCodeSessionContinuity(input) || decision.route === 'coding_task') {
+  if (!hasActiveCodeSessionContinuity(input)) {
     return decision;
+  }
+  if (decision.route === 'coding_task') {
+    return repairUnavailableCodeSessionWork(input, decision) ?? decision;
   }
   if (
     decision.route !== 'search_task'

@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented: read-only diagnostics issue drafting plus user-approved GitHub issue creation through an explicit external-post capability.
+Implemented: shared read-only diagnostics evidence collection, quick routing-trace inspection, diagnostics issue drafting, and user-approved GitHub issue creation through an explicit external-post capability.
 
 Detailed GitHub connector direction is defined in [`GITHUB-INTEGRATION-DESIGN.md`](GITHUB-INTEGRATION-DESIGN.md).
 
@@ -36,7 +36,7 @@ Intent Gateway routes diagnostics_task
         ↓
 direct diagnostics candidate calls guardian_issue_draft
         ↓
-tool reads redacted routing trace and Guardian/audit summaries
+tool reads shared redacted diagnostics evidence from routing trace and Guardian/audit summaries
         ↓
 assistant shows issue title/body/labels/severity
         ↓
@@ -51,6 +51,7 @@ external-post GitHub tool creates issue
 
 The `guardian_issue_draft` tool is a built-in read-only tool. It:
 
+- uses the shared diagnostics evidence collector,
 - inspects `IntentRoutingTraceLog` through its redacted `listRecent` API,
 - inspects recent Guardian/audit events through `AuditLog.query`,
 - chooses a target diagnostic window such as latest completed request, current request, recent window, or explicit request id,
@@ -65,6 +66,19 @@ The tool does not:
 - change policy,
 - execute shell commands,
 - fetch network resources.
+
+### Read-Only Trace Inspection
+
+The `guardian_trace_inspect` tool is a built-in read-only tool for quick operational diagnosis. It uses the same shared diagnostics evidence collector as issue drafting, but formats the result as a concise trace summary instead of a GitHub-ready report.
+
+It:
+
+- selects the latest relevant request window by default, excluding the current inspection request,
+- accepts an explicit request id when supplied,
+- reports request ids, stage counts, blockers, latest user/assistant previews, and a short timeline,
+- explicitly avoids issue drafting or external posting.
+
+This keeps "what happened?" diagnostics and "draft a problem report" diagnostics on one evidence model while preserving different user-facing outputs.
 
 ### User-Approved GitHub Issue Creation
 
@@ -95,7 +109,7 @@ Expected classification:
 - `operation`: usually `draft` or `inspect`; initial GitHub issue requests draft first
 - `executionClass`: `tool_orchestration`
 - `requiresToolSynthesis`: `true`
-- direct candidate: `diagnostics_issue_draft`
+- direct candidate: `diagnostics_issue_draft` for reports, or `diagnostics_trace_inspect` for quick trace inspection
 
 This route exists so diagnostic issue reporting does not rely on ad hoc text matching or a generic assistant answer.
 
@@ -139,18 +153,22 @@ Recommended default copy:
 
 Runtime:
 
-- `src/runtime/diagnostics/issue-draft.ts` owns diagnostic evidence selection and issue draft construction.
+- `src/runtime/diagnostics/evidence.ts` owns diagnostic evidence selection, redaction, trace-window selection, blocker extraction, tool-call summaries, and Guardian/audit summaries.
+- `src/runtime/diagnostics/trace-inspect.ts` owns concise trace-inspection formatting over the shared evidence model.
+- `src/runtime/diagnostics/issue-draft.ts` owns issue draft construction over the shared evidence model.
 
 Tool layer:
 
 - `src/tools/builtin/diagnostics-tools.ts` exposes the read-only `guardian_issue_draft` tool.
+- `src/tools/builtin/diagnostics-tools.ts` also exposes the read-only `guardian_trace_inspect` tool for quick trace summaries.
 - `src/tools/executor.ts` wires redacted routing trace and audit dependencies into the registrar.
 
 Intent/direct routing:
 
 - `diagnostics_task` is added to the Intent Gateway route contract.
-- `diagnostics_issue_draft` is resolved as a direct candidate.
-- `src/runtime/chat-agent/direct-diagnostics.ts` calls the tool and formats the user-facing draft.
+- `diagnostics_issue_draft` is resolved as a direct candidate for issue/report drafting.
+- `diagnostics_trace_inspect` is resolved as a direct candidate for quick trace inspection.
+- `src/runtime/chat-agent/direct-diagnostics.ts` calls the selected diagnostics tool and formats the user-facing response.
 
 Operator guide:
 
@@ -161,6 +179,8 @@ Operator guide:
 Required coverage:
 
 - unit tests for draft construction from trace/audit inputs,
+- unit tests for shared diagnostics evidence selection used by issue drafting and trace inspection,
+- unit tests for quick trace-inspection summaries,
 - tool registration and execution tests proving no external post,
 - capability resolver tests for `diagnostics_task`,
 - direct route tests proving chat dispatch calls `guardian_issue_draft`,

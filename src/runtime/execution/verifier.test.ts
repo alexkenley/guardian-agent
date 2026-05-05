@@ -245,6 +245,52 @@ describe('verifyDelegatedResult', () => {
     expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['read', 'answer']);
   });
 
+  it('requires write and verification steps for coding workspace document mutations', () => {
+    const taskContract = buildDelegatedTaskContract({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'update',
+      summary: 'Update the technical implementation plan using the business plan as reference.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Read the technical implementation plan and business plan.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Identify needed uplifts.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+      entities: {},
+    });
+
+    expect(taskContract.kind).toBe('repo_mutation');
+    expect(taskContract.requiresEvidence).toBe(true);
+    expect(taskContract.allowsAnswerFirst).toBe(false);
+    expect(taskContract.plan.steps.map((step) => step.kind)).toEqual(['search', 'write', 'read', 'answer']);
+    expect(taskContract.plan.steps[1]).toMatchObject({
+      kind: 'write',
+      dependsOn: ['step_1'],
+    });
+    expect(taskContract.plan.steps[2]).toMatchObject({
+      kind: 'read',
+      expectedToolCategories: ['fs_read', 'fs_list'],
+      dependsOn: ['step_2'],
+    });
+  });
+
   it('rejects completed envelopes whose final answer is only an in-progress promise', () => {
     const taskContract = buildDelegatedTaskContract({
       route: 'general_assistant',

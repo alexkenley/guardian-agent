@@ -198,6 +198,25 @@ function extractSkillLocation(systemPrompt, skillName) {
   return match?.[1]?.trim() || '';
 }
 
+function findScenarioLogEntry(scenarioLog, expectedLatestUser, options = {}) {
+  const expected = String(expectedLatestUser ?? '').trim();
+  const systemPromptPattern = options.systemPromptPattern;
+  const entries = [...scenarioLog].reverse();
+  const matchedLatestUser = entries.find((entry) => {
+    const latestUser = String(entry.latestUser ?? '').trim();
+    if (!latestUser || (latestUser !== expected && !latestUser.includes(expected))) {
+      return false;
+    }
+    return systemPromptPattern ? systemPromptPattern.test(String(entry.systemPrompt ?? '')) : true;
+  });
+  if (matchedLatestUser || !options.allowSystemPromptOnly) {
+    return matchedLatestUser;
+  }
+  return entries.find((entry) => (
+    systemPromptPattern ? systemPromptPattern.test(String(entry.systemPrompt ?? '')) : false
+  ));
+}
+
 function printHelp() {
   console.log([
     'Coding workspace harness',
@@ -233,7 +252,7 @@ function parseHarnessOptions() {
   };
 }
 
-async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog) {
+async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, tempInstallWorkspaceRoot, scenarioLog) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
@@ -279,6 +298,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         latestUser,
         tools,
         systemPrompt,
+        messageContents: messages.map((message) => String(message.content ?? '')),
         toolMessages: toolMessages.map((message) => String(message.content ?? '')),
       });
 
@@ -310,6 +330,20 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
             operation: 'update',
             summary: 'Switch to a specific coding workspace session.',
             sessionTarget: 'Temp install test',
+          };
+        } else if (/build the first slice of a tiny inventory app|add a small renderer|update the inventory model|come back to the inventory app/i.test(latestGatewayRequest)) {
+          decision = {
+            route: 'coding_task',
+            confidence: 'high',
+            operation: /come back to the inventory app/i.test(latestGatewayRequest) ? 'inspect' : 'update',
+            summary: 'Continue work in the active coding workspace.',
+          };
+        } else if (/second brain/i.test(latestGatewayRequest)) {
+          decision = {
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'answer',
+            summary: 'Answer a general product note-taking question.',
           };
         } else if (/detach this chat from the current coding workspace/i.test(latestGatewayRequest)) {
           decision = {
@@ -505,6 +539,227 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         return;
       }
 
+      if (/build the first slice of a tiny inventory app/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-app-find-tools',
+              name: 'find_tools',
+              arguments: JSON.stringify({
+                query: 'coding code create edit search git diff',
+                maxResults: 10,
+              }),
+            }],
+          });
+          return;
+        }
+
+        if (toolMessages.length === 1) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-app-create-state',
+              name: 'code_create',
+              arguments: JSON.stringify({
+                path: path.join(tempInstallWorkspaceRoot, 'src', 'app-state.ts'),
+                content: [
+                  'export type InventoryItem = {',
+                  '  sku: string;',
+                  '  name: string;',
+                  '  quantity: number;',
+                  '};',
+                  '',
+                  'export const starterInventory: InventoryItem[] = [',
+                  "  { sku: 'tea', name: 'Loose Leaf Tea', quantity: 12 },",
+                  "  { sku: 'mug', name: 'Ceramic Mug', quantity: 4 },",
+                  '];',
+                  '',
+                  'export function summarizeInventory(items: InventoryItem[]): string {',
+                  "  return `${items.length} items stocked with ${items.reduce((total, item) => total + item.quantity, 0)} units available`;",
+                  '}',
+                  '',
+                ].join('\n'),
+              }),
+            }],
+          });
+          return;
+        }
+
+        sendResponse({
+          model: 'coding-harness-model',
+          content: 'Created src/app-state.ts with inventory state and a summary helper.',
+        });
+        return;
+      }
+
+      if (/add a small renderer/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-render-find-tools',
+              name: 'find_tools',
+              arguments: JSON.stringify({
+                query: 'coding code create edit read search',
+                maxResults: 10,
+              }),
+            }],
+          });
+          return;
+        }
+
+        if (toolMessages.length === 1) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-render-create',
+              name: 'code_create',
+              arguments: JSON.stringify({
+                path: path.join(tempInstallWorkspaceRoot, 'src', 'render.ts'),
+                content: [
+                  "import { starterInventory, summarizeInventory } from './app-state.js';",
+                  '',
+                  'export function renderInventorySummary(): string {',
+                  "  return `Inventory: ${summarizeInventory(starterInventory)}`;",
+                  '}',
+                  '',
+                ].join('\n'),
+              }),
+            }],
+          });
+          return;
+        }
+
+        sendResponse({
+          model: 'coding-harness-model',
+          content: 'Created src/render.ts and wired it to the inventory summary helper.',
+        });
+        return;
+      }
+
+      if (/update the inventory model to include reorder alerts/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-alerts-read-state',
+              name: 'fs_read',
+              arguments: JSON.stringify({
+                path: path.join(tempInstallWorkspaceRoot, 'src', 'app-state.ts'),
+              }),
+            }],
+          });
+          return;
+        }
+
+        if (toolMessages.length === 1) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-alerts-edit-state',
+              name: 'code_edit',
+              arguments: JSON.stringify({
+                path: path.join(tempInstallWorkspaceRoot, 'src', 'app-state.ts'),
+                oldString: [
+                  'export type InventoryItem = {',
+                  '  sku: string;',
+                  '  name: string;',
+                  '  quantity: number;',
+                  '};',
+                ].join('\n'),
+                newString: [
+                  'export type InventoryItem = {',
+                  '  sku: string;',
+                  '  name: string;',
+                  '  quantity: number;',
+                  '  reorderPoint: number;',
+                  '};',
+                ].join('\n'),
+              }),
+            }],
+          });
+          return;
+        }
+
+        if (toolMessages.length === 2) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-alerts-edit-data-and-helper',
+              name: 'code_edit',
+              arguments: JSON.stringify({
+                path: path.join(tempInstallWorkspaceRoot, 'src', 'app-state.ts'),
+                oldString: [
+                  'export const starterInventory: InventoryItem[] = [',
+                  "  { sku: 'tea', name: 'Loose Leaf Tea', quantity: 12 },",
+                  "  { sku: 'mug', name: 'Ceramic Mug', quantity: 4 },",
+                  '];',
+                ].join('\n'),
+                newString: [
+                  'export const starterInventory: InventoryItem[] = [',
+                  "  { sku: 'tea', name: 'Loose Leaf Tea', quantity: 12, reorderPoint: 8 },",
+                  "  { sku: 'mug', name: 'Ceramic Mug', quantity: 4, reorderPoint: 6 },",
+                  '];',
+                  '',
+                  'export function getReorderAlerts(items: InventoryItem[]): InventoryItem[] {',
+                  '  return items.filter((item) => item.quantity <= item.reorderPoint);',
+                  '}',
+                ].join('\n'),
+              }),
+            }],
+          });
+          return;
+        }
+
+        sendResponse({
+          model: 'coding-harness-model',
+          content: 'Added reorderPoint data and getReorderAlerts to the temp install inventory model.',
+        });
+        return;
+      }
+
+      if (/second brain/i.test(latestUser)) {
+        sendResponse({
+          model: 'coding-harness-model',
+          content: 'For a second brain, capture durable decisions, project notes, useful references, and next actions.',
+        });
+        return;
+      }
+
+      if (/come back to the inventory app/i.test(latestUser)) {
+        if (toolMessages.length === 0) {
+          sendResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'temp-recovery-search-alerts',
+              name: 'code_symbol_search',
+              arguments: JSON.stringify({
+                path: tempInstallWorkspaceRoot,
+                query: 'getReorderAlerts',
+                mode: 'auto',
+                maxResults: 5,
+              }),
+            }],
+          });
+          return;
+        }
+
+        sendResponse({
+          model: 'coding-harness-model',
+          content: 'Back on the inventory app: getReorderAlerts is defined in src/app-state.ts, and src/render.ts still renders the inventory summary.',
+        });
+        return;
+      }
+
       if (/git status/i.test(latestUser)) {
         if (toolMessages.length === 0) {
           sendResponse({
@@ -566,9 +821,9 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
   };
 }
 
-async function resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, scenarioLog) {
+async function resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, tempInstallWorkspaceRoot, scenarioLog) {
   if (!options.useRealOllama) {
-    return startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog);
+    return startFakeProvider(workspaceRoot, scopedWorkspaceRoot, tempInstallWorkspaceRoot, scenarioLog);
   }
   return resolveRealOllamaProvider(options, { logPrefix: 'guardian-coding-ollama-' });
 }
@@ -727,7 +982,7 @@ async function runHarness() {
   fs.writeFileSync(path.join(suspiciousWorkspaceRoot, '.clam-detect'), 'Harness.TestThreat\n');
   setupGitWorkspace(suspiciousWorkspaceRoot);
 
-  const provider = await resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, scenarioLog);
+  const provider = await resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, tempInstallWorkspaceRoot, scenarioLog);
   const providerConfig = getHarnessProviderConfig(provider);
   const managedCloudHarnessConfig = provider.providerType === 'ollama_cloud'
     ? `
@@ -948,6 +1203,17 @@ guardian:
         workspaceRoot,
       },
     };
+    const tempInstallCodeToolMetadata = {
+      codeContext: {
+        sessionId: tempInstallCodeSessionId,
+        workspaceRoot: tempInstallWorkspaceRoot,
+      },
+    };
+    const tempInstallCodeSessionMessageMetadata = {
+      codeContext: {
+        sessionId: tempInstallCodeSessionId,
+      },
+    };
     const codeSessionMessageMetadata = {
       codeContext: {
         sessionId: codeSessionId,
@@ -1065,6 +1331,132 @@ guardian:
       `Expected natural-language switch to update the Guardian chat attachment: ${JSON.stringify(guardianChatCurrentAfterNaturalSwitch)}`,
     );
 
+    const tempAppStatePath = path.join(tempInstallWorkspaceRoot, 'src', 'app-state.ts');
+    const tempAppRenderPath = path.join(tempInstallWorkspaceRoot, 'src', 'render.ts');
+
+    const tempAppBuildResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: [
+        'Build the first slice of a tiny inventory app in this temp install workspace.',
+        'Use the coding tools to create src/app-state.ts with an InventoryItem type, starterInventory data, and a summarizeInventory helper.',
+        'Keep the implementation small and do not edit any files outside this workspace.',
+      ].join(' '),
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.ok(String(tempAppBuildResponse.content ?? '').trim().length > 0, `Expected non-empty temp app build response: ${JSON.stringify(tempAppBuildResponse)}`);
+    assert.equal(fs.existsSync(tempAppStatePath), true, `Expected temp app state file to be created: ${JSON.stringify(tempAppBuildResponse)}`);
+    assert.match(fs.readFileSync(tempAppStatePath, 'utf-8'), /InventoryItem/);
+    assert.match(fs.readFileSync(tempAppStatePath, 'utf-8'), /summarizeInventory/);
+
+    const tempAppRenderResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: [
+        'Add a small renderer for the inventory app.',
+        'Use coding tools to create src/render.ts that imports the state helper and exports renderInventorySummary.',
+        'Stay in the TempInstallTest workspace.',
+      ].join(' '),
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: tempInstallCodeSessionMessageMetadata,
+    });
+    assert.ok(String(tempAppRenderResponse.content ?? '').trim().length > 0, `Expected non-empty temp app renderer response: ${JSON.stringify(tempAppRenderResponse)}`);
+    assert.equal(fs.existsSync(tempAppRenderPath), true, `Expected temp app renderer file to be created: ${JSON.stringify(tempAppRenderResponse)}`);
+    assert.match(fs.readFileSync(tempAppRenderPath, 'utf-8'), /renderInventorySummary/);
+    assert.match(fs.readFileSync(tempAppRenderPath, 'utf-8'), /summarizeInventory/);
+
+    const tempAppAlertsResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: [
+        'Update the inventory model to include reorder alerts.',
+        'Use coding tools to add a reorderPoint field and a getReorderAlerts helper to src/app-state.ts.',
+        'Preserve the existing summarizeInventory helper.',
+      ].join(' '),
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: tempInstallCodeSessionMessageMetadata,
+    });
+    assert.ok(String(tempAppAlertsResponse.content ?? '').trim().length > 0, `Expected non-empty temp app alerts response: ${JSON.stringify(tempAppAlertsResponse)}`);
+    const tempAppStateContent = fs.readFileSync(tempAppStatePath, 'utf-8');
+    assert.match(tempAppStateContent, /reorderPoint/);
+    assert.match(tempAppStateContent, /getReorderAlerts/);
+    assert.match(tempAppStateContent, /summarizeInventory/);
+
+    const secondBrainDetourResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Random detour: what should I capture in a second brain for product work?',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.ok(String(secondBrainDetourResponse.content ?? '').trim().length > 0, `Expected non-empty second-brain detour response: ${JSON.stringify(secondBrainDetourResponse)}`);
+    assert.match(String(secondBrainDetourResponse.content ?? ''), /second brain|notes|decisions|projects|references|actions/i);
+    const guardianChatCurrentAfterDetour = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(
+      guardianChatCurrentAfterDetour.output?.session?.id,
+      tempInstallCodeSessionId,
+      `Expected random detour to preserve the TempInstallTest attachment: ${JSON.stringify(guardianChatCurrentAfterDetour)}`,
+    );
+
+    const tempAppRecoveryResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Come back to the inventory app. Tell me where getReorderAlerts is implemented and what the renderer file is for.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.ok(String(tempAppRecoveryResponse.content ?? '').trim().length > 0, `Expected non-empty temp app recovery response: ${JSON.stringify(tempAppRecoveryResponse)}`);
+    assert.match(String(tempAppRecoveryResponse.content ?? ''), /getReorderAlerts|app-state|renderInventorySummary|render\.ts/i);
+
+    const tempInstallSearch = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_symbol_search',
+      args: {
+        path: tempInstallWorkspaceRoot,
+        query: 'getReorderAlerts',
+        mode: 'auto',
+        maxResults: 5,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: tempInstallCodeToolMetadata,
+    });
+    assert.equal(tempInstallSearch.success, true, `Expected code_symbol_search to run in the temp install workspace: ${JSON.stringify(tempInstallSearch)}`);
+    assert.ok(
+      Array.isArray(tempInstallSearch.output?.matches)
+      && tempInstallSearch.output.matches.some((match) => match.relativePath === 'src/app-state.ts'),
+      `Expected temp install search to find app-state.ts: ${JSON.stringify(tempInstallSearch)}`,
+    );
+    const tempInstallSessionSnapshot = await requestJson(
+      baseUrl,
+      harnessToken,
+      'GET',
+      `/api/code/sessions/${encodeURIComponent(tempInstallCodeSessionId)}?channel=web&historyLimit=10`,
+    );
+    assert.ok(
+      Array.isArray(tempInstallSessionSnapshot?.session?.workState?.recentJobs)
+      && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_create')
+      && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_edit')
+      && tempInstallSessionSnapshot.session.workState.recentJobs.some((job) => job.toolName === 'code_symbol_search'),
+      `Expected temp install code-session runtime state to record coding jobs: ${JSON.stringify(tempInstallSessionSnapshot)}`,
+    );
+
+    const tempInstallDiff = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_git_diff',
+      args: {
+        cwd: tempInstallWorkspaceRoot,
+      },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: tempInstallCodeToolMetadata,
+    });
+    assert.equal(tempInstallDiff.success, true, `Expected temp install git diff to succeed: ${JSON.stringify(tempInstallDiff)}`);
+    assert.match(String(tempInstallDiff.output?.stdout ?? ''), /app-state\.ts|render\.ts|getReorderAlerts|reorderPoint/);
+
     const guardianChatDetachResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: 'Detach this chat from the current coding workspace.',
       userId: 'web-code-harness',
@@ -1093,6 +1485,19 @@ guardian:
       channel: 'web',
       surfaceId: guardianChatSurfaceId,
     });
+    const guardianChatCurrentAfterMainReattach = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(
+      guardianChatCurrentAfterMainReattach.output?.session?.id,
+      codeSessionId,
+      `Expected Guardian chat to reattach to the main workspace after temp install mutation checks: ${JSON.stringify(guardianChatCurrentAfterMainReattach)}`,
+    );
     const nativeCleanSnapshot = await waitFor(async () => {
       const snapshot = await getCodeSessionSnapshot(5);
       return snapshot?.session?.workState?.workspaceTrust?.nativeProtection?.status === 'clean'
@@ -1250,8 +1655,13 @@ guardian:
       metadata: suspiciousCodeToolMetadata,
     });
     assert.ok(String(suspiciousOverview.content ?? '').trim().length > 0, `Expected non-empty suspicious repo overview: ${JSON.stringify(suspiciousOverview)}`);
+    assert.equal(/Ignore previous instructions/i.test(String(suspiciousOverview.content ?? '')), false, 'Did not expect raw repo injection text in the suspicious overview response');
     if (provider.mode === 'fake') {
-      const suspiciousScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo.');
+      const suspiciousScenario = findScenarioLogEntry(
+        scenarioLog,
+        'Give me a brief overview of this repo.',
+        { systemPromptPattern: /workspaceTrust\.state: blocked/, allowSystemPromptOnly: true },
+      );
       assert.ok(suspiciousScenario, 'Expected suspicious overview scenario to be captured');
       assert.match(suspiciousScenario.systemPrompt, /workspaceTrust\.state: blocked/);
       assert.match(
@@ -1381,9 +1791,18 @@ guardian:
     assert.match(String(overviewResponse.content ?? ''), /Accomplish|habit|routine|weekly goals|dashboard/i);
     assert.match(String(overviewResponse.content ?? ''), /README\.md|package\.json|src\/App\.tsx|Dashboard\.tsx/i);
     if (provider.mode === 'fake') {
-      const overviewScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo.');
+      const overviewScenario = findScenarioLogEntry(
+        scenarioLog,
+        'Give me a brief overview of this repo.',
+        { systemPromptPattern: /workspaceMap\.indexedFileCount:/ },
+      );
       assert.ok(overviewScenario, 'Expected overview scenario to be captured');
       assert.equal(overviewScenario.systemPrompt.includes(staleOutsideRoot), false, 'Did not expect stale outside-workspace paths in the Code-session system prompt');
+      assert.equal(
+        overviewScenario.messageContents.some((content) => /TempInstallTest|Temp Install Test|Switched this chat to/i.test(content)),
+        false,
+        'Did not expect prior coding-workspace switch chatter in the active workspace overview prompt',
+      );
       assert.match(overviewScenario.systemPrompt, /currentDirectory: \./);
       assert.match(overviewScenario.systemPrompt, /workspaceMap\.indexedFileCount:/);
       assert.match(overviewScenario.systemPrompt, /workingSet\.files:/);
@@ -1405,7 +1824,10 @@ guardian:
     assert.ok(String(appTypeResponse.content ?? '').trim().length > 0, `Expected non-empty app type response: ${JSON.stringify(appTypeResponse)}`);
     assert.equal(/GuardianAgent/i.test(String(appTypeResponse.content ?? '')), false, `Expected app type response to stay grounded in the attached workspace: ${JSON.stringify(appTypeResponse)}`);
     assert.equal(/allowed paths/i.test(String(appTypeResponse.content ?? '')), false, `Did not expect an allowed-path approval prompt for the active coding workspace: ${JSON.stringify(appTypeResponse)}`);
-    assert.match(String(appTypeResponse.content ?? ''), /Accomplish|habit|routine|weekly goals|dashboard/i);
+    assert.match(
+      String(appTypeResponse.content ?? ''),
+      /Accomplish|habit|routine|weekly goals|dashboard|React|single-page|SPA|Vite|browser/i,
+    );
     const appTypeSession = await getCodeSessionSnapshot(10);
     assert.ok((appTypeSession?.session?.workState?.workspaceMap?.indexedFileCount ?? 0) > 0, 'Expected code-session workspace map after repo-aware turns');
     assert.ok(
@@ -1430,7 +1852,11 @@ guardian:
     assert.equal(/GuardianAgent|Guardian Agent/i.test(String(describeAppResponse.content ?? '')), false, `Expected "Describe this app" to stay grounded in the attached workspace: ${JSON.stringify(describeAppResponse)}`);
     assert.match(String(describeAppResponse.content ?? ''), /Accomplish|habit|routine|weekly goals|dashboard/i);
     if (provider.mode === 'fake') {
-      const describeScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Describe this app.');
+      const describeScenario = findScenarioLogEntry(
+        scenarioLog,
+        'Describe this app.',
+        { systemPromptPattern: /workspaceMap\.indexedFileCount:/ },
+      );
       assert.ok(describeScenario, 'Expected describe-app scenario to be captured');
       assert.equal(
         /Guardian Agent|Guardian global memory|assistant's global memory|Guardian's/i
@@ -1462,7 +1888,11 @@ guardian:
     );
     assert.ok(String(taggedReferenceResponse.content ?? '').trim().length > 0, `Expected non-empty tagged-reference response: ${JSON.stringify(taggedReferenceResponse)}`);
     if (provider.mode === 'fake') {
-      const taggedScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo using @README.md and @src/example.ts.');
+      const taggedScenario = findScenarioLogEntry(
+        scenarioLog,
+        'Give me a brief overview of this repo using @README.md and @src/example.ts.',
+        { systemPromptPattern: /<tagged-file-context>/ },
+      );
       assert.ok(taggedScenario, 'Expected tagged-reference scenario to be captured');
       assert.match(taggedScenario.systemPrompt, /<tagged-file-context>/);
       assert.match(taggedScenario.systemPrompt, /FILE README\.md/);

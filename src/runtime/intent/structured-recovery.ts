@@ -892,6 +892,10 @@ function synthesizeIntentGatewayPlannedSteps(input: {
     });
   }
 
+  if (shouldSynthesizeRepoMutationPlan(input)) {
+    return buildRepoMutationPlannedSteps(input);
+  }
+
   if (
     input.requiresRepoGrounding
     || input.executionClass === 'repo_grounded'
@@ -920,6 +924,77 @@ function synthesizeIntentGatewayPlannedSteps(input: {
   }
 
   return [];
+}
+
+function shouldSynthesizeRepoMutationPlan(input: {
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+  executionClass: IntentGatewayDecision['executionClass'];
+  requiresRepoGrounding: boolean;
+}): boolean {
+  if (!isWorkspaceMutationOperation(input.operation)) {
+    return false;
+  }
+  if (input.route === 'coding_task') {
+    return true;
+  }
+  return input.route === 'filesystem_task'
+    && (input.requiresRepoGrounding || input.executionClass === 'repo_grounded');
+}
+
+function isWorkspaceMutationOperation(operation: IntentGatewayDecision['operation']): boolean {
+  return operation === 'create'
+    || operation === 'update'
+    || operation === 'delete'
+    || operation === 'save';
+}
+
+function buildRepoMutationPlannedSteps(input: {
+  sourceContent?: string;
+  route: IntentGatewayDecision['route'];
+  operation: IntentGatewayDecision['operation'];
+}): IntentGatewayPlannedStep[] {
+  const operationLabel = input.operation === 'delete'
+    ? 'deletion'
+    : input.operation === 'create'
+      ? 'creation'
+      : 'update';
+  const evidenceSummary = input.route === 'filesystem_task'
+    ? `Inspect the target filesystem path and surrounding context needed for the requested ${operationLabel}.`
+    : `Inspect the relevant repo files and supporting context needed for the requested ${operationLabel}.`;
+  const writeSummary = input.operation === 'delete'
+    ? 'Apply the requested deletion to the target workspace file or path.'
+    : input.operation === 'create'
+      ? 'Create the requested target file or workspace artifact.'
+      : 'Apply the requested update to the target workspace file or artifact.';
+  return [
+    {
+      kind: isExplicitRepoInspectionRequest(input.sourceContent) ? 'search' : 'read',
+      summary: evidenceSummary,
+      required: true,
+      expectedToolCategories: ['search', 'read', 'repo_inspect'],
+    },
+    {
+      kind: 'write',
+      summary: writeSummary,
+      required: true,
+      dependsOn: ['step_1'],
+      expectedToolCategories: ['write'],
+    },
+    {
+      kind: 'read',
+      summary: 'Verify the changed workspace file or path after the mutation.',
+      required: true,
+      dependsOn: ['step_2'],
+      expectedToolCategories: ['fs_read', 'fs_list'],
+    },
+    {
+      kind: 'answer',
+      summary: 'Report the completed workspace change and the verification result.',
+      required: true,
+      dependsOn: ['step_2', 'step_3'],
+    },
+  ];
 }
 
 function shouldSuppressSecurityEvidencePlan(input: {
@@ -1670,7 +1745,7 @@ export function splitSequentialRequestClauses(sourceContent: string): string[] {
   const normalized = sourceContent
     .replace(/\r\n/g, '\n')
     .replace(/\b(?:then|next|after that|finally)\b[:,]?\s+/gi, '\n')
-    .replace(/,\s+(?=(?:and\s+)?(?:search|find|look\s*up|browse|grep|scan|trace|locate|read|open|inspect|review|check|create|write|remember|save\s+to\s+memory)\b)/gi, '\n')
+    .replace(/,\s+(?=(?:and\s+)?(?:search|find|look\s*up|browse|grep|scan|trace|locate|read|open|inspect|review|check|create|write|update|edit|patch|modify|delete|remove|uplift|remember|save\s+to\s+memory)\b)/gi, '\n')
     .replace(/\n+/g, '\n');
   const rawClauses = normalized
     .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])|\n+/)

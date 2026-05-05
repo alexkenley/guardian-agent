@@ -21,7 +21,9 @@ import {
   PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
   type IntentGateway,
   type IntentGatewayInput,
+  type IntentGatewayOperation,
   type IntentGatewayRecord,
+  type IntentGatewayRoute,
 } from './intent-gateway.js';
 import {
   attachSelectedExecutionProfileMetadata,
@@ -30,6 +32,7 @@ import {
   selectExecutionProfile,
   type SelectedExecutionProfile,
 } from './execution-profiles.js';
+import type { ExecutionRecord, ExecutionStore } from './executions.js';
 import {
   buildFrontierIntentPlanRepairProviderOrder,
   tryRepairGenericIntentGatewayPlan,
@@ -37,7 +40,10 @@ import {
 import { attachExecutionIdentityMetadata } from './execution-identity.js';
 import { buildIntentGatewayHistoryQuery } from './intent/history-context.js';
 import { buildIntentGatewaySearchSourceSummaries } from './intent/search-source-context.js';
-import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
+import {
+  isResolvedCodeSessionCompatibleWithRequestedContext,
+  shouldAttachCodeSessionForRequest,
+} from './code-session-request-scope.js';
 import { filterIntentGatewayClassificationContext } from './chat-agent/intent-gateway-orchestration.js';
 import { resolveConversationHistoryChannel } from './channel-surface-ids.js';
 import {
@@ -140,6 +146,7 @@ export function createIncomingDispatchPreparer(args: {
   conversations: Pick<ConversationService, 'getHistoryForContext' | 'getSessionHistory'>;
   pendingActionStore: Pick<PendingActionStore, 'resolveActiveForSurface'>;
   continuityThreadStore: Pick<ContinuityThreadStore, 'get'>;
+  executionStore?: Pick<ExecutionStore, 'get'>;
   codeSessionStore: Pick<CodeSessionStore, 'resolveForRequest' | 'getSession'>;
   intentRoutingTrace: Pick<IntentRoutingTraceLog, 'record'>;
   enabledManagedProviders?: Set<string>;
@@ -178,6 +185,106 @@ export function createIncomingDispatchPreparer(args: {
       router: args.router,
     })
   ));
+
+  const readActiveExecutionId = (continuity: IntentGatewayInput['continuity']): string | undefined => (
+    continuity?.activeExecutionRefs
+      ?.map((ref) => ref.trim())
+      .find((ref) => ref.startsWith('execution:'))
+      ?.slice('execution:'.length)
+      .trim()
+      || undefined
+  );
+
+  const filterResolvedCodeSessionForRequestedContext = (
+    requestedCodeContext: ParsedCodeRequestMetadata | undefined,
+    resolvedCodeSession: ResolvedCodeSessionContext | null,
+  ): ResolvedCodeSessionContext | null => (
+    isResolvedCodeSessionCompatibleWithRequestedContext(requestedCodeContext, resolvedCodeSession)
+      ? resolvedCodeSession
+      : null
+  );
+
+  const toGatewayRoute = (value: unknown): IntentGatewayRoute | undefined => {
+    const route = typeof value === 'string' ? value.trim() : '';
+    switch (route) {
+      case 'automation_authoring':
+      case 'automation_control':
+      case 'automation_output_task':
+      case 'ui_control':
+      case 'browser_task':
+      case 'personal_assistant_task':
+      case 'workspace_task':
+      case 'email_task':
+      case 'search_task':
+      case 'memory_task':
+      case 'filesystem_task':
+      case 'coding_task':
+      case 'coding_session_control':
+      case 'diagnostics_task':
+      case 'security_task':
+      case 'general_assistant':
+      case 'channel_delivery':
+      case 'complex_planning_task':
+      case 'unknown':
+        return route;
+      default:
+        return undefined;
+    }
+  };
+
+  const toGatewayOperation = (value: unknown): IntentGatewayOperation | undefined => {
+    const operation = typeof value === 'string' ? value.trim() : '';
+    switch (operation) {
+      case 'create':
+      case 'update':
+      case 'delete':
+      case 'run':
+      case 'toggle':
+      case 'clone':
+      case 'inspect':
+      case 'navigate':
+      case 'read':
+      case 'search':
+      case 'save':
+      case 'send':
+      case 'draft':
+      case 'schedule':
+      case 'unknown':
+        return operation;
+      default:
+        return undefined;
+    }
+  };
+
+  const trimForGateway = (value: unknown, maxChars: number): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    return trimmed.length > maxChars ? `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...` : trimmed;
+  };
+
+  const summarizeActiveExecutionForGateway = (
+    continuity: IntentGatewayInput['continuity'],
+  ): NonNullable<NonNullable<IntentGatewayInput['continuity']>['activeExecution']> | undefined => {
+    const executionId = readActiveExecutionId(continuity);
+    if (!executionId) return undefined;
+    const record: ExecutionRecord | null = args.executionStore?.get(executionId) ?? null;
+    if (!record) return undefined;
+    return {
+      executionId: record.executionId,
+      status: record.status,
+      ...(toGatewayRoute(record.intent.route) ? { route: toGatewayRoute(record.intent.route) } : {}),
+      ...(toGatewayOperation(record.intent.operation) ? { operation: toGatewayOperation(record.intent.operation) } : {}),
+      ...(trimForGateway(record.intent.summary, 300) ? { summary: trimForGateway(record.intent.summary, 300) } : {}),
+      ...(trimForGateway(record.intent.originalUserContent, 600)
+        ? { originalUserContent: trimForGateway(record.intent.originalUserContent, 600) }
+        : {}),
+      ...(trimForGateway(record.intent.resolvedContent, 600)
+        ? { resolvedContent: trimForGateway(record.intent.resolvedContent, 600) }
+        : {}),
+      ...(trimForGateway(record.scope.codeSessionId, 200) ? { codeSessionId: trimForGateway(record.scope.codeSessionId, 200) } : {}),
+    };
+  };
 
   const listClassifierProvidersForMode = (
     config: GuardianAgentConfig,
@@ -302,7 +409,14 @@ export function createIncomingDispatchPreparer(args: {
     })
       ? continuity
       : null;
-    const continuitySummary = args.summarizeContinuityThreadForGateway(continuityForGateway);
+    const baseContinuitySummary = args.summarizeContinuityThreadForGateway(continuityForGateway);
+    const activeExecution = summarizeActiveExecutionForGateway(baseContinuitySummary);
+    const continuitySummary = baseContinuitySummary
+      ? {
+          ...baseContinuitySummary,
+          ...(activeExecution ? { activeExecution } : {}),
+        }
+      : null;
     const conversationUserId = resolvedCodeSession?.session?.conversationUserId ?? canonicalUserId;
     const conversationChannel = resolvedCodeSession?.session?.conversationChannel
       ?? resolveConversationHistoryChannel({
@@ -507,15 +621,18 @@ export function createIncomingDispatchPreparer(args: {
         surfaceId,
       });
       const requestedCodeContext = args.readCodeRequestMetadata(input.msg.metadata);
-      const resolvedCodeSession = args.codeSessionStore.resolveForRequest({
-        requestedSessionId: requestedCodeContext?.sessionId,
-        userId: canonicalUserId,
-        principalId: input.msg.principalId,
-        channel,
-        surfaceId,
-        touchAttachment: false,
-        allowSharedAttachment: false,
-      });
+      const resolvedCodeSession = filterResolvedCodeSessionForRequestedContext(
+        requestedCodeContext,
+        args.codeSessionStore.resolveForRequest({
+          requestedSessionId: requestedCodeContext?.sessionId,
+          userId: canonicalUserId,
+          principalId: input.msg.principalId,
+          channel,
+          surfaceId,
+          touchAttachment: false,
+          allowSharedAttachment: false,
+        }),
+      );
       const turnRelation = typeof input.details?.turnRelation === 'string'
         ? input.details.turnRelation
         : undefined;
@@ -571,15 +688,30 @@ export function createIncomingDispatchPreparer(args: {
       userId: canonicalUserId,
       principalId: msg.principalId,
     });
-    const resolvedCodeSession = args.codeSessionStore.resolveForRequest({
-      requestedSessionId: requestedCodeContext?.sessionId,
-      userId: canonicalUserId,
-      principalId: msg.principalId,
-      channel,
-      surfaceId: resolvedSurfaceId,
-      touchAttachment: false,
-      allowSharedAttachment: false,
-    });
+    const resolvedCodeSession = filterResolvedCodeSessionForRequestedContext(
+      requestedCodeContext,
+      args.codeSessionStore.resolveForRequest({
+        requestedSessionId: requestedCodeContext?.sessionId,
+        userId: canonicalUserId,
+        principalId: msg.principalId,
+        channel,
+        surfaceId: resolvedSurfaceId,
+        touchAttachment: false,
+        allowSharedAttachment: false,
+      }),
+    );
+    const classificationCodeSession = resolvedCodeSession ?? filterResolvedCodeSessionForRequestedContext(
+      requestedCodeContext,
+      args.codeSessionStore.resolveForRequest({
+        requestedSessionId: requestedCodeContext?.sessionId,
+        userId: canonicalUserId,
+        principalId: msg.principalId,
+        channel,
+        surfaceId: resolvedSurfaceId,
+        touchAttachment: false,
+        allowSharedAttachment: true,
+      }),
+    );
     let classifiedGatewayPromise: Promise<IntentGatewayRecord | null> | null = null;
     let suppressChannelDefaultGateway = false;
     const getGateway = (options: { force?: boolean } = {}): Promise<IntentGatewayRecord | null> => {
@@ -591,7 +723,7 @@ export function createIncomingDispatchPreparer(args: {
           msg,
           resolveRoutingStateAgentId(resolvedChannelDefault),
           requestedChatProvider?.providerName,
-          resolvedCodeSession,
+          classificationCodeSession,
           requestId,
         );
       }
@@ -769,31 +901,67 @@ export function createIncomingDispatchPreparer(args: {
       }
       return null;
     };
-    if (resolvedCodeSession) {
-      const canAttachCodeSessionBeforeGateway = shouldAttachCodeSessionForRequest({
+    if (classificationCodeSession) {
+      const canAttachCodeSessionBeforeGateway = !!resolvedCodeSession && shouldAttachCodeSessionForRequest({
         content: normalizedContent,
         channel,
         surfaceId: resolvedSurfaceId,
         requestedCodeContext,
-        resolvedCodeSession,
+        resolvedCodeSession: classificationCodeSession,
         gatewayDecision: null,
       });
       if (!canAttachCodeSessionBeforeGateway) {
-        if (!resolvedChannelDefault) {
+        const gateway = resolvedCodeSession ? null : await getGateway({ force: true });
+        const shouldApplyCodeSession = gateway ? shouldAttachCodeSessionForRequest({
+          content: normalizedContent,
+          channel,
+          surfaceId: resolvedSurfaceId,
+          requestedCodeContext,
+          resolvedCodeSession: classificationCodeSession,
+          gatewayDecision: gateway.decision,
+        }) : false;
+        if (gateway && shouldApplyCodeSession) {
           const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
-          const decision = hasRoles
-            ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
-            : args.router.route(normalizedContent);
+          const decision = resolvedChannelDefault
+            ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
+            : hasRoles
+              ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
+              : args.router.route(normalizedContent);
           const profile = selectProfileForResolvedRoute(
             decision,
-            null,
+            gateway,
             tierMode,
             requestedChatProvider?.providerName,
           );
-          recordResolvedRoute(decision, null, profile);
+          const resolvedDecision = {
+            ...decision,
+            reason: requestedCodeContext?.sessionId
+              ? 'explicit attached coding session with gateway-first auto routing'
+              : 'attached coding session with gateway-first auto routing',
+          };
+          recordResolvedRoute(resolvedDecision, gateway, profile);
+          return {
+            decision: resolvedDecision,
+            gateway,
+          };
+        }
+        if (!resolvedChannelDefault) {
+          const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
+          const decision = gateway && hasRoles
+            ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
+            : hasRoles
+              ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+            : args.router.route(normalizedContent);
+          const profile = selectProfileForResolvedRoute(
+            decision,
+            gateway,
+            tierMode,
+            requestedChatProvider?.providerName,
+          );
+          recordResolvedRoute(decision, gateway, profile);
           return {
             decision,
-            gateway: null,
+            gateway,
           };
         }
         suppressChannelDefaultGateway = true;
@@ -804,7 +972,7 @@ export function createIncomingDispatchPreparer(args: {
           channel,
           surfaceId: resolvedSurfaceId,
           requestedCodeContext,
-          resolvedCodeSession,
+          resolvedCodeSession: classificationCodeSession,
           gatewayDecision: gateway?.decision ?? null,
         });
         if (shouldApplyCodeSession) {

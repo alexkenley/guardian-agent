@@ -1725,6 +1725,125 @@ describe('BrokeredWorkerSession automation control', () => {
     }));
   });
 
+  it('does not emit delegated file claims from policy-blocked mutation arguments', async () => {
+    let toolLoopCallCount = 0;
+    const blockedPath = 'C:\\Temp\\GuardianPolicySmoke\\blocked.txt';
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        throw new Error('Pre-routed filesystem task should not reclassify the turn.');
+      }
+
+      toolLoopCallCount += 1;
+      if (toolLoopCallCount === 1) {
+        return {
+          content: '',
+          model: 'test-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'call-write-blocked',
+            name: 'fs_write',
+            arguments: JSON.stringify({
+              path: blockedPath,
+              content: 'blocked\n',
+            }),
+          }],
+        } satisfies ChatResponse;
+      }
+
+      return {
+        content: 'I wrote the blocked file.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+      } satisfies ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_write',
+        description: 'Write a file.',
+        risk: 'mutating',
+        category: 'filesystem',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['path', 'content'],
+        },
+      }],
+      searchTools: vi.fn(async () => []),
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool: vi.fn(async () => ({
+        success: false,
+        status: 'denied',
+        jobId: 'job-write-blocked',
+        message: 'Blocked by tool policy.',
+      })),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-blocked-claim',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: `Create ${blockedPath}.`,
+        timestamp: Date.now(),
+        metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+          mode: 'primary',
+          available: true,
+          model: 'gateway-model',
+          latencyMs: 5,
+          decision: {
+            route: 'filesystem_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Create the requested file.',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'tool_orchestration',
+            preferredTier: 'external',
+            requiresRepoGrounding: false,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            plannedSteps: [{
+              kind: 'write',
+              summary: 'Create the requested file.',
+              expectedToolCategories: ['fs_write'],
+              required: true,
+            }],
+            entities: {},
+          },
+        }),
+      },
+    });
+
+    const delegatedResult = result.metadata?.delegatedResult as { claims?: Array<{ value?: string }> } | undefined;
+    expect(delegatedResult?.claims ?? []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: blockedPath }),
+    ]));
+    expect(result.metadata).toMatchObject({
+      delegatedResult: {
+        interruptions: [
+          {
+            kind: 'policy_blocked',
+          },
+        ],
+      },
+    });
+  });
+
   it('synthesizes from approved tool evidence when approval resume ends without a final answer', async () => {
     const finalAnswer = 'The approved search found src/config/types.ts and src/runtime/message-router.ts.';
     const llmChat = vi.fn(async (messages, options) => {

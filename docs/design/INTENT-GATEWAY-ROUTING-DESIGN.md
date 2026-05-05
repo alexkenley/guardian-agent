@@ -313,11 +313,13 @@ Continuity context currently includes:
 - linked-surface count
 - optional continuation-state kind
 - optional active execution refs
+- optional active execution summary resolved from the execution store, including route, operation, status, summary, original/resolved content, and attached coding-session id
 
 Classifier rule:
 - structured continuity projection is allowed
 - continuity free text is not allowed to become a shadow classifier
 - human-facing continuity fields such as `focusSummary` and `lastActionableRequest` remain continuity artifacts, not primary semantic routing input
+- when classifier output is unavailable, a concrete active execution route may be reused as bounded continuity repair so follow-ups to failed/running coding or tool work stay in the correct execution lane instead of collapsing into generic chat
 
 ## Conversation Context Window
 

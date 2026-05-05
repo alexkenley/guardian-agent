@@ -882,7 +882,7 @@ function buildClaimsFromReceipts(
   const claims: Claim[] = [];
   const isRepoInspection = taskContract.kind === 'repo_inspection' || taskContract.kind === 'security_analysis';
   for (const receipt of receipts) {
-    if (receipt.refs.length > 0) {
+    if (receipt.status === 'succeeded' && receipt.refs.length > 0) {
       for (const ref of receipt.refs) {
         // For repo_inspection contracts, classify fs_read receipts as
         // implementation_file claims (the worker read these files to answer

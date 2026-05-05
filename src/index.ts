@@ -6264,6 +6264,7 @@ async function main(): Promise<void> {
     conversations,
     pendingActionStore,
     continuityThreadStore,
+    executionStore,
     codeSessionStore,
     intentRoutingTrace,
     enabledManagedProviders,

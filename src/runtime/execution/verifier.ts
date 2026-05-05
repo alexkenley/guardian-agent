@@ -410,6 +410,17 @@ function buildBaseDelegatedTaskContract(
       summary,
     };
   }
+  if (decision?.route === 'coding_task' && isWorkspaceMutationOperation(decision.operation)) {
+    return {
+      kind: 'repo_mutation',
+      route: decision.route,
+      operation: decision.operation,
+      requiresEvidence: true,
+      allowsAnswerFirst: false,
+      requireExactFileReferences: false,
+      summary,
+    };
+  }
   if (decision?.route === 'filesystem_task' && !isReadOnlyOperation(decision.operation)) {
     return {
       kind: 'filesystem_mutation',
@@ -1179,6 +1190,13 @@ function buildFailureReasonForStep(
 
 function isReadOnlyOperation(operation: IntentGatewayDecision['operation'] | undefined): boolean {
   return operation === 'inspect' || operation === 'read' || operation === 'search';
+}
+
+function isWorkspaceMutationOperation(operation: IntentGatewayDecision['operation'] | undefined): boolean {
+  return operation === 'create'
+    || operation === 'update'
+    || operation === 'delete'
+    || operation === 'save';
 }
 
 function buildUnsatisfiedStepsAction(

@@ -41,6 +41,10 @@ const DEFAULT_EXCLUDED_NAMES = new Set([
   'node_modules',
   'tmp',
 ]);
+const DEFAULT_ROOT_EXCLUDED_NAMES = new Set([
+  'appdata',
+  'microsoft',
+]);
 
 export interface RemoteExecutionServiceOptions {
   providers: RemoteExecutionProvider[];
@@ -74,9 +78,17 @@ function toRemoteWorkspacePath(localPath: string, workspaceRoot: string): string
     : REMOTE_WORKSPACE_ROOT;
 }
 
-function isExcludedName(name: string, applyDefaultExcludes: boolean): boolean {
-  if (ALWAYS_EXCLUDED_NAMES.has(name)) return true;
-  return applyDefaultExcludes && DEFAULT_EXCLUDED_NAMES.has(name);
+function isExcludedName(
+  name: string,
+  applyDefaultExcludes: boolean,
+  currentDirectory: string,
+  workspaceRoot: string,
+): boolean {
+  const normalizedName = name.toLowerCase();
+  if (ALWAYS_EXCLUDED_NAMES.has(normalizedName)) return true;
+  if (!applyDefaultExcludes) return false;
+  if (DEFAULT_EXCLUDED_NAMES.has(normalizedName)) return true;
+  return currentDirectory === workspaceRoot && DEFAULT_ROOT_EXCLUDED_NAMES.has(normalizedName);
 }
 
 function sanitizeExecutableMode(mode: number): number | undefined {
@@ -889,7 +901,7 @@ export class RemoteExecutionService implements RemoteExecutionServiceLike {
       }
       const entries = await readdir(absolutePath, { withFileTypes: true });
       for (const entry of entries) {
-        if (isExcludedName(entry.name, applyDefaultExcludes)) {
+        if (isExcludedName(entry.name, applyDefaultExcludes, absolutePath, workspaceRoot)) {
           continue;
         }
         await walk(resolve(absolutePath, entry.name), applyDefaultExcludes);

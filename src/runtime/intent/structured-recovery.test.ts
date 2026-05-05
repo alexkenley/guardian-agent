@@ -196,6 +196,47 @@ describe('normalizeIntentGatewayDecision', () => {
     expect(decision.provenance?.operation).toBe('repair.structured');
   });
 
+  it('repairs coding workspace document-artifact updates into mutation plans', () => {
+    const decision = normalizeIntentGatewayDecision({
+      route: 'coding_task',
+      confidence: 'low',
+      operation: 'inspect',
+      summary: 'Review the technical implementation plan against the business plan.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'tool_loop',
+      simpleVsComplex: 'complex',
+      planned_steps: [
+        {
+          kind: 'read',
+          summary: 'Read the technical implementation plan and business plan.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Identify needed uplifts.',
+          required: true,
+          dependsOn: ['step_1'],
+        },
+      ],
+    }, {
+      sourceContent: 'In the music platform coding workspace I want you to review the technical implementation plan and identify where it needs to be uplifted also use the design business plan as a reference you can go ahead and update the implementation plan',
+    }, {
+      classifierSource: 'classifier.route_only_fallback',
+    });
+
+    expect(decision.route).toBe('coding_task');
+    expect(decision.operation).toBe('update');
+    expect(decision.provenance?.operation).toBe('repair.structured');
+    expect(decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write', 'read', 'answer']);
+    expect(decision.plannedSteps?.[1]?.expectedToolCategories).toEqual(['write']);
+  });
+
   it('repairs general-assistant filesystem writes with explicit paths into filesystem tasks', () => {
     const decision = normalizeIntentGatewayDecision({
       route: 'general_assistant',

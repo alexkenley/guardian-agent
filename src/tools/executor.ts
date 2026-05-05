@@ -358,10 +358,6 @@ const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
   'automation_run',
   'automation_delete',
 ]);
-const CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS = new Set([
-  'shell_safe',
-  ...CODE_SESSION_TRUSTED_EXECUTION_TOOLS,
-]);
 const CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS = new Set([
   'fs_write',
   'fs_mkdir',
@@ -369,6 +365,11 @@ const CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS = new Set([
   'fs_copy',
   'fs_delete',
   'doc_create',
+]);
+const CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS = new Set([
+  'shell_safe',
+  ...CODE_SESSION_TRUSTED_EXECUTION_TOOLS,
+  ...CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS,
 ]);
 
 type ShellExecMode = 'direct_exec' | 'shell_fallback';
@@ -2578,6 +2579,7 @@ export class ToolExecutor {
         this.isCodeSessionTrustCleared(request)
         && (
           CODE_SESSION_TRUSTED_EXECUTION_TOOLS.has(definition.name)
+          || CODE_SESSION_RAW_FILESYSTEM_MUTATION_TOOLS.has(definition.name)
           || isDirectMemoryMutationToolName(definition.name)
         )
       );
@@ -4433,12 +4435,13 @@ export class ToolExecutor {
       return memoryMutationDecision;
     }
 
-    if (this.isAssistantCodeSessionRawFilesystemMutation(definition, request)) {
-      return 'require_approval';
+    const explicit = this.policy.toolPolicies[definition.name];
+    if (explicit === 'deny') {
+      return 'deny';
     }
 
     if (contentTrustLevel === 'quarantined' && definition.risk !== 'read_only') {
-      return 'deny';
+      return 'require_approval';
     }
     if (derivedFromTaintedContent) {
       if (definition.risk !== 'read_only' && !READ_LIKE_NETWORK_LOOKUP_TOOLS.has(definition.name)) {
@@ -4446,14 +4449,19 @@ export class ToolExecutor {
       }
     }
 
-    const explicit = this.policy.toolPolicies[definition.name];
-    if (explicit === 'deny') {
-      return 'deny';
-    }
-
     const codeSessionTrustDecision = this.decideCodeSessionTrust(definition, args, request);
     if (codeSessionTrustDecision) {
       return codeSessionTrustDecision;
+    }
+
+    // Auto-approve coding and filesystem tools operating within the code session workspace.
+    // The user granted trust to this workspace by creating or explicitly accepting the session.
+    if (this.isCodeSessionWorkspaceTool(definition, request)) {
+      return 'allow';
+    }
+
+    if (this.isAssistantCodeSessionRawFilesystemMutation(definition, request)) {
+      return 'require_approval';
     }
 
     const defaultMemoryMutationDecision = this.decideDefaultMemoryMutationPolicy(definition.name);
@@ -4481,12 +4489,6 @@ export class ToolExecutor {
     }
 
     if (this.isPolicyUpdateNoOp(definition, args, request)) {
-      return 'allow';
-    }
-
-    // Auto-approve coding and filesystem tools operating within the code session workspace.
-    // The user granted trust to this workspace by creating the session.
-    if (this.isCodeSessionWorkspaceTool(definition, request)) {
       return 'allow';
     }
 

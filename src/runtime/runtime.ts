@@ -74,6 +74,35 @@ function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal
   return controller.signal;
 }
 
+function compactTimeoutDetail(value: string | undefined, maxLength = 180): string | undefined {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`
+    : normalized;
+}
+
+function buildInvocationTimeoutMessage(input: {
+  agentId: string;
+  budgetMs: number;
+  message: UserMessage;
+}): string {
+  const selectedProfile = readSelectedExecutionProfileMetadata(input.message.metadata);
+  const routed = readPreRoutedIntentGatewayMetadata(input.message.metadata);
+  const details = [
+    compactTimeoutDetail(input.message.id, 80) ? `requestId=${compactTimeoutDetail(input.message.id, 80)}` : undefined,
+    compactTimeoutDetail(routed?.decision.route, 80) ? `route=${compactTimeoutDetail(routed?.decision.route, 80)}` : undefined,
+    compactTimeoutDetail(routed?.decision.operation, 80) ? `operation=${compactTimeoutDetail(routed?.decision.operation, 80)}` : undefined,
+    compactTimeoutDetail(selectedProfile?.providerName, 80) ? `provider=${compactTimeoutDetail(selectedProfile?.providerName, 80)}` : undefined,
+    compactTimeoutDetail(selectedProfile?.providerModel, 120) ? `model=${compactTimeoutDetail(selectedProfile?.providerModel, 120)}` : undefined,
+    compactTimeoutDetail(input.message.content) ? `request="${compactTimeoutDetail(input.message.content)}"` : undefined,
+  ].filter((detail): detail is string => !!detail);
+  const suffix = details.length > 0
+    ? ` Last known routing context: ${details.join('; ')}.`
+    : '';
+  return `Agent '${input.agentId}' exceeded budget timeout (${input.budgetMs}ms).${suffix}`;
+}
+
 export class Runtime {
   readonly registry: AgentRegistry;
   readonly lifecycle: LifecycleManager;
@@ -350,6 +379,11 @@ export class Runtime {
         agentId,
         budgetMs,
         {
+          timeoutMessage: buildInvocationTimeoutMessage({
+            agentId,
+            budgetMs,
+            message: invocationMessage,
+          }),
           onTimeout: (error) => {
             if (budgetAbortController && !budgetAbortController.signal.aborted) {
               budgetAbortController.abort(error);
@@ -1054,6 +1088,7 @@ export class Runtime {
     agentId: string,
     budgetMs: number,
     options?: {
+      timeoutMessage?: string;
       onTimeout?: (error: Error) => void;
     },
   ): Promise<T> {
@@ -1075,13 +1110,13 @@ export class Runtime {
       };
       const timer = setTimeout(() => {
         if (settled) return;
-        const error = new Error(`Agent '${agentId}' exceeded budget timeout (${budgetMs}ms)`);
+        const error = new Error(options?.timeoutMessage?.trim() || `Agent '${agentId}' exceeded budget timeout (${budgetMs}ms)`);
         options?.onTimeout?.(error);
         this.auditLog.record({
           type: 'agent_error',
           severity: 'warn',
           agentId,
-          details: { error: 'budget_timeout', budgetMs },
+          details: { error: 'budget_timeout', budgetMs, message: error.message },
         });
         settleReject(error);
       }, budgetMs);

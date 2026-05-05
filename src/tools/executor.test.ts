@@ -4894,6 +4894,9 @@ describe('ToolExecutor', () => {
 
   it('delegates package_install through the managed trust service', async () => {
     const root = createExecutorRoot();
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(),
+    };
     const packageInstallTrust = {
       runManagedInstall: vi.fn().mockResolvedValue({
         success: true,
@@ -4912,7 +4915,23 @@ describe('ToolExecutor', () => {
       policyMode: 'approve_by_policy',
       allowedPaths: [root],
       allowedCommands: [],
-      allowedDomains: [],
+      allowedDomains: ['api.vercel.com'],
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'automatic',
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Production',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: true,
+          },
+        }],
+      },
+      remoteExecutionService,
       packageInstallTrust: packageInstallTrust as any,
     });
 
@@ -4924,6 +4943,7 @@ describe('ToolExecutor', () => {
     });
 
     expect(result.success).toBe(true);
+    expect(remoteExecutionService.runBoundedJob).not.toHaveBeenCalled();
     expect(packageInstallTrust.runManagedInstall).toHaveBeenCalledWith({
       command: 'npm install lodash',
       cwd: root,
@@ -5020,6 +5040,62 @@ describe('ToolExecutor', () => {
     expect(result.status).toBe('pending_approval');
     expect(result.approvalId).toBeTruthy();
     await expect(access(join(codeRoot, 'approval-smoke.txt'))).rejects.toThrow();
+  });
+
+  it('allows assistant raw filesystem mutations in trusted code session workspaces', async () => {
+    const globalRoot = createExecutorRoot();
+    const codeRoot = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(globalRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'web-code-harness',
+      title: 'Trusted Workspace',
+      workspaceRoot: codeRoot,
+    });
+    expect(session.workState.workspaceTrust?.state).toBe('trusted');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      toolPolicies: { fs_write: 'manual', fs_mkdir: 'manual' },
+      codeSessionStore,
+    });
+
+    const directoryResult = await executor.runTool({
+      toolName: 'fs_mkdir',
+      args: { path: join(codeRoot, 'generated') },
+      origin: 'assistant',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: session.id },
+    });
+
+    const filePath = join(codeRoot, 'generated', 'trusted-write.txt');
+    const writeResult = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: filePath,
+        content: 'trusted workspace write\n',
+      },
+      origin: 'assistant',
+      userId: 'web-code-harness',
+      principalId: 'web-code-harness',
+      channel: 'web',
+      codeContext: { workspaceRoot: codeRoot, sessionId: session.id },
+    });
+
+    expect(directoryResult.success).toBe(true);
+    expect(directoryResult.status).toBe('succeeded');
+    expect(writeResult.success).toBe(true);
+    expect(writeResult.status).toBe('succeeded');
+    await expect(readFile(filePath, 'utf-8')).resolves.toBe('trusted workspace write\n');
   });
 
   it('lists pending approvals for surface-qualified web channels by base channel', async () => {
@@ -8799,6 +8875,45 @@ describe('ToolExecutor', () => {
     expect(result.success).toBe(false);
     expect(result.status).toBe('pending_approval');
     expect(result.approvalId).toBeDefined();
+  });
+
+  it('approval-gates mutating tool calls derived from quarantined context instead of hard denying them', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_create',
+      args: {
+        path: join(root, 'quarantined-follow-up.ts'),
+        content: 'export const quarantinedFollowUp = true;\n',
+        overwrite: true,
+      },
+      origin: 'assistant',
+      agentId: 'local',
+      userId: 'u1',
+      principalId: 'u1',
+      channel: 'web',
+      contentTrustLevel: 'quarantined',
+      derivedFromTaintedContent: true,
+      taintReasons: ['prompt_injection_signals'],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('pending_approval');
+    expect(result.approvalId).toBeDefined();
+    expect(executor.listApprovals(10, 'pending')).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: result.approvalId,
+        toolName: 'code_create',
+      }),
+    ]));
   });
 
   it('keeps global memory as the default and uses code-session memory only when explicitly requested', async () => {

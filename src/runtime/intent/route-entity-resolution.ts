@@ -166,7 +166,12 @@ export function resolveIntentGatewayEntities(
       ? parsed.sessionTarget
       : undefined,
   );
-  const derivedCodingTaskSessionTarget = extractedSessionTarget ?? inferredCodingBackendRequest?.sessionTarget;
+  const suppressAttachedCodeSessionTarget = route === 'coding_task'
+    && hasAttachedCodeSessionReference(repairContext)
+    && refersToCurrentAttachedCodingWorkspace(normalizedSourceContent);
+  const derivedCodingTaskSessionTarget = suppressAttachedCodeSessionTarget
+    ? inferredCodingBackendRequest?.sessionTarget
+    : extractedSessionTarget ?? inferredCodingBackendRequest?.sessionTarget;
   const preferredCodingTaskParsedSessionTarget = parsedSessionTarget
     && derivedCodingTaskSessionTarget
     && parsedSessionTarget.length > derivedCodingTaskSessionTarget.length
@@ -370,6 +375,16 @@ export function resolveIntentGatewayEntities(
     entities,
     ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
   };
+}
+
+function hasAttachedCodeSessionReference(repairContext: IntentGatewayRepairContext | undefined): boolean {
+  return repairContext?.continuity?.activeExecutionRefs?.some((ref) => ref.startsWith('code_session:')) === true
+    || !!repairContext?.continuity?.activeExecution?.codeSessionId;
+}
+
+function refersToCurrentAttachedCodingWorkspace(normalizedSourceContent: string): boolean {
+  return /\b(?:attached|current|active)\b[\s\S]{0,60}\b(?:coding\s+)?(?:workspace|session)\b/.test(normalizedSourceContent)
+    || /\b(?:coding\s+)?(?:workspace|session)\b[\s\S]{0,60}\b(?:attached|current|active)\b/.test(normalizedSourceContent);
 }
 
 function inferWebSearchQuery(

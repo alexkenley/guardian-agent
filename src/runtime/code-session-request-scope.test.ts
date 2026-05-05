@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   IMPLICIT_SHARED_CODE_CONTEXT_SOURCE,
   isResolvedCodeSessionSharedAttachment,
+  isResolvedCodeSessionCompatibleWithRequestedContext,
   shouldAttachCodeSessionForRequest,
   shouldUseCodeSessionConversationForRequest,
 } from './code-session-request-scope.js';
@@ -10,6 +11,7 @@ import {
 describe('shouldAttachCodeSessionForRequest', () => {
   const sharedSession = {
     session: {
+      id: 'code-session-1',
       resolvedRoot: 'D:\\Workspaces\\SampleProject',
     },
     attachment: {
@@ -86,6 +88,86 @@ describe('shouldAttachCodeSessionForRequest', () => {
     })).toBe(false);
   });
 
+  it('rejects a stale attached code session when explicit workspace metadata points elsewhere', () => {
+    expect(isResolvedCodeSessionCompatibleWithRequestedContext({
+      workspaceRoot: 'D:\\Workspaces\\GuardianAgent',
+    }, sharedSession)).toBe(false);
+
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything.',
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      requestedCodeContext: {
+        workspaceRoot: 'D:\\Workspaces\\GuardianAgent',
+      },
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'coding_task',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(false);
+  });
+
+  it('allows an attached code session when explicit workspace metadata matches the session root', () => {
+    expect(isResolvedCodeSessionCompatibleWithRequestedContext({
+      workspaceRoot: 'D:\\Workspaces\\SampleProject',
+    }, sharedSession)).toBe(true);
+
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Inspect this repo and tell me which files implement run timeline rendering. Do not edit anything.',
+      channel: 'web',
+      surfaceId: 'code-panel',
+      requestedCodeContext: {
+        workspaceRoot: 'D:\\Workspaces\\SampleProject',
+      },
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'coding_task',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(true);
+  });
+
+  it('rejects a stale attached code session when explicit session metadata points elsewhere', () => {
+    expect(isResolvedCodeSessionCompatibleWithRequestedContext({
+      sessionId: 'code-session-2',
+    }, sharedSession)).toBe(false);
+
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Give me a brief overview of this repo.',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      requestedCodeContext: {
+        sessionId: 'code-session-2',
+      },
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'coding_task',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(false);
+  });
+
+  it('allows an attached code session when explicit session metadata matches the session id', () => {
+    expect(isResolvedCodeSessionCompatibleWithRequestedContext({
+      sessionId: 'code-session-1',
+    }, sharedSession)).toBe(true);
+
+    expect(shouldAttachCodeSessionForRequest({
+      content: 'Give me a brief overview of this repo.',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      requestedCodeContext: {
+        sessionId: 'code-session-1',
+      },
+      resolvedCodeSession: sharedSession,
+      gatewayDecision: {
+        route: 'coding_task',
+        requiresRepoGrounding: true,
+      },
+    })).toBe(true);
+  });
+
   it('does not scope coding-session control into the current workspace attachment', () => {
     expect(shouldAttachCodeSessionForRequest({
       content: 'Detach this chat from the current coding workspace.',
@@ -150,6 +232,7 @@ describe('shouldAttachCodeSessionForRequest', () => {
       },
       resolvedCodeSession: {
         session: {
+          id: 'code-session-1',
           resolvedRoot: 'D:\\Workspaces\\SampleProject',
         },
       },
@@ -172,6 +255,7 @@ describe('shouldAttachCodeSessionForRequest', () => {
       },
       resolvedCodeSession: {
         session: {
+          id: 'code-session-1',
           resolvedRoot: 'D:\\Workspaces\\SampleProject',
         },
       },
@@ -194,6 +278,22 @@ describe('shouldAttachCodeSessionForRequest', () => {
       metadata: {
         codeContext: {
           workspaceRoot: 'D:\\Workspaces\\SampleProject',
+        },
+      },
+    })).toBe(false);
+  });
+
+  it('does not use a mismatched explicit workspace as the coding conversation scope', () => {
+    expect(shouldUseCodeSessionConversationForRequest({
+      channel: 'web',
+      surfaceId: 'fresh-api-surface',
+      requestedCodeContext: {
+        workspaceRoot: 'D:\\Workspaces\\GuardianAgent',
+      },
+      resolvedCodeSession: sharedSession,
+      metadata: {
+        codeContext: {
+          workspaceRoot: 'D:\\Workspaces\\GuardianAgent',
         },
       },
     })).toBe(false);

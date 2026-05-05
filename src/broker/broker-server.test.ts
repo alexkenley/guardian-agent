@@ -5,6 +5,7 @@ import type { Runtime } from '../runtime/runtime.js';
 import type { ToolExecutor } from '../tools/executor.js';
 import { CapabilityTokenManager } from './capability-token.js';
 import { BrokerServer } from './broker-server.js';
+import { DEFAULT_CHAT_PROVIDER_TIMEOUT_MS } from '../llm/model-fallback.js';
 
 describe('BrokerServer', () => {
   it('returns sanitized tool output without nesting the full tool response under output', async () => {
@@ -185,6 +186,83 @@ describe('BrokerServer', () => {
       providerName: 'anthropic-frontier',
       model: 'fallback-model',
     });
+  });
+
+  it('times out brokered LLM calls before the agent invocation budget expires', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const responsePromise = readFirstJsonLine(output);
+      const tokenManager = new CapabilityTokenManager();
+      const token = tokenManager.mint({
+        workerId: 'worker-1',
+        sessionId: 'session-1',
+        agentId: 'agent-1',
+        authorizedBy: 'owner',
+        authorizedChannel: 'web',
+        grantedCapabilities: ['llm.chat'],
+      });
+      const hungChat = vi.fn((_messages, options) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(options.signal?.reason ?? new Error('aborted'));
+        }, { once: true });
+      }));
+      const runtime = {
+        registry: {
+          get: vi.fn(() => ({
+            definition: {
+              providerName: 'slow-provider',
+            },
+          })),
+        },
+        defaultProviderName: 'slow-provider',
+        getProviderNames: vi.fn(() => ['slow-provider']),
+        getProvider: vi.fn((name: string) => (
+          name === 'slow-provider'
+            ? { name, chat: hungChat }
+            : undefined
+        )),
+      } as unknown as Runtime;
+      const tools = {
+        searchTools: vi.fn(() => []),
+        listAlwaysLoadedDefinitions: vi.fn(() => []),
+        listCodeSessionEagerToolDefinitions: vi.fn(() => []),
+      } as unknown as ToolExecutor;
+
+      new BrokerServer({
+        tools,
+        runtime,
+        tokenManager,
+        inputStream: input,
+        outputStream: output,
+        workerId: 'worker-1',
+      });
+
+      input.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'request-llm-timeout',
+        method: 'llm.chat',
+        params: {
+          capabilityToken: token.id,
+          providerName: 'slow-provider',
+          messages: [{ role: 'user', content: 'This provider never responds.' }],
+          options: {},
+        },
+      })}\n`);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_PROVIDER_TIMEOUT_MS + 1);
+      const response = await responsePromise as {
+        result?: unknown;
+        error?: { message?: string };
+      };
+
+      expect(response.result).toBeUndefined();
+      expect(response.error?.message).toMatch(/timed out/i);
+      expect(hungChat).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports the selected fallback provider profile name instead of the provider implementation type', async () => {

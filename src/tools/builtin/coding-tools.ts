@@ -622,49 +622,6 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       const cwd = asString(args.cwd).trim() || undefined;
       const resolvedCwd = cwd ? await context.resolveAllowedPath(cwd, request) : context.getEffectiveWorkspaceRoot(request);
 
-      // Automatic tier promotion if a remote execution target is available
-      if (context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
-        const remoteTarget = await context.resolveRemoteExecutionTarget(undefined, command, request.codeContext?.workspaceRoot);
-        if (remoteTarget) {
-          context.guardAction(request, 'execute_command', {
-            command,
-            cwd: resolvedCwd,
-            managed: true,
-            tool: 'package_install',
-            remoteProfile: remoteTarget.profileId,
-          });
-
-          const remoteRun = await runRemoteCodingCommand(context, {
-            request,
-            command,
-            cwd: resolvedCwd,
-            profileId: remoteTarget.profileId,
-            timeoutMs: 10 * 60_000,
-          });
-
-          if (!remoteRun.success) {
-            return { success: false, error: remoteRun.error };
-          }
-          if (remoteRun.result.status !== 'succeeded') {
-            return {
-              success: false,
-              error: formatRemoteExecutionFailure(remoteRun.result),
-              output: buildRemoteExecutionOutput(remoteRun.result),
-            };
-          }
-          
-          const stdoutText = truncateOutput(remoteRun.result.stdout).trim();
-          const stderrText = truncateOutput(remoteRun.result.stderr).trim();
-          const outputPreview = stdoutText ? `STDOUT:\n${stdoutText}` : stderrText ? `STDERR:\n${stderrText}` : 'No output.';
-          
-          return {
-            success: true,
-            message: `Remote managed install completed on '${remoteRun.target.profileName}'. ${outputPreview}`,
-            output: buildRemoteExecutionOutput(remoteRun.result),
-          };
-        }
-      }
-
       if (!context.packageInstallTrust) {
         return { success: false, error: 'Managed package install trust is not available in this Guardian runtime.' };
       }

@@ -473,6 +473,36 @@ describe('execution profiles', () => {
     expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'ollama-cloud-coding'");
   });
 
+  it('uses the managed-cloud coding profile for coding workspace mutations in balanced auto mode', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: {
+        tier: 'external',
+        reason: 'explicit attached coding session with gateway-first auto routing',
+      },
+      gatewayDecision: createGatewayDecision({
+        operation: 'update',
+        preferredAnswerPath: 'chat_synthesis',
+        expectedContextPressure: 'high',
+        plannedSteps: [
+          { kind: 'read', summary: 'Read the existing app.', required: true },
+          { kind: 'write', summary: 'Update the app.', required: true },
+          { kind: 'answer', summary: 'Report the changed files.', required: true },
+        ],
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-coding',
+      providerModel: 'qwen3-coder-next',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
+    });
+    expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
+    expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'ollama-cloud-coding'");
+  });
+
   it('uses the managed-cloud direct profile for direct-assistant personal work even when the gateway prefers tool_loop', () => {
     const config = createConfig();
     config.llm.ollama.enabled = false;
@@ -859,6 +889,52 @@ describe('execution profiles', () => {
     expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'answer']);
   });
 
+  it('preserves explicit coding workspace mutations even when fallback planned steps are read-only', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'coding_task',
+        operation: 'update',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        summary: 'Update the technical implementation plan using the business plan as reference.',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Inspect repo context from fallback routing.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Return the uplift plan.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'coding_task',
+      operation: 'update',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(delegatedDecision?.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'answer']);
+  });
+
   it('keeps delegated remote sandbox execution as run even with read-only fallback planned steps', () => {
     const delegatedDecision = resolveDelegatedExecutionDecision({
       gatewayDecision: createGatewayDecision({
@@ -910,6 +986,51 @@ describe('execution profiles', () => {
         command: 'pwd',
         profileId: 'Daytona Main',
       },
+    });
+  });
+
+  it('preserves explicit coding run operations even when fallback planned steps are read-only', () => {
+    const delegatedDecision = resolveDelegatedExecutionDecision({
+      gatewayDecision: createGatewayDecision({
+        route: 'coding_task',
+        operation: 'run',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+        summary: 'Implement the first working in-browser prototype in the attached code session.',
+        plannedSteps: [
+          {
+            kind: 'read',
+            summary: 'Inspect repo context from fallback routing.',
+            expectedToolCategories: ['search', 'read'],
+            required: true,
+          },
+          {
+            kind: 'answer',
+            summary: 'Report the implemented files.',
+            required: true,
+            dependsOn: ['step_1'],
+          },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      parentProfile: null,
+    });
+
+    expect(delegatedDecision).toMatchObject({
+      route: 'coding_task',
+      operation: 'run',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
     });
   });
 
@@ -1014,6 +1135,41 @@ describe('execution profiles', () => {
       providerTier: 'frontier',
       selectionSource: 'delegated_role',
     });
+  });
+
+  it('keeps delegated coding workspace mutations on the managed-cloud coding profile', () => {
+    const config = createConfig();
+    const profile = selectDelegatedExecutionProfile({
+      config,
+      parentProfile: null,
+      gatewayDecision: createGatewayDecision({
+        route: 'coding_task',
+        operation: 'update',
+        executionClass: 'repo_grounded',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+        plannedSteps: [
+          { kind: 'read', summary: 'Read the app.', required: true },
+          { kind: 'write', summary: 'Update the app.', required: true },
+          { kind: 'answer', summary: 'Report the result.', required: true },
+        ],
+      }),
+      orchestration: {
+        role: 'implementer',
+        label: 'Workspace Implementer',
+        lenses: ['coding-workspace'],
+      },
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-coding',
+      providerTier: 'managed_cloud',
+      selectionSource: 'delegated_role',
+    });
+    expect(profile?.reason).toContain('managed cloud coding role binding selected for coding workspace workload');
   });
 
   it('orders alternate frontier providers before degrading an escalated frontier profile', () => {

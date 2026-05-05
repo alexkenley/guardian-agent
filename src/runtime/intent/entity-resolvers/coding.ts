@@ -9,6 +9,10 @@ const REMOTE_SANDBOX_ACTION_PATTERN = /\b(?:run|execute|create|write|read|open|i
 const MANAGED_SANDBOX_STATUS_PATTERN = /\bdaytona\b[^.!?\n]{0,80}\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b|\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b[^.!?\n]{0,80}\bdaytona\b/i;
 const REMOTE_SANDBOX_STATUS_PATTERN = /\b(?:remote|cloud|isolated|managed)\s+sandboxes?\b[^.!?\n]{0,80}\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b|\b(?:status|health|reachable|reachability|connectivity|diagnostics?)\b[^.!?\n]{0,80}\b(?:remote|cloud|isolated|managed)\s+sandboxes?\b/i;
 const FILESYSTEM_SCOPE_PATTERN = /\b(?:workspace|directory|folder|path|paths|file|files|repo\s+root|project\s+root|current\s+directory)\b/i;
+const CODING_DOCUMENT_ARTIFACT_PATTERN = /\b(?:(?:technical\s+)?implementation\s+plan|business\s+plan|design\s+(?:doc|docs|document|plan)|architecture\s+(?:doc|docs|document|plan)|requirements?\s+(?:doc|docs|document)|spec(?:ification)?|roadmap|changelog|readme|operator\s+guide|runbook)\b/i;
+const CODING_DOCUMENT_UPDATE_PATTERN = /\b(?:update|edit|change|modify|fix|patch|rewrite|append|revise|refresh|improve|rectify|uplift)\b/i;
+const CODING_DOCUMENT_CREATE_PATTERN = /\b(?:create|add|make|write|generate)\b/i;
+const CODING_DOCUMENT_DELETE_PATTERN = /\b(?:delete|remove)\b/i;
 
 const GENERIC_SESSION_TARGET_TOKENS = new Set([
   'a',
@@ -338,12 +342,37 @@ export function inferExplicitCodingTaskOperation(
   normalized: string,
   parsedOperation: IntentGatewayOperation,
 ): IntentGatewayOperation | null {
-  if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
-  if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+  if (!normalized || !hasExplicitCodingTaskTargetReference(normalized)) return null;
+  if (isExplicitCodingReadOnlyRequest(normalized)) {
+    if (
+      parsedOperation === 'create'
+      || parsedOperation === 'update'
+      || parsedOperation === 'delete'
+      || parsedOperation === 'save'
+    ) {
+      return 'inspect';
+    }
+    if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+    return 'inspect';
+  }
+  if (isCodingDocumentPlanningAnswerRequest(normalized)) {
+    return 'inspect';
+  }
+  if (parsedOperation && parsedOperation !== 'unknown') {
+    if (
+      !hasExplicitRepoFileReference(normalized)
+      && hasCodingDocumentArtifactReference(normalized)
+      && (parsedOperation === 'read' || parsedOperation === 'inspect' || parsedOperation === 'search')
+    ) {
+      const documentOperation = inferCodingDocumentArtifactOperation(normalized);
+      if (documentOperation) return documentOperation;
+    }
+    return parsedOperation;
+  }
   if (/\b(?:create|add|make|write|generate|touch)\b/.test(normalized)) {
     return 'create';
   }
-  if (/\b(?:update|edit|change|modify|fix|patch|rewrite|append)\b/.test(normalized)) {
+  if (/\b(?:update|edit|change|modify|fix|patch|rewrite|append|revise|refresh|improve|rectify|uplift)\b/.test(normalized)) {
     return 'update';
   }
   if (/\b(?:delete|remove)\b/.test(normalized)) {
@@ -375,6 +404,43 @@ export function inferExplicitCodingTaskOperation(
     return 'read';
   }
   return null;
+}
+
+export function hasCodingDocumentArtifactReference(normalized: string): boolean {
+  return CODING_DOCUMENT_ARTIFACT_PATTERN.test(normalized);
+}
+
+function hasExplicitCodingTaskTargetReference(normalized: string): boolean {
+  return hasExplicitRepoFileReference(normalized)
+    || hasExplicitRepoPathReference(normalized)
+    || hasCodingDocumentArtifactReference(normalized);
+}
+
+function inferCodingDocumentArtifactOperation(normalized: string): IntentGatewayOperation | null {
+  if (!hasCodingDocumentArtifactReference(normalized)) return null;
+  if (isCodingDocumentPlanningAnswerRequest(normalized)) return 'inspect';
+  if (CODING_DOCUMENT_DELETE_PATTERN.test(normalized)) return 'delete';
+  if (CODING_DOCUMENT_UPDATE_PATTERN.test(normalized)) return 'update';
+  if (CODING_DOCUMENT_CREATE_PATTERN.test(normalized)) return 'create';
+  return null;
+}
+
+function isCodingDocumentPlanningAnswerRequest(normalized: string): boolean {
+  if (!/\b(?:write|draft|generate|create)\s+(?:an?\s+)?(?:technical\s+)?implementation\s+plan\b/i.test(normalized)) {
+    return false;
+  }
+  if (CODING_DOCUMENT_UPDATE_PATTERN.test(normalized) || CODING_DOCUMENT_DELETE_PATTERN.test(normalized)) {
+    return false;
+  }
+  if (hasExplicitRepoFileReference(normalized) || hasExplicitRepoPathReference(normalized)) {
+    return false;
+  }
+  return !/\b(?:save|persist|write\s+to|write\s+into|create\s+at|create\s+in|file|path)\b/i.test(normalized);
+}
+
+function isExplicitCodingReadOnlyRequest(normalized: string): boolean {
+  return /\b(?:do\s+not|don't|dont|without|no)\s+(?:edit|editing|modify|modifying|change|changes|write|writes|update|updates)\b/i.test(normalized)
+    || /\bread[\s-]*only\b/i.test(normalized);
 }
 
 function extractSessionTargetSemanticTokens(value: string): string[] {

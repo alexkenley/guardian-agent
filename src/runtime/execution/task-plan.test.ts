@@ -167,6 +167,214 @@ describe('task plan receipt accounting', () => {
     expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
   });
 
+  it('falls back from weak gateway repo mutation plans to the canonical repo mutation proof shape', () => {
+    const plannedTask = buildPlannedTask({
+      route: 'coding_task',
+      operation: 'update',
+      plannedSteps: [
+        {
+          kind: 'read',
+          summary: 'Fresh bounded coding step for the attached coding session.',
+          required: true,
+        },
+        {
+          kind: 'read',
+          summary: 'Commit and push the current repo state to the configured GitHub remote.',
+          expectedToolCategories: ['web_fetch', 'browser'],
+          required: true,
+        },
+        {
+          kind: 'write',
+          summary: 'Keep the current branch; do not create or switch branches.',
+          required: true,
+        },
+        {
+          kind: 'answer',
+          summary: 'Report the commit and push result.',
+          required: true,
+          dependsOn: ['step_1', 'step_2', 'step_3'],
+        },
+      ],
+    }, {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'update',
+      summary: 'Commit and push the current repo state to the configured GitHub remote.',
+    });
+
+    expect(plannedTask.allowAdditionalSteps).toBe(true);
+    expect(plannedTask.steps.map((step) => step.kind)).toEqual(['search', 'write', 'read', 'answer']);
+    expect(plannedTask.steps[1]).toMatchObject({
+      kind: 'write',
+      expectedToolCategories: ['repo_mutation'],
+      dependsOn: ['step_1'],
+    });
+  });
+
+  it('uses mutating git shell receipts to satisfy repo mutation write steps', () => {
+    const plannedTask = buildPlannedTask(undefined, {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'update',
+      summary: 'Commit and push the current repo state to the configured GitHub remote.',
+    });
+    const matchedStepIds = new Set<string>();
+    const searchStepId = matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'fs_search',
+      args: { query: 'package.json' },
+      previouslyMatchedStepIds: matchedStepIds,
+    });
+    if (searchStepId) matchedStepIds.add(searchStepId);
+    const writeStepId = matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'shell_safe',
+      args: { command: 'git add . && git commit -m "Initial scaffold" && git push origin master' },
+      previouslyMatchedStepIds: matchedStepIds,
+    });
+    if (writeStepId) matchedStepIds.add(writeStepId);
+    const readOnlyGitStepId = matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'shell_safe',
+      args: { command: 'git status --short --branch' },
+      previouslyMatchedStepIds: new Set(['step_1']),
+    });
+    const verifyStepId = matchPlannedStepForTool({
+      plannedTask,
+      toolName: 'fs_read',
+      args: { path: 'src/App.tsx' },
+      previouslyMatchedStepIds: matchedStepIds,
+    });
+
+    expect(searchStepId).toBe('step_1');
+    expect(writeStepId).toBe('step_2');
+    expect(readOnlyGitStepId).not.toBe('step_2');
+    expect(verifyStepId).toBe('step_3');
+
+    const searchReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-search',
+      sourceType: 'tool_call',
+      toolName: 'fs_search',
+      status: 'succeeded',
+      refs: ['package.json'],
+      summary: 'Found package.json.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const writeReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-git-write',
+      sourceType: 'tool_call',
+      toolName: 'shell_safe',
+      status: 'succeeded',
+      refs: [],
+      summary: '[master abc123] Initial scaffold\nTo github.com:alexkenley/MusicStreamingApp.git',
+      startedAt: 3,
+      endedAt: 4,
+    };
+    const verifyReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-verify',
+      sourceType: 'tool_call',
+      toolName: 'fs_read',
+      status: 'succeeded',
+      refs: ['src/App.tsx'],
+      summary: 'Read src/App.tsx.',
+      startedAt: 5,
+      endedAt: 6,
+    };
+    const answerReceipt: EvidenceReceipt = {
+      receiptId: 'answer:1',
+      sourceType: 'model_answer',
+      status: 'succeeded',
+      refs: [],
+      summary: 'Committed and pushed abc123.',
+      startedAt: 7,
+      endedAt: 7,
+    };
+
+    const stepReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: [searchReceipt, writeReceipt, verifyReceipt, answerReceipt],
+      toolReceiptStepIds: new Map([
+        ['receipt-search', 'step_1'],
+        ['receipt-git-write', 'step_2'],
+        ['receipt-verify', 'step_3'],
+      ]),
+      finalAnswerReceiptId: answerReceipt.receiptId,
+    });
+
+    expect(stepReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'satisfied', evidenceReceiptIds: ['receipt-search'] },
+      { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-git-write'] },
+      { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-verify'] },
+      { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['answer:1'] },
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
+  it('allows explicit repo creation tasks to complete from write and read-back evidence', () => {
+    const plannedTask = buildPlannedTask(undefined, {
+      kind: 'repo_mutation',
+      route: 'coding_task',
+      operation: 'create',
+      summary: 'Create dist/guardian-live-proof.txt with the requested exact content.',
+    });
+
+    expect(plannedTask.steps[0]).toMatchObject({
+      stepId: 'step_1',
+      kind: 'search',
+      required: false,
+    });
+    expect(plannedTask.steps[1].dependsOn).toBeUndefined();
+
+    const writeReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-write',
+      sourceType: 'tool_call',
+      toolName: 'fs_write',
+      status: 'succeeded',
+      refs: ['dist/guardian-live-proof.txt'],
+      summary: 'Created dist/guardian-live-proof.txt.',
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const readReceipt: EvidenceReceipt = {
+      receiptId: 'receipt-read',
+      sourceType: 'tool_call',
+      toolName: 'fs_read',
+      status: 'succeeded',
+      refs: ['dist/guardian-live-proof.txt'],
+      summary: 'Read dist/guardian-live-proof.txt.',
+      startedAt: 3,
+      endedAt: 4,
+    };
+    const answerReceipt: EvidenceReceipt = {
+      receiptId: 'answer:1',
+      sourceType: 'model_answer',
+      status: 'succeeded',
+      refs: [],
+      summary: 'Created and verified dist/guardian-live-proof.txt.',
+      startedAt: 5,
+      endedAt: 5,
+    };
+
+    const stepReceipts = buildStepReceipts({
+      plannedTask,
+      evidenceReceipts: [writeReceipt, readReceipt, answerReceipt],
+      toolReceiptStepIds: new Map([
+        ['receipt-write', 'step_2'],
+        ['receipt-read', 'step_3'],
+      ]),
+      finalAnswerReceiptId: answerReceipt.receiptId,
+    });
+
+    expect(stepReceipts).toMatchObject([
+      { stepId: 'step_1', status: 'skipped' },
+      { stepId: 'step_2', status: 'satisfied', evidenceReceiptIds: ['receipt-write'] },
+      { stepId: 'step_3', status: 'satisfied', evidenceReceiptIds: ['receipt-read'] },
+      { stepId: 'step_4', status: 'satisfied', evidenceReceiptIds: ['answer:1'] },
+    ]);
+    expect(computeWorkerRunStatus(plannedTask, stepReceipts, [], 'end_turn')).toBe('completed');
+  });
+
   it('maps memory evidence categories to memory search receipts', () => {
     const plannedTask: PlannedTask = {
       planId: 'plan:memory_task:search:2',

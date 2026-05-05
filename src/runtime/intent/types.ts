@@ -237,6 +237,16 @@ export interface IntentGatewayInput {
     focusSummary?: string;
     lastActionableRequest?: string;
     activeExecutionRefs?: string[];
+    activeExecution?: {
+      executionId: string;
+      status: 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+      route?: IntentGatewayRoute;
+      operation?: IntentGatewayOperation;
+      summary?: string;
+      originalUserContent?: string;
+      resolvedContent?: string;
+      codeSessionId?: string;
+    };
     continuationStateKind?: string;
   } | null;
   enabledManagedProviders?: string[];

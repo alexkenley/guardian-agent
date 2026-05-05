@@ -58,6 +58,13 @@ const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
   'fs_move',
   'fs_copy',
 ]);
+const REPO_MUTATION_TOOL_NAMES = new Set([
+  ...FILESYSTEM_WRITE_TOOL_NAMES,
+  'code_git_commit',
+  'code_remote_exec',
+  'package_install',
+  'shell_safe',
+]);
 const M365_STATUS_TOOL_CATEGORIES = new Set([
   'm365_calendar_status',
   'microsoft_calendar_status',
@@ -179,6 +186,53 @@ export function buildPlannedTask(
     };
   }
 
+  if (contract.kind === 'repo_mutation') {
+    const operationLabel = contract.operation === 'delete'
+      ? 'deletion'
+      : contract.operation === 'create'
+        ? 'creation'
+        : 'update';
+    const requiresPreMutationInspection = contract.operation !== 'create';
+    const repoMutationStepSeeds: PlannedStep[] = [
+      {
+        stepId: 'step_1',
+        kind: 'search',
+        summary: `Find the target repo files and context needed for the requested ${operationLabel}.`,
+        expectedToolCategories: ['repo_inspect'],
+        required: requiresPreMutationInspection,
+      },
+      {
+        stepId: 'step_2',
+        kind: 'write',
+        summary: contract.summary?.trim() || `Apply the requested repo ${operationLabel}.`,
+        expectedToolCategories: ['repo_mutation'],
+        required: true,
+        ...(requiresPreMutationInspection ? { dependsOn: ['step_1'] } : {}),
+      },
+      {
+        stepId: 'step_3',
+        kind: 'read',
+        summary: 'Verify the changed repo files after the mutation.',
+        expectedToolCategories: ['fs_read', 'fs_list'],
+        required: true,
+        dependsOn: ['step_2'],
+      },
+      {
+        stepId: 'step_4',
+        kind: 'answer',
+        summary: 'Report the completed repo change and verification result.',
+        required: true,
+        dependsOn: ['step_2', 'step_3'],
+      },
+    ];
+    const repoMutationSteps = repoMutationStepSeeds.map((step) => applyDefaultExpectedToolCategories(step, contract));
+    return {
+      planId: buildPlanId(contract.route, contract.operation, repoMutationSteps.length),
+      steps: repoMutationSteps,
+      allowAdditionalSteps: true,
+    };
+  }
+
   if (contract.kind === 'repo_inspection') {
     const needsExactFileRead = contract.requireExactFileReferences === true;
     const answerDependsOn = needsExactFileRead ? ['step_1', 'step_2'] : ['step_1'];
@@ -242,6 +296,8 @@ function shouldUseGatewayPlannedSteps(
     case 'filesystem_mutation':
       return steps.some((step) => step.kind === 'write'
         || step.expectedToolCategories?.some(isWriteToolCategory));
+    case 'repo_mutation':
+      return steps.some(isActionableRepoMutationGatewayStep);
     case 'tool_execution':
       return steps.some((step) => step.kind === 'tool_call'
         || step.kind === 'search'
@@ -253,6 +309,31 @@ function shouldUseGatewayPlannedSteps(
     case 'security_analysis':
       return true;
   }
+}
+
+function isActionableRepoMutationGatewayStep(step: PlannedStep): boolean {
+  if (step.required === false) return false;
+  if (step.expectedToolCategories?.some(isRepoMutationToolCategory) === true) {
+    return true;
+  }
+  if (step.kind !== 'write') {
+    return false;
+  }
+  return extractNormalizedRefs(step.summary).length > 0;
+}
+
+function isRepoMutationToolCategory(value: string): boolean {
+  const normalized = normalizeExpectedToolCategory(value);
+  return normalized === 'repo_mutation'
+    || normalized === 'repo_write'
+    || normalized === 'git_write'
+    || normalized === 'shell'
+    || normalized === 'command'
+    || normalized === 'code_remote_exec'
+    || normalized === 'package_install'
+    || normalized === 'code_git_commit'
+    || FILESYSTEM_WRITE_TOOL_NAMES.has(normalized)
+    || isFilesystemWriteCategory(normalized);
 }
 
 function isWriteToolCategory(value: string): boolean {
@@ -376,6 +457,7 @@ function ensureRequiredAnswerStep(
 
 function shouldRequireFinalAnswerStep(kind: DelegatedTaskContractKind): boolean {
   return kind === 'repo_inspection'
+    || kind === 'repo_mutation'
     || kind === 'security_analysis'
     || kind === 'general_answer'
     || kind === 'tool_execution';
@@ -575,6 +657,7 @@ function shouldStabilizeEvidenceMutationOrder(
     contract.kind !== 'filesystem_mutation'
     && contract.kind !== 'tool_execution'
     && contract.kind !== 'repo_inspection'
+    && contract.kind !== 'repo_mutation'
   ) {
     return false;
   }
@@ -591,6 +674,7 @@ function relaxPostMutationEvidenceSteps(
     contract.kind !== 'filesystem_mutation'
     && contract.kind !== 'tool_execution'
     && contract.kind !== 'repo_inspection'
+    && contract.kind !== 'repo_mutation'
   ) {
     return steps;
   }
@@ -643,7 +727,7 @@ function isMutationStep(step: PlannedStep): boolean {
 }
 
 export function matchPlannedStepForTool(input: ToolStepMatchInput): string | undefined {
-  const toolKind = inferStepKindFromToolName(input.toolName);
+  const toolKind = inferStepKindFromToolInvocation(input.toolName, input.args);
   const normalizedHint = input.hintStepId?.trim();
   if (normalizedHint) {
     const hintedStep = input.plannedTask.steps.find((step) => step.stepId === normalizedHint);
@@ -736,7 +820,11 @@ export function buildStepReceipts(input: BuildStepReceiptsInput): StepReceipt[] 
     const matchedReceipts = (receiptsByStepId.get(step.stepId) ?? [])
       .slice()
       .sort((left, right) => left.startedAt - right.startedAt);
-    const qualifyingReceipts = matchedReceipts.filter((receipt) => receiptSatisfiesStep(step, receipt));
+    const qualifyingReceipts = matchedReceipts.filter((receipt) => (
+      input.finalAnswerReceiptId === receipt.receiptId
+      || input.toolReceiptStepIds?.get(receipt.receiptId) === step.stepId
+      || receiptSatisfiesStep(step, receipt)
+    ));
     const successful = qualifyingReceipts.filter((receipt) => receipt.status === 'succeeded');
     const blocked = qualifyingReceipts.find((receipt) => (
       receipt.status === 'pending_approval' || receipt.status === 'blocked'
@@ -965,7 +1053,7 @@ function inferDefaultPlannedStepKind(
   operation: string | undefined,
 ): PlannedStepKind {
   if (contractKind === 'general_answer') return 'answer';
-  if (contractKind === 'filesystem_mutation') return 'write';
+  if (contractKind === 'filesystem_mutation' || contractKind === 'repo_mutation') return 'write';
   if (operation === 'search') return 'search';
   if (operation === 'read' || operation === 'inspect') return 'read';
   if (operation === 'save' || operation === 'update' || operation === 'create' || operation === 'delete') {
@@ -1218,6 +1306,19 @@ function inferWriteToolCategories(
   return ['fs_write'];
 }
 
+function inferStepKindFromToolInvocation(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+): PlannedStepKind {
+  if (toolName === 'package_install' || toolName === 'code_git_commit') {
+    return 'write';
+  }
+  if (toolName === 'shell_safe' || toolName === 'code_remote_exec') {
+    return inferShellLikeStepKind(args) ?? 'tool_call';
+  }
+  return inferStepKindFromToolName(toolName);
+}
+
 function inferStepKindFromToolName(toolName: string): PlannedStepKind {
   if (toolName === 'memory_save') return 'memory_save';
   if (
@@ -1254,6 +1355,44 @@ function inferStepKindFromToolName(toolName: string): PlannedStepKind {
     return 'write';
   }
   return 'tool_call';
+}
+
+function inferShellLikeStepKind(args: Record<string, unknown> | undefined): PlannedStepKind | null {
+  const command = readCommandLikeText(args);
+  if (!command) {
+    return null;
+  }
+  if (isMutatingShellLikeCommand(command)) {
+    return 'write';
+  }
+  if (isReadOnlyShellLikeCommand(command)) {
+    return 'read';
+  }
+  return null;
+}
+
+function readCommandLikeText(args: Record<string, unknown> | undefined): string {
+  if (!args) return '';
+  const candidates = [
+    args.command,
+    args.cmd,
+    args.script,
+    args.inputPrompt,
+  ];
+  const value = candidates.find((candidate): candidate is string => (
+    typeof candidate === 'string' && candidate.trim().length > 0
+  ));
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function isMutatingShellLikeCommand(command: string): boolean {
+  return /\bgit\s+(?:add|commit|push|remote\s+add|remote\s+set-url|tag|merge|rebase|cherry-pick|rm|mv)\b/u.test(command)
+    || /\b(?:npm|pnpm|yarn)\s+(?:install|add|remove|uninstall)\b/u.test(command);
+}
+
+function isReadOnlyShellLikeCommand(command: string): boolean {
+  return /\bgit\s+(?:status|log|show|diff|ls-files|ls-remote|remote\s+-v|remote\s+show|branch\s+--show-current|rev-parse)\b/u.test(command)
+    || /\b(?:npm|pnpm|yarn)\s+(?:test|run\s+(?:build|test|lint|check)|exec)\b/u.test(command);
 }
 
 function isSecondBrainWriteToolName(toolName: string): boolean {
@@ -1302,6 +1441,9 @@ function expectedToolCategoryMatchesTool(
     || (normalized === 'repository' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repo_inspect' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
     || (normalized === 'repo_inspection' && REPO_INSPECTION_TOOL_NAMES.has(toolName))
+    || ((normalized === 'repo_mutation' || normalized === 'repo_write') && (
+      inferredToolKind === 'write' && REPO_MUTATION_TOOL_NAMES.has(toolName)
+    ))
     || (normalized === 'second_brain' && toolName.startsWith('second_brain_'))
     || (normalized === 'personal_assistant_task' && toolName.startsWith('second_brain_'))
     || (normalized === 'browser' && (toolName.startsWith('browser_') || toolName.startsWith('web_')))

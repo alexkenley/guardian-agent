@@ -31,6 +31,7 @@ export type DelegatedTaskContractKind =
   | 'general_answer'
   | 'tool_execution'
   | 'repo_inspection'
+  | 'repo_mutation'
   | 'filesystem_mutation'
   | 'security_analysis';
 

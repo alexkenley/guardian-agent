@@ -62,6 +62,45 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('uses a content-plan record for explicit attached code-session workspace mutations', async () => {
+    const gateway = new IntentGateway();
+    let called = false;
+    const result = await gateway.classify(
+      {
+        content: [
+          'Fresh bounded coding step for the attached MusicApp coding workspace.',
+          'Create dist/guardian-live-proof.txt containing exactly guardian live proof ok, then read it back.',
+        ].join(' '),
+        channel: 'web',
+        continuity: {
+          continuityKey: 'web:owner:chat',
+          linkedSurfaceCount: 1,
+          activeExecutionRefs: ['code_session:session-1'],
+        },
+      },
+      async () => {
+        called = true;
+        throw new Error('model should not be called');
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:explicit-code-session-work');
+    expect(result.decision).toMatchObject({
+      route: 'coding_task',
+      operation: 'create',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      executionClass: 'repo_grounded',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      preferredAnswerPath: 'tool_loop',
+    });
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write', 'read', 'answer']);
+    expect(result.decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? [])).not.toContain('web_search');
+  });
+
   it('repairs diagnostics trace inspection clarifications into a ready trace inspect route', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -445,6 +484,31 @@ describe('IntentGateway', () => {
       expectedContextPressure: 'derived.workload',
       preferredAnswerPath: 'derived.workload',
     });
+  });
+
+  it('recovers unavailable coding workspace document updates with a write-backed plan', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'In the music platform coding workspace I want you to review the technical implementation plan and identify where it needs to be uplifted also use the design business plan as a reference you can go ahead and update the implementation plan',
+        channel: 'web',
+        continuity: {
+          activeExecutionRefs: ['code_session:music-platform'],
+        },
+      },
+      async () => {
+        throw new Error('routing provider unavailable');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+    expect(result.decision.plannedSteps?.map((step) => step.kind)).toEqual(['read', 'write', 'read', 'answer']);
   });
 
   it('retries with a JSON-only fallback when the tool-call gateway path throws', async () => {
@@ -838,6 +902,139 @@ describe('IntentGateway', () => {
     expect(result.decision.resolution).toBe('ready');
     expect(result.decision.requiresRepoGrounding).toBe(true);
     expect(result.decision.requiresToolSynthesis).toBe(true);
+  });
+
+  it('repairs misclassified fresh code-session file mutations without resuming failed executions', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Fresh bounded coding step for code session session-1 at S:\\Development\\MusicApp. Do not resume any previous failed execution graph. Create dist/guardian-live-proof.txt containing exactly guardian live proof ok, then read it back and report the exact content. Do not commit or push.',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The user is testing the attached MusicApp coding workspace.',
+          lastActionableRequest: 'Create a small proof file in the attached MusicApp coding workspace.',
+          activeExecutionRefs: ['execution:failed-run', 'code_session:session-1'],
+          activeExecution: {
+            executionId: 'failed-run',
+            status: 'failed',
+            route: 'coding_task',
+            operation: 'update',
+            summary: 'Prior failed coding run that must not be resumed.',
+            originalUserContent: 'Build the music platform prototype.',
+            codeSessionId: 'session-1',
+          },
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'search_task',
+          confidence: 'high',
+          operation: 'search',
+          summary: 'Research Explorer delegated workload',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          entities: {
+            query: 'Create dist/guardian-live-proof.txt containing exactly guardian live proof ok',
+          },
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      }),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.resolution).toBe('ready');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.plannedSteps?.flatMap((step) => step.expectedToolCategories ?? []))
+      .not.toContain('web_search');
+    expect(result.model).toBe('content-plan');
+    expect(result.rawResponsePreview).toBe('content-plan:explicit-code-session-work');
+  });
+
+  it('inherits the active coding execution route when classifiers are unavailable and the execution is resumable', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Yeah okay but I want this to be built into the orchestration harness for the user experience.',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 2,
+          focusSummary: 'The user is improving Guardian orchestration and coding workspace UX.',
+          activeExecutionRefs: ['execution:exec-1', 'code_session:session-1'],
+          activeExecution: {
+            executionId: 'exec-1',
+            status: 'running',
+            route: 'coding_task',
+            operation: 'update',
+            summary: 'Implement orchestration and coding workspace UX uplifts.',
+            originalUserContent: 'Read the orchestration docs, inspect the routing trace, and make the uplifts.',
+            codeSessionId: 'session-1',
+          },
+        },
+      },
+      async () => {
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(true);
+    expect(result.decision.expectedContextPressure).toBe('high');
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+    expect(result.decision.provenance).toMatchObject({
+      route: 'repair.continuity',
+      operation: 'repair.continuity',
+    });
+  });
+
+  it('does not resurrect failed coding executions when classifiers are unavailable', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'uplift the music platform technical implementation plan. Do not resume any previous failed coding execution. Treat this as a fresh planning request.',
+        channel: 'web',
+        continuity: {
+          continuityKey: 'default:harness',
+          linkedSurfaceCount: 530,
+          focusSummary: 'The user is moving from a failed orchestration uplift request back to music platform planning.',
+          activeExecutionRefs: ['execution:exec-1', 'code_session:session-1'],
+          activeExecution: {
+            executionId: 'exec-1',
+            status: 'failed',
+            route: 'coding_task',
+            operation: 'update',
+            summary: 'Implement orchestration and coding workspace UX uplifts.',
+            originalUserContent: 'Read the orchestration docs, inspect the routing trace, and make the uplifts.',
+            codeSessionId: 'session-1',
+          },
+          continuationStateKind: 'm365_unread_list',
+        },
+      },
+      async () => {
+        throw new Error('intent classifier timed out');
+      },
+    );
+
+    expect(result.available).toBe(false);
+    expect(result.decision.route).toBe('unknown');
+    expect(result.decision.resolution).toBe('needs_clarification');
+    expect(result.decision.missingFields).toContain('intent_route');
+    expect(result.decision.provenance?.route).not.toBe('repair.continuity');
   });
 
   it('keeps vague context references as clarification blockers when routing is unavailable', async () => {
