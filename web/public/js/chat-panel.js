@@ -1672,19 +1672,17 @@ function buildApprovalButtons(approvals, onApproval) {
 
   const summary = document.createElement('div');
   summary.className = 'chat-approval-card__summary';
-  summary.textContent = approvals.length === 1
-    ? 'Approval required for this action:'
-    : `Approval required for these ${approvals.length} actions:`;
+  summary.textContent = describeApprovalGroupHeader(approvals);
   container.appendChild(summary);
 
   const detailList = document.createElement('div');
   detailList.className = 'chat-approval-card__list';
-  approvals.forEach((approval) => {
+  describeApprovalActionList(approvals).forEach((description) => {
     const item = document.createElement('div');
     item.className = 'chat-approval-card__item';
     item.textContent = approvals.length === 1
-      ? describeApprovalAction(approval)
-      : `• ${describeApprovalAction(approval)}`;
+      ? description
+      : `• ${description}`;
     detailList.appendChild(item);
   });
   container.appendChild(detailList);
@@ -1823,6 +1821,21 @@ function parseApprovalPreview(preview) {
   }
 }
 
+function basenameApprovalPath(path) {
+  const normalized = String(path || '').trim();
+  if (!normalized) return '';
+  const parts = normalized.split(/[\\/]+/g).filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
+function isWeakApprovalActionLabel(label) {
+  const normalized = String(label || '').trim();
+  return !normalized
+    || /\{\s*"/.test(normalized)
+    || /^run\s+[a-z0-9 _-]+\s+-\s+/i.test(normalized)
+    || normalized.length > 140;
+}
+
 function describePolicyApproval(preview) {
   const parsed = parseApprovalPreview(preview);
   if (!parsed) return null;
@@ -1853,8 +1866,41 @@ function describePolicyApproval(preview) {
   }
 }
 
+function describeCodeCreateApproval(preview) {
+  const parsed = parseApprovalPreview(preview);
+  const path = String(parsed?.path || '').trim();
+  if (!path) return null;
+  return `Create ${basenameApprovalPath(path) || path}`;
+}
+
+function describeFilesystemMkdirApproval(preview) {
+  const parsed = parseApprovalPreview(preview);
+  const path = String(parsed?.path || '').trim();
+  if (!path) return null;
+  return `Create directory ${path}`;
+}
+
+function describePackageInstallApproval(preview) {
+  const parsed = parseApprovalPreview(preview);
+  if (!parsed) return null;
+  const command = String(parsed.command || '').trim();
+  const cwd = String(parsed.cwd || '').trim();
+  if (!command) return cwd ? `Install packages in ${cwd}` : 'Install packages';
+  const packages = command
+    .replace(/^\s*(?:npm|pnpm|yarn|bun)\s+(?:install|add)\s+/i, '')
+    .split(/\s+/g)
+    .map((part) => part.trim())
+    .filter((part) => part && !part.startsWith('-'));
+  const packageList = packages.length > 0 ? packages.slice(0, 5).join(', ') : '';
+  const moreSuffix = packages.length > 5 ? `, +${packages.length - 5} more` : '';
+  const cwdSuffix = cwd ? ` in ${cwd}` : '';
+  return packageList
+    ? `Install packages${cwdSuffix}: ${packageList}${moreSuffix}`
+    : `Run package install${cwdSuffix}`;
+}
+
 function describeApprovalAction(approval) {
-  if (approval?.actionLabel) {
+  if (approval?.actionLabel && !isWeakApprovalActionLabel(approval.actionLabel)) {
     return sentenceCaseApprovalPreview(approval.actionLabel);
   }
   const toolName = String(approval?.toolName || '').trim();
@@ -1875,10 +1921,48 @@ function describeApprovalAction(approval) {
   if (toolName === 'automation_delete') {
     return preview ? sentenceCaseApprovalPreview(preview) : 'Delete automation';
   }
+  if (toolName === 'code_create') {
+    return describeCodeCreateApproval(preview) || 'Create file';
+  }
+  if (toolName === 'fs_mkdir') {
+    return describeFilesystemMkdirApproval(preview) || 'Create directory';
+  }
+  if (toolName === 'package_install') {
+    return describePackageInstallApproval(preview) || 'Install packages';
+  }
   if (preview) {
     return `${toolName}: ${preview}`;
   }
   return `Run ${toolName}`;
+}
+
+function describeApprovalGroupHeader(approvals) {
+  if (
+    approvals.length > 1
+    && approvals.every((approval) => String(approval?.toolName || '').trim() === 'code_create')
+  ) {
+    return `Approval required to create ${approvals.length} files:`;
+  }
+  if (
+    approvals.length > 1
+    && approvals.every((approval) => String(approval?.toolName || '').trim() === 'fs_mkdir')
+  ) {
+    return `Approval required to create ${approvals.length} directories:`;
+  }
+  return approvals.length === 1
+    ? 'Approval required for this action:'
+    : `Approval required for these ${approvals.length} actions:`;
+}
+
+function describeApprovalActionList(approvals) {
+  const counts = new Map();
+  approvals.forEach((approval) => {
+    const description = describeApprovalAction(approval);
+    counts.set(description, (counts.get(description) || 0) + 1);
+  });
+  return [...counts.entries()].map(([description, count]) => (
+    count > 1 ? `${description} (${count} duplicate requests)` : description
+  ));
 }
 
 function sentenceCaseApprovalPreview(preview) {

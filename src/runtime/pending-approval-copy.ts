@@ -65,6 +65,13 @@ function humanizeToolName(toolName: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function basename(path: string): string {
+  const normalized = path.trim();
+  if (!normalized) return '';
+  const parts = normalized.split(/[\\/]+/g).filter(Boolean);
+  return parts[parts.length - 1] ?? normalized;
+}
+
 function quote(value: string): string {
   return `"${value}"`;
 }
@@ -526,6 +533,40 @@ function describeFilesystemWrite(toolName: string, preview: string): string | nu
     : `write ${path}`;
 }
 
+function describeCodeCreate(preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const path = asString(parsed.path);
+  if (!path) return null;
+  return `create ${basename(path) || path}`;
+}
+
+function describeFilesystemMkdir(preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  const path = asString(parsed?.path);
+  if (!path) return null;
+  return `create directory ${path}`;
+}
+
+function describePackageInstall(preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+  const command = asString(parsed.command);
+  const cwd = asString(parsed.cwd);
+  if (!command) return cwd ? `install packages in ${cwd}` : 'install packages';
+  const packages = command
+    .replace(/^\s*(?:npm|pnpm|yarn|bun)\s+(?:install|add)\s+/i, '')
+    .split(/\s+/g)
+    .map((part) => part.trim())
+    .filter((part) => part && !part.startsWith('-'));
+  const packageList = packages.length > 0 ? packages.slice(0, 5).join(', ') : '';
+  const moreSuffix = packages.length > 5 ? `, +${packages.length - 5} more` : '';
+  const cwdSuffix = cwd ? ` in ${cwd}` : '';
+  return packageList
+    ? `install packages${cwdSuffix}: ${packageList}${moreSuffix}`
+    : `run package install${cwdSuffix}`;
+}
+
 function describeFilesystemMove(preview: string): string | null {
   const parsed = tryParsePreview(preview);
   if (!parsed) return null;
@@ -604,8 +645,18 @@ function describePerformanceAction(toolName: string, preview: string): string | 
     : `run performance action ${actionId}`;
 }
 
+function isWeakApprovalActionLabel(label: string): boolean {
+  const normalized = label.trim();
+  if (!normalized) return true;
+  return /\{\s*"/.test(normalized)
+    || /^run\s+[a-z0-9 _-]+\s+-\s+/i.test(normalized)
+    || normalized.length > 140;
+}
+
 export function describePendingApproval(summary: PendingApprovalSummary): string {
-  if (summary.actionLabel?.trim()) return summary.actionLabel.trim();
+  if (summary.actionLabel?.trim() && !isWeakApprovalActionLabel(summary.actionLabel)) {
+    return summary.actionLabel.trim();
+  }
   const preview = normalizePreview(summary.argsPreview);
 
   if (summary.toolName === 'coding_backend_run') {
@@ -626,6 +677,21 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
   if (summary.toolName === 'fs_write' || summary.toolName === 'doc_create') {
     const writeDescription = describeFilesystemWrite(summary.toolName, preview);
     if (writeDescription) return writeDescription;
+  }
+
+  if (summary.toolName === 'code_create') {
+    const createDescription = describeCodeCreate(preview);
+    if (createDescription) return createDescription;
+  }
+
+  if (summary.toolName === 'fs_mkdir') {
+    const mkdirDescription = describeFilesystemMkdir(preview);
+    if (mkdirDescription) return mkdirDescription;
+  }
+
+  if (summary.toolName === 'package_install') {
+    const installDescription = describePackageInstall(preview);
+    if (installDescription) return installDescription;
   }
 
   if (summary.toolName === 'fs_delete') {
@@ -729,6 +795,35 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
   return `run ${humanizeToolName(summary.toolName)}`;
 }
 
+function groupPendingApprovalDescriptions(approvals: readonly PendingApprovalSummary[]): string[] {
+  const counts = new Map<string, number>();
+  for (const approval of approvals) {
+    const description = describePendingApproval(approval);
+    counts.set(description, (counts.get(description) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([description, count]) => (
+    count > 1 ? `${description} (${count} duplicate requests)` : description
+  ));
+}
+
+function formatApprovalGroupHeader(approvals: readonly PendingApprovalSummary[]): string {
+  const descriptions = approvals.map((approval) => describePendingApproval(approval));
+  if (
+    approvals.length > 1
+    && approvals.every((approval) => approval.toolName === 'code_create')
+    && descriptions.every((description) => description.startsWith('create '))
+  ) {
+    return `Waiting for approval to create ${approvals.length} files:`;
+  }
+  if (
+    approvals.length > 1
+    && approvals.every((approval) => approval.toolName === 'fs_mkdir')
+  ) {
+    return `Waiting for approval to create ${approvals.length} directories:`;
+  }
+  return `Waiting for approval on ${approvals.length} actions:`;
+}
+
 export function formatPendingApprovalMessage(approvals: readonly PendingApprovalSummary[]): string {
   if (approvals.length === 0) return 'Waiting for approval.';
 
@@ -736,9 +831,10 @@ export function formatPendingApprovalMessage(approvals: readonly PendingApproval
     return `Waiting for approval to ${describePendingApproval(approvals[0])}.`;
   }
 
+  const descriptions = groupPendingApprovalDescriptions(approvals);
   return [
-    `Waiting for approval on ${approvals.length} actions:`,
-    ...approvals.map((approval) => `- ${describePendingApproval(approval)}`),
+    formatApprovalGroupHeader(approvals),
+    ...descriptions.map((description) => `- ${description}`),
   ].join('\n');
 }
 

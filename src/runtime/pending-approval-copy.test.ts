@@ -175,6 +175,70 @@ describe('pending approval copy', () => {
     ].join('\n'));
   });
 
+  it('formats code create approvals without exposing file content JSON', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'code_create',
+        argsPreview: '{"path":"package.json","content":"{\\"name\\":\\"musicapp\\",\\"scripts\\":{\\"dev\\":\\"vite\\"}}"}',
+      },
+    ])).toBe('Waiting for approval to create package.json.');
+
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'code_create',
+        argsPreview: '{"path":"package.json","content":"..."}',
+      },
+      {
+        toolName: 'code_create',
+        argsPreview: '{"path":"src/client/main.tsx","content":"..."}',
+      },
+      {
+        toolName: 'code_create',
+        argsPreview: '{"path":".prettierrc","content":"..."}',
+      },
+    ])).toBe([
+      'Waiting for approval to create 3 files:',
+      '- create package.json',
+      '- create main.tsx',
+      '- create .prettierrc',
+    ].join('\n'));
+  });
+
+  it('formats directory and package install approvals with concise labels', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'fs_mkdir',
+        argsPreview: '{"path":"S:\\\\Development\\\\MusicApp\\\\src\\\\server\\\\api"}',
+      },
+      {
+        toolName: 'package_install',
+        argsPreview: '{"command":"npm install better-sqlite3 drizzle-orm express cors zod react react-dom react-router-dom","cwd":"S:\\\\Development\\\\MusicApp"}',
+      },
+    ])).toBe([
+      'Waiting for approval on 2 actions:',
+      '- create directory S:\\Development\\MusicApp\\src\\server\\api',
+      '- install packages in S:\\Development\\MusicApp: better-sqlite3, drizzle-orm, express, cors, zod, +3 more',
+    ].join('\n'));
+  });
+
+  it('ignores raw model-style approval labels when structured args can produce clearer copy', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'code_create',
+        actionLabel: 'run code create - {"path":"package.json","content":"very long content"}',
+        argsPreview: '{"path":"package.json","content":"very long content"}',
+      },
+      {
+        toolName: 'code_create',
+        actionLabel: 'run code create - {"path":"package.json","content":"very long content"}',
+        argsPreview: '{"path":"package.json","content":"very long content"}',
+      },
+    ])).toBe([
+      'Waiting for approval to create 2 files:',
+      '- create package.json (2 duplicate requests)',
+    ].join('\n'));
+  });
+
   it('builds structured approval metadata with fallback values', () => {
     expect(buildPendingApprovalMetadata(
       ['approval-1', 'approval-2', 'approval-1', ''],
