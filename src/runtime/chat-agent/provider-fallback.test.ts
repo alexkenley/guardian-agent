@@ -75,6 +75,36 @@ describe('provider fallback runtime', () => {
     });
   });
 
+  it('marks provider-order responses as fallback when the selected provider was skipped', async () => {
+    const fallbackChain = {
+      chatWithProviderOrder: vi.fn(async () => ({
+        providerName: 'nvidia-general',
+        usedFallback: false,
+        skipped: ['ollama-cloud-coding'],
+        response: response('alternate provider'),
+      })),
+      chatWithFallback: vi.fn(),
+      chatWithFallbackAfterPrimary: vi.fn(),
+      chatWithFallbackAfterProvider: vi.fn(),
+    };
+
+    const result = await chatWithRoutingMetadata({
+      agentId: 'chat',
+      ctx: ctx('ollama'),
+      messages,
+      fallbackProviderOrder: ['ollama-cloud-coding', 'nvidia-general'],
+      fallbackChain,
+      log: { warn: vi.fn() },
+    });
+
+    expect(result).toMatchObject({
+      providerName: 'nvidia-general',
+      providerLocality: 'external',
+      response: { content: 'alternate provider' },
+      usedFallback: true,
+    });
+  });
+
   it('falls back after a primary provider failure', async () => {
     const primaryChat = vi.fn(async () => {
       throw new Error('provider unavailable');

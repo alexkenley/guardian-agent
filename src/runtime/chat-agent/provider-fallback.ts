@@ -153,11 +153,12 @@ export async function chatWithRoutingMetadata(
   })) {
     const startedAt = Date.now();
     const result = await input.fallbackChain!.chatWithProviderOrder(preferredOrder!, input.messages, input.options);
+    const selectedProviderName = preferredOrder?.[0];
     return {
       response: result.response,
       providerName: result.providerName,
       providerLocality: getProviderLocalityFromName(result.providerName),
-      usedFallback: result.usedFallback,
+      usedFallback: result.usedFallback || (!!selectedProviderName && result.providerName !== selectedProviderName),
       durationMs: Math.max(0, Date.now() - startedAt),
     };
   }

@@ -600,6 +600,151 @@ describe('createIncomingDispatchPreparer', () => {
     expect(result.decision.reason).toBe('attached coding session with gateway-first auto routing');
   });
 
+  it('falls back from stale blocked unknown continuity refs to the latest continuable execution', async () => {
+    const linkedSession = {
+      id: 'session-1',
+      ownerUserId: 'web:alex',
+      ownerPrincipalId: 'alex-principal',
+      conversationUserId: 'code-session:session-1',
+      conversationChannel: 'code-session',
+      resolvedRoot: 'S:\\Development\\MusicApp',
+    };
+    const staleClarification = {
+      executionId: 'execution-stale',
+      requestId: 'request-stale',
+      rootExecutionId: 'execution-stale',
+      scope: {
+        assistantId: 'chat',
+        userId: 'web:alex',
+        channel: 'web',
+        surfaceId: 'config-panel',
+      },
+      status: 'blocked' as const,
+      intent: {
+        route: 'unknown',
+        operation: 'unknown',
+        resolution: 'needs_clarification',
+        summary: 'Ask the user to clarify the request.',
+        originalUserContent: 'continue',
+      },
+      createdAt: 3,
+      updatedAt: 3,
+    };
+    const codingExecution = {
+      executionId: 'execution-coding',
+      requestId: 'request-coding',
+      rootExecutionId: 'execution-coding',
+      scope: {
+        assistantId: 'chat',
+        userId: 'web:alex',
+        channel: 'web',
+        surfaceId: 'config-panel',
+        codeSessionId: 'session-1',
+      },
+      status: 'running' as const,
+      intent: {
+        route: 'coding_task',
+        operation: 'update',
+        summary: 'Continue the active MusicApp phase one build.',
+        originalUserContent: 'Start phase one.',
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const records = new Map([
+      [staleClarification.executionId, staleClarification],
+      [codingExecution.executionId, codingExecution],
+    ]);
+    const routingIntentGateway = {
+      classify: vi.fn(async (input: IntentGatewayInput) => {
+        expect(input.continuity?.activeExecution).toMatchObject({
+          executionId: 'execution-coding',
+          status: 'running',
+          route: 'coding_task',
+          operation: 'update',
+          codeSessionId: 'session-1',
+        });
+        return createGatewayRecord({
+          route: 'coding_task',
+          operation: 'update',
+          summary: 'Continue the active MusicApp phase one build.',
+          turnRelation: 'follow_up',
+          executionClass: 'repo_grounded',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+        });
+      }),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      routingIntentGateway,
+      continuityThreadStore: {
+        get: vi.fn(() => ({
+          continuityKey: 'chat:web:alex',
+          scope: {
+            assistantId: 'chat',
+            userId: 'web:alex',
+          },
+          linkedSurfaces: [
+            {
+              channel: 'web',
+              surfaceId: 'config-panel',
+              active: true,
+              lastSeenAt: 1,
+            },
+          ],
+          activeExecutionRefs: [
+            { kind: 'execution', id: 'execution-stale' },
+          ],
+          focusSummary: 'A clarification is blocking the chat.',
+          createdAt: 1,
+          updatedAt: 3,
+          expiresAt: 4,
+        })),
+      },
+      executionStore: {
+        get: vi.fn((executionId: string) => records.get(executionId) ?? null),
+        listForAssistantUser: vi.fn(() => [staleClarification, codingExecution]),
+      },
+      codeSessionStore: {
+        resolveForRequest: vi.fn((input: { allowSharedAttachment?: boolean }) => (
+          input.allowSharedAttachment
+            ? {
+                session: linkedSession,
+                attachment: {
+                  channel: 'web',
+                  surfaceId: 'web-guardian-chat',
+                },
+              }
+            : null
+        )),
+        getSession: vi.fn(() => linkedSession),
+      },
+      summarizeContinuityThreadForGateway: vi.fn((thread) => thread ? ({
+        continuityKey: thread.continuityKey,
+        linkedSurfaceCount: thread.linkedSurfaces.length,
+        focusSummary: thread.focusSummary,
+        activeExecutionRefs: thread.activeExecutionRefs?.map((ref) => `${ref.kind}:${ref.id}`),
+      }) : null),
+      resolveSharedStateAgentId: vi.fn(() => 'chat'),
+      identity: {
+        resolveCanonicalUserId: () => 'web:alex',
+      },
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Continue the active Phase 1 MusicApp build from the last successful step. Do not restart from scratch.',
+      userId: 'alex',
+      principalId: 'alex-principal',
+      channel: 'web',
+      surfaceId: 'config-panel',
+    });
+
+    expect(result.gateway?.decision.route).toBe('coding_task');
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+  });
+
   it('does not inject stale continuity history into fresh unlinked surfaces', async () => {
     const conversations = {
       getHistoryForContext: vi.fn(() => [

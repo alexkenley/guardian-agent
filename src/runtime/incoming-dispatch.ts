@@ -146,7 +146,7 @@ export function createIncomingDispatchPreparer(args: {
   conversations: Pick<ConversationService, 'getHistoryForContext' | 'getSessionHistory'>;
   pendingActionStore: Pick<PendingActionStore, 'resolveActiveForSurface'>;
   continuityThreadStore: Pick<ContinuityThreadStore, 'get'>;
-  executionStore?: Pick<ExecutionStore, 'get'>;
+  executionStore?: Pick<ExecutionStore, 'get'> & Partial<Pick<ExecutionStore, 'listForAssistantUser'>>;
   codeSessionStore: Pick<CodeSessionStore, 'resolveForRequest' | 'getSession'>;
   intentRoutingTrace: Pick<IntentRoutingTraceLog, 'record'>;
   enabledManagedProviders?: Set<string>;
@@ -263,27 +263,60 @@ export function createIncomingDispatchPreparer(args: {
     return trimmed.length > maxChars ? `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...` : trimmed;
   };
 
+  const isContinuableExecutionForGateway = (record: ExecutionRecord | null | undefined): record is ExecutionRecord => {
+    if (!record || (record.status !== 'running' && record.status !== 'blocked' && record.status !== 'failed')) {
+      return false;
+    }
+    return !(record.status === 'blocked'
+      && record.intent.route === 'unknown'
+      && record.intent.operation === 'unknown'
+      && record.intent.resolution === 'needs_clarification');
+  };
+
+  const findLatestContinuableExecutionForGateway = (
+    stateAgentId: string,
+    canonicalUserId: string,
+    excludeExecutionId?: string,
+  ): ExecutionRecord | null => {
+    const listForAssistantUser = args.executionStore?.listForAssistantUser;
+    if (!listForAssistantUser) return null;
+    return listForAssistantUser.call(args.executionStore, stateAgentId, canonicalUserId)
+      .find((record) =>
+        record.executionId !== excludeExecutionId
+        && isContinuableExecutionForGateway(record)) ?? null;
+  };
+
+  const toActiveExecutionSummary = (
+    record: ExecutionRecord,
+  ): NonNullable<NonNullable<IntentGatewayInput['continuity']>['activeExecution']> => ({
+    executionId: record.executionId,
+    status: record.status,
+    ...(toGatewayRoute(record.intent.route) ? { route: toGatewayRoute(record.intent.route) } : {}),
+    ...(toGatewayOperation(record.intent.operation) ? { operation: toGatewayOperation(record.intent.operation) } : {}),
+    ...(trimForGateway(record.intent.summary, 300) ? { summary: trimForGateway(record.intent.summary, 300) } : {}),
+    ...(trimForGateway(record.intent.originalUserContent, 600)
+      ? { originalUserContent: trimForGateway(record.intent.originalUserContent, 600) }
+      : {}),
+    ...(trimForGateway(record.intent.resolvedContent, 600)
+      ? { resolvedContent: trimForGateway(record.intent.resolvedContent, 600) }
+      : {}),
+    ...(trimForGateway(record.scope.codeSessionId, 200) ? { codeSessionId: trimForGateway(record.scope.codeSessionId, 200) } : {}),
+  });
+
   const summarizeActiveExecutionForGateway = (
     continuity: IntentGatewayInput['continuity'],
+    stateAgentId: string,
+    canonicalUserId: string,
   ): NonNullable<NonNullable<IntentGatewayInput['continuity']>['activeExecution']> | undefined => {
     const executionId = readActiveExecutionId(continuity);
-    if (!executionId) return undefined;
-    const record: ExecutionRecord | null = args.executionStore?.get(executionId) ?? null;
-    if (!record) return undefined;
-    return {
-      executionId: record.executionId,
-      status: record.status,
-      ...(toGatewayRoute(record.intent.route) ? { route: toGatewayRoute(record.intent.route) } : {}),
-      ...(toGatewayOperation(record.intent.operation) ? { operation: toGatewayOperation(record.intent.operation) } : {}),
-      ...(trimForGateway(record.intent.summary, 300) ? { summary: trimForGateway(record.intent.summary, 300) } : {}),
-      ...(trimForGateway(record.intent.originalUserContent, 600)
-        ? { originalUserContent: trimForGateway(record.intent.originalUserContent, 600) }
-        : {}),
-      ...(trimForGateway(record.intent.resolvedContent, 600)
-        ? { resolvedContent: trimForGateway(record.intent.resolvedContent, 600) }
-        : {}),
-      ...(trimForGateway(record.scope.codeSessionId, 200) ? { codeSessionId: trimForGateway(record.scope.codeSessionId, 200) } : {}),
-    };
+    const record: ExecutionRecord | null = executionId
+      ? args.executionStore?.get(executionId) ?? null
+      : null;
+    if (isContinuableExecutionForGateway(record)) {
+      return toActiveExecutionSummary(record);
+    }
+    const fallbackRecord = findLatestContinuableExecutionForGateway(stateAgentId, canonicalUserId, executionId);
+    return fallbackRecord ? toActiveExecutionSummary(fallbackRecord) : undefined;
   };
 
   const listClassifierProvidersForMode = (
@@ -410,7 +443,7 @@ export function createIncomingDispatchPreparer(args: {
       ? continuity
       : null;
     const baseContinuitySummary = args.summarizeContinuityThreadForGateway(continuityForGateway);
-    const activeExecution = summarizeActiveExecutionForGateway(baseContinuitySummary);
+    const activeExecution = summarizeActiveExecutionForGateway(baseContinuitySummary, stateAgentId, canonicalUserId);
     const continuitySummary = baseContinuitySummary
       ? {
           ...baseContinuitySummary,

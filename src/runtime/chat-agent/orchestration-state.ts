@@ -176,6 +176,17 @@ function isResumableExecution(record: ExecutionRecord | null | undefined): boole
     || record?.status === 'failed';
 }
 
+function isLowValueClarificationExecution(record: ExecutionRecord | null | undefined): boolean {
+  return record?.status === 'blocked'
+    && record.intent.route === 'unknown'
+    && record.intent.operation === 'unknown'
+    && record.intent.resolution === 'needs_clarification';
+}
+
+function isContinuableExecution(record: ExecutionRecord | null | undefined): boolean {
+  return isResumableExecution(record) && !isLowValueClarificationExecution(record);
+}
+
 function buildExecutionContinuationRef(
   record: ExecutionRecord | null | undefined,
 ): ContinuityThreadExecutionRef | null {
@@ -310,7 +321,11 @@ export class ChatAgentOrchestrationState {
   private findActiveExecutionRef(
     continuityThread: ContinuityThreadRecord | null | undefined,
   ): ContinuityThreadExecutionRef | null {
-    const executionRef = continuityThread?.activeExecutionRefs?.find((ref) => ref.kind === 'execution') ?? null;
+    const executionRef = continuityThread?.activeExecutionRefs?.find((ref) => {
+      if (ref.kind !== 'execution') return false;
+      const record = this.executionStore?.get(ref.id) ?? null;
+      return record ? isContinuableExecution(record) : true;
+    }) ?? null;
     return executionRef ? cloneContinuityExecutionRef(executionRef) : null;
   }
 
@@ -325,24 +340,30 @@ export class ChatAgentOrchestrationState {
     if (!this.executionStore) return null;
     const pendingExecutionId = input.pendingAction?.executionId?.trim();
     if (pendingExecutionId && pendingExecutionId !== input.excludeExecutionId) {
-      return this.executionStore.get(pendingExecutionId);
+      const record = this.executionStore.get(pendingExecutionId);
+      if (isContinuableExecution(record)) {
+        return record;
+      }
     }
     const continuityExecutionId = this.findActiveExecutionRef(input.continuityThread)?.id;
     if (continuityExecutionId && continuityExecutionId !== input.excludeExecutionId) {
-      return this.executionStore.get(continuityExecutionId);
+      const record = this.executionStore.get(continuityExecutionId);
+      if (isContinuableExecution(record)) {
+        return record;
+      }
     }
     const latestForScope = this.executionStore.listForScope(
       this.buildExecutionScope(input.userId, input.channel, input.surfaceId),
     ).find((record) =>
       record.executionId !== input.excludeExecutionId
-      && isResumableExecution(record));
+      && isContinuableExecution(record));
     if (latestForScope) {
       return latestForScope;
     }
     return this.executionStore.listForAssistantUser(this.stateAgentId, input.userId)
       .find((record) =>
         record.executionId !== input.excludeExecutionId
-        && isResumableExecution(record)) ?? null;
+        && isContinuableExecution(record)) ?? null;
   }
 
   registerExecutionTurn(input: {
@@ -588,7 +609,9 @@ export class ChatAgentOrchestrationState {
     const summary = normalizeUserFacingIntentGatewaySummary(decision.summary);
     const existingExecutionRef = this.findActiveExecutionRef(input.continuityThread);
     const currentExecution = this.executionStore?.get(input.executionIdentity.executionId) ?? null;
-    const currentExecutionRef = buildExecutionContinuationRef(currentExecution);
+    const currentExecutionRef = isContinuableExecution(currentExecution)
+      ? buildExecutionContinuationRef(currentExecution)
+      : null;
     const nextExecutionRef = decision.turnRelation === 'new_request' || !existingExecutionRef
       ? (currentExecutionRef ?? existingExecutionRef)
       : existingExecutionRef;

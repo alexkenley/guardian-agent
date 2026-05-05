@@ -860,6 +860,131 @@ describe('ChatAgentOrchestrationState', () => {
     ]);
   });
 
+  it('does not let blocked unknown clarification executions displace active coding work', () => {
+    const nowMs = 1_710_000_000_090;
+    const continuityStore = createContinuityStore(nowMs);
+    const executionStore = createExecutionStore(nowMs);
+    const state = new ChatAgentOrchestrationState({
+      stateAgentId: 'assistant',
+      continuityThreadStore: continuityStore,
+      executionStore,
+      tools: {
+        getApprovalSummaries: () => new Map(),
+      },
+    });
+    const codingGateway = {
+      mode: 'primary' as const,
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'coding_task' as const,
+        confidence: 'high' as const,
+        operation: 'update' as const,
+        summary: 'Continue the active MusicApp phase one build.',
+        turnRelation: 'new_request' as const,
+        resolution: 'ready' as const,
+        missingFields: [],
+        executionClass: 'repo_grounded' as const,
+        preferredTier: 'external' as const,
+        preferredAnswerPath: 'chat_synthesis' as const,
+        expectedContextPressure: 'high' as const,
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        entities: {},
+      },
+    };
+    state.updateExecutionFromIntent({
+      executionIdentity: {
+        executionId: 'exec-coding',
+        rootExecutionId: 'exec-coding',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      routingContent: 'Start phase one.',
+      gateway: codingGateway,
+      codeSessionId: 'code-session-1',
+      nowMs,
+    });
+    const continuity = state.updateContinuityThreadFromIntent({
+      executionIdentity: {
+        executionId: 'exec-coding',
+        rootExecutionId: 'exec-coding',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: null,
+      routingContent: 'Start phase one.',
+      gateway: codingGateway,
+      codeSessionId: 'code-session-1',
+    });
+
+    const clarificationGateway = {
+      mode: 'primary' as const,
+      available: true,
+      model: 'test-model',
+      latencyMs: 1,
+      decision: {
+        route: 'unknown' as const,
+        confidence: 'low' as const,
+        operation: 'unknown' as const,
+        summary: 'Ask the user to clarify the request.',
+        turnRelation: 'new_request' as const,
+        resolution: 'needs_clarification' as const,
+        missingFields: ['request'],
+        executionClass: 'direct_assistant' as const,
+        preferredTier: 'external' as const,
+        preferredAnswerPath: 'direct' as const,
+        expectedContextPressure: 'low' as const,
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        entities: {},
+      },
+    };
+    state.updateExecutionFromIntent({
+      executionIdentity: {
+        executionId: 'exec-clarification',
+        rootExecutionId: 'exec-clarification',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: continuity,
+      routingContent: 'continue',
+      gateway: clarificationGateway,
+      nowMs: nowMs + 1,
+    });
+    const updated = state.updateContinuityThreadFromIntent({
+      executionIdentity: {
+        executionId: 'exec-clarification',
+        rootExecutionId: 'exec-clarification',
+      },
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: continuity,
+      routingContent: 'continue',
+      gateway: clarificationGateway,
+    });
+
+    expect(updated?.activeExecutionRefs).toEqual([
+      {
+        kind: 'execution',
+        id: 'exec-coding',
+        label: 'Continue the active MusicApp phase one build.',
+      },
+    ]);
+    expect(state.getActiveExecution({
+      userId: 'user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      continuityThread: updated,
+    })?.executionId).toBe('exec-coding');
+  });
+
   it('drops internal fallback summaries from durable execution and continuity labels', () => {
     const nowMs = 1_710_000_000_100;
     const continuityStore = createContinuityStore(nowMs);
