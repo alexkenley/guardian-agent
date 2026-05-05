@@ -1722,6 +1722,7 @@ function bindTerminalListeners() {
     if (!tab) return;
     tab.connected = false;
     tab.connecting = false;
+    tab.openAttemptId = null;
     tab.exited = true;
     tab.runtimeTerminalId = null;
     const exitCode = Number.isInteger(payload?.exitCode) ? payload.exitCode : 'unknown';
@@ -3596,6 +3597,8 @@ function buildCodeSessionUiState(session) {
         id: tab.id,
         name: tab.name,
         shell: normalizeTerminalShell(tab.shell),
+        exited: !!tab.exited,
+        openError: typeof tab.openError === 'string' ? tab.openError : '',
       }))
       : [],
   };
@@ -4100,6 +4103,11 @@ async function ensureSessionTerminals(session) {
 
 async function ensureTerminalConnected(session, tab) {
   if (!tab || tab.runtimeTerminalId || tab.connecting || tab.openFailed || tab.exited) return;
+  const now = Date.now();
+  if (typeof tab.lastOpenAttemptAt === 'number' && now - tab.lastOpenAttemptAt < 2000) return;
+  const attemptId = crypto.randomUUID();
+  tab.openAttemptId = attemptId;
+  tab.lastOpenAttemptAt = now;
   tab.connecting = true;
   tab.exited = false;
   tab.openError = '';
@@ -4116,6 +4124,7 @@ async function ensureTerminalConnected(session, tab) {
       rows: 30,
       ...codeSurfacePayload(),
     });
+    if (tab.openAttemptId !== attemptId) return;
     tab.runtimeTerminalId = result?.terminalId || null;
     tab.connected = !!tab.runtimeTerminalId;
     tab.exited = false;
@@ -4125,6 +4134,7 @@ async function ensureTerminalConnected(session, tab) {
       tab.output = '';
     }
   } catch (err) {
+    if (tab.openAttemptId !== attemptId) return;
     const message = err instanceof Error ? err.message : String(err);
     tab.connected = false;
     tab.runtimeTerminalId = null;
@@ -4133,7 +4143,10 @@ async function ensureTerminalConnected(session, tab) {
     tab.openError = message;
     tab.output = trimTerminalOutput(`${tab.output || ''}\n[terminal error: ${message}]\n`);
   } finally {
-    tab.connecting = false;
+    if (tab.openAttemptId === attemptId) {
+      tab.connecting = false;
+      tab.openAttemptId = null;
+    }
     saveState(codeState);
   }
 }
@@ -8107,8 +8120,10 @@ function normalizeTerminalTabs(value, existing = []) {
         connecting: !!previousById.get(tab.id)?.connecting,
         connected: !!previousById.get(tab.id)?.connected,
         exited: !!previousById.get(tab.id)?.exited || !!tab.exited,
-        openFailed: !!previousById.get(tab.id)?.openFailed,
-        openError: typeof previousById.get(tab.id)?.openError === 'string' ? previousById.get(tab.id).openError : '',
+        openFailed: !!previousById.get(tab.id)?.openFailed || !!tab.openError,
+        openError: typeof previousById.get(tab.id)?.openError === 'string'
+          ? previousById.get(tab.id).openError
+          : (typeof tab.openError === 'string' ? tab.openError : ''),
       }))
     : [];
   return userTabs.length > 0 ? userTabs : [createTerminalTab('Terminal 1', getDefaultShell())];

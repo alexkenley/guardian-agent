@@ -10,7 +10,7 @@ import {
 describe('shouldAttachCodeSessionForRequest', () => {
   const sharedSession = {
     session: {
-      resolvedRoot: 'S:\\Development\\GuardianAgent',
+      resolvedRoot: 'D:\\Workspaces\\SampleProject',
     },
     attachment: {
       channel: 'web',
@@ -76,7 +76,7 @@ describe('shouldAttachCodeSessionForRequest', () => {
       channel: 'web',
       surfaceId: 'fresh-api-surface',
       requestedCodeContext: {
-        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        workspaceRoot: 'D:\\Workspaces\\SampleProject',
       },
       resolvedCodeSession: sharedSession,
       gatewayDecision: {
@@ -146,17 +146,17 @@ describe('shouldAttachCodeSessionForRequest', () => {
       surfaceId: 'second-brain',
       requestedCodeContext: {
         sessionId: 'code-session-1',
-        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        workspaceRoot: 'D:\\Workspaces\\SampleProject',
       },
       resolvedCodeSession: {
         session: {
-          resolvedRoot: 'S:\\Development\\GuardianAgent',
+          resolvedRoot: 'D:\\Workspaces\\SampleProject',
         },
       },
       metadata: {
         codeContext: {
           sessionId: 'code-session-1',
-          workspaceRoot: 'S:\\Development\\GuardianAgent',
+          workspaceRoot: 'D:\\Workspaces\\SampleProject',
           source: IMPLICIT_SHARED_CODE_CONTEXT_SOURCE,
         },
       },
@@ -172,7 +172,7 @@ describe('shouldAttachCodeSessionForRequest', () => {
       },
       resolvedCodeSession: {
         session: {
-          resolvedRoot: 'S:\\Development\\GuardianAgent',
+          resolvedRoot: 'D:\\Workspaces\\SampleProject',
         },
       },
       metadata: {
@@ -188,12 +188,12 @@ describe('shouldAttachCodeSessionForRequest', () => {
       channel: 'web',
       surfaceId: 'fresh-api-surface',
       requestedCodeContext: {
-        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        workspaceRoot: 'D:\\Workspaces\\SampleProject',
       },
       resolvedCodeSession: sharedSession,
       metadata: {
         codeContext: {
-          workspaceRoot: 'S:\\Development\\GuardianAgent',
+          workspaceRoot: 'D:\\Workspaces\\SampleProject',
         },
       },
     })).toBe(false);

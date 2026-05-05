@@ -7,6 +7,14 @@ function isCodeSessionApprovalNotFoundError(error) {
   );
 }
 
+function isStaleCodeSessionApprovalTransportError(error) {
+  if (isCodeSessionApprovalNotFoundError(error)) return true;
+  const message = error instanceof Error ? error.message : String(error || '');
+  return message === 'NetworkError when attempting to fetch resource.'
+    || message === 'Failed to fetch'
+    || message.includes('/api/code/sessions/');
+}
+
 export function buildApprovalContinuationSummaryPart(result, approval, decision) {
   const toolName = typeof approval?.toolName === 'string' && approval.toolName.trim()
     ? approval.toolName.trim()
@@ -39,7 +47,7 @@ export async function decideChatApproval(input) {
         surfaceId,
       });
     } catch (error) {
-      if (!isCodeSessionApprovalNotFoundError(error)) {
+      if (!isStaleCodeSessionApprovalTransportError(error)) {
         throw error;
       }
     }

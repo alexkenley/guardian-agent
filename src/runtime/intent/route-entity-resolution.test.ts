@@ -62,14 +62,14 @@ describe('resolveIntentGatewayEntities', () => {
   it('infers coding backend and workspace target from explicit backend requests', () => {
     expect(resolveIntentGatewayEntities(
       {},
-      { sourceContent: 'Use Codex to inspect src/runtime/intent-gateway.ts in the Guardian workspace.' },
+      { sourceContent: 'Use Codex to inspect src/runtime/intent-gateway.ts in the sample workspace.' },
       'coding_task',
       'inspect',
       'classifier.primary',
     ).entities).toMatchObject({
       codingBackend: 'codex',
       codingBackendRequested: true,
-      sessionTarget: 'Guardian',
+      sessionTarget: 'sample',
     });
   });
 
@@ -122,34 +122,34 @@ describe('resolveIntentGatewayEntities', () => {
   it('preserves the richer explicit coding-task session target when it matches the source-derived workspace', () => {
     const result = resolveIntentGatewayEntities(
       {
-        sessionTarget: 'Test Tactical Game App workspace',
+        sessionTarget: 'Sample App workspace',
       },
       {
-        sourceContent: 'Use Codex in the Test Tactical Game App workspace to create a smoke test file.',
+        sourceContent: 'Use Codex in the Sample App workspace to create an example test file.',
       },
       'coding_task',
       'create',
       'classifier.primary',
     );
 
-    expect(result.entities.sessionTarget).toBe('Test Tactical Game App workspace');
+    expect(result.entities.sessionTarget).toBe('Sample App workspace');
     expect(result.provenance?.sessionTarget).toBe('classifier.primary');
   });
 
   it('keeps classifier-provided session targets for explicit coding-session control requests', () => {
     const result = resolveIntentGatewayEntities(
       {
-        sessionTarget: 'Guardian project',
+        sessionTarget: 'Sample project',
       },
       {
-        sourceContent: 'Switch this chat to Guardian project.',
+        sourceContent: 'Switch this chat to Sample project.',
       },
       'coding_session_control',
       'update',
       'classifier.primary',
     );
 
-    expect(result.entities.sessionTarget).toBe('Guardian project');
+    expect(result.entities.sessionTarget).toBe('Sample project');
   });
 
   it('infers coding-session targets from switch-to-workspace-for phrasing', () => {
@@ -220,14 +220,14 @@ describe('resolveIntentGatewayEntities', () => {
   it('preserves remote sandbox commands as coding-task entities', () => {
     expect(resolveIntentGatewayEntities(
       {},
-      { sourceContent: 'Run npm test in the remote sandbox for the Guardian workspace.' },
+      { sourceContent: 'Run npm test in the remote sandbox for the sample workspace.' },
       'coding_task',
       'run',
       'classifier.primary',
     ).entities).toMatchObject({
       command: 'npm test',
       codingRemoteExecRequested: true,
-      sessionTarget: 'Guardian',
+      sessionTarget: 'sample',
     });
   });
 

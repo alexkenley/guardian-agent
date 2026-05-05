@@ -5,7 +5,7 @@ import { deriveIntentRouteClarification } from './intent-route-clarification.js'
 describe('intent-route-clarification', () => {
   it('asks for coding-scope confirmation when a turn mixes workspace/session and repo-work signals', () => {
     expect(deriveIntentRouteClarification({
-      content: 'Inspect the Guardian workspace and tell me what matters most.',
+      content: 'Inspect the sample workspace and tell me what matters most.',
       decision: {
         route: 'coding_session_control',
         confidence: 'medium',
@@ -35,7 +35,7 @@ describe('intent-route-clarification', () => {
 
   it('does not ask for coding-scope confirmation when the request does concrete repo work inside a named workspace', () => {
     expect(deriveIntentRouteClarification({
-      content: 'Use Codex in the Test Tactical Game App coding workspace to create test-switch-a in the top-level directory.',
+      content: 'Use Codex in the Sample App coding workspace to create test-switch-a in the top-level directory.',
       decision: {
         route: 'coding_session_control',
         confidence: 'low',
@@ -93,7 +93,7 @@ describe('intent-route-clarification', () => {
 
   it('does not ask for automation confirmation when run behavior describes a new automation', () => {
     expect(deriveIntentRouteClarification({
-      content: 'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
+      content: 'Create an automation called Website Link Audit. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
       decision: {
         route: 'automation_authoring',
         confidence: 'medium',

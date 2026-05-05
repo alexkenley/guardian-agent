@@ -135,7 +135,7 @@ describe('buildIntentGatewayContextSections', () => {
       },
     );
 
-    expect(prompts[0]).toContain('Create a GuardianAgent GitHub issue');
+    expect(prompts[0]).toContain('Create an app diagnostics GitHub issue');
     expect(result.decision.route).toBe('diagnostics_task');
     expect(result.decision.operation).toBe('draft');
     expect(result.decision.entities.toolName).toBe('guardian_issue_draft');

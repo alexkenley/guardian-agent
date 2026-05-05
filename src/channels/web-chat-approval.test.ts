@@ -72,6 +72,33 @@ describe('decideChatApproval', () => {
     expect(result).toEqual({ success: true, message: 'Approved globally.' });
   });
 
+  it('falls back to the shared tool approval endpoint when a stale code-session approval route has a transport failure', async () => {
+    const apiClient = {
+      codeSessionDecideApproval: vi.fn().mockRejectedValue(new Error('NetworkError when attempting to fetch resource.')),
+      decideToolApproval: vi.fn().mockResolvedValue({ success: true, message: 'Approved after fallback.' }),
+    };
+
+    const result = await decideChatApproval({
+      apiClient,
+      approvalId: 'approval-transport',
+      decision: 'approved',
+      webUserId: 'web-user-1',
+      focusedSessionId: 'stale-session',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(apiClient.codeSessionDecideApproval).toHaveBeenCalledOnce();
+    expect(apiClient.decideToolApproval).toHaveBeenCalledWith({
+      approvalId: 'approval-transport',
+      decision: 'approved',
+      actor: 'web-user',
+      userId: 'web-user-1',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
+    expect(result).toEqual({ success: true, message: 'Approved after fallback.' });
+  });
+
   it('does not swallow unrelated code-session approval failures', async () => {
     const error = Object.assign(new Error('Code session unavailable.'), {
       code: 'CODE_SESSION_UNAVAILABLE',

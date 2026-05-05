@@ -5,7 +5,7 @@ import type { IntentGatewayRepairContext } from './types.js';
 describe('clarification-resolver', () => {
   it('pins clarification answers back to the pending personal-assistant route and operation', () => {
     const repairContext: IntentGatewayRepairContext = {
-      sourceContent: 'JORDAN LEE',
+      sourceContent: 'EXAMPLE CONTACT',
       pendingAction: {
         id: 'pa-1',
         status: 'pending',
@@ -14,7 +14,7 @@ describe('clarification-resolver', () => {
         route: 'personal_assistant_task',
         operation: 'read',
         prompt: 'Who is this contact?',
-        originalRequest: ' jordan lee',
+        originalRequest: ' example contact',
         transferPolicy: 'always',
       },
     };
@@ -37,7 +37,7 @@ describe('clarification-resolver', () => {
 
   it('does not reclassify new requests from content after the gateway decision', () => {
     const repairContext: IntentGatewayRepairContext = {
-      sourceContent: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session.',
+      sourceContent: 'In the sample workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session.',
     };
 
     const route = repairIntentGatewayRoute(
