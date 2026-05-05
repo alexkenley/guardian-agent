@@ -661,19 +661,23 @@ function repairUnavailableActiveExecutionWork(
   }
   const activeExecution = input.continuity?.activeExecution;
   if (!activeExecution) return null;
+  const route = activeExecution.route;
+  if (!route || route === 'unknown' || route === 'general_assistant') {
+    return null;
+  }
   const operation = activeExecution.operation && activeExecution.operation !== 'unknown'
     ? activeExecution.operation
     : decision.operation !== 'unknown'
       ? decision.operation
-      : defaultOperationForRoute(activeExecution.route);
-  const workload = workloadForActiveExecutionRoute(activeExecution.route);
+      : defaultOperationForRoute(route);
+  const workload = workloadForActiveExecutionRoute(route);
   return {
     ...decision,
-    route: activeExecution.route,
+    route,
     confidence: 'low',
     operation,
     summary: activeExecution.summary?.trim()
-      || summaryForActiveExecutionRoute(activeExecution.route),
+      || summaryForActiveExecutionRoute(route),
     turnRelation: 'follow_up',
     resolution: 'ready',
     missingFields: [],
