@@ -5,6 +5,7 @@ import type { SecondBrainService } from '../second-brain/second-brain-service.js
 import type { ToolExecutor } from '../../tools/executor.js';
 import type { ToolExecutionRequest } from '../../tools/types.js';
 import { normalizeToolCallsForExecution } from '../../util/structured-json.js';
+import { coalescePackageInstallToolCalls } from '../package-install-tool-coalescing.js';
 import {
   getMemoryMutationIntentDeniedMessage,
   isMemoryMutationToolName,
@@ -90,7 +91,7 @@ export function executeToolsConflictAware(
   const promises: Promise<{ toolCall: ConflictAwareToolCall; result: Record<string, unknown> }>[] = [];
   const locks = new Map<string, Promise<void>>();
   let remoteSandboxStepQueued = false;
-  const normalizedToolCalls = normalizeToolCallsForExecution(input.toolCalls);
+  const normalizedToolCalls = coalescePackageInstallToolCalls(normalizeToolCallsForExecution(input.toolCalls));
 
   for (const toolCall of normalizedToolCalls ?? []) {
     let parsedArgs: Record<string, unknown> = {};

@@ -4952,6 +4952,55 @@ describe('ToolExecutor', () => {
     expect((result.output as any).status).toBe('installed');
   });
 
+  it('reuses recently approved package_install retries without consuming chain budget', async () => {
+    const root = createExecutorRoot();
+    const packageInstallTrust = {
+      runManagedInstall: vi.fn().mockResolvedValue({
+        success: true,
+        status: 'installed',
+        message: 'Managed install completed.',
+        event: {
+          id: 'pkg-1',
+          state: 'trusted',
+          installed: true,
+        },
+      }),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      allowedPaths: [root],
+      allowedCommands: [],
+      allowedDomains: [],
+      packageInstallTrust: packageInstallTrust as any,
+    });
+    const requestContext = {
+      toolName: 'package_install',
+      args: { command: 'npm install lodash', cwd: root },
+      origin: 'assistant' as const,
+      requestId: 'req-package-retry',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      codeContext: { workspaceRoot: root, sessionId: 'code-session-1' },
+    };
+
+    const pending = await executor.runTool(requestContext);
+    expect(pending.status).toBe('pending_approval');
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'owner');
+    expect(approved.success).toBe(true);
+    expect(approved.executionSucceeded).toBe(true);
+
+    for (let index = 0; index < 60; index += 1) {
+      const replayed = await executor.runTool(requestContext);
+      expect(replayed.status).toBe('succeeded');
+      expect(replayed.approvalId).toBeUndefined();
+    }
+    expect(packageInstallTrust.runManagedInstall).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects package_install cwd outside the allowed workspace paths', async () => {
     const root = createExecutorRoot();
     const outside = createExecutorRoot();

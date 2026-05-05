@@ -10,6 +10,7 @@ import type {
 import { formatToolResultForLLM, toLLMToolDef } from '../../chat-agent-helpers.js';
 import type { IntentGatewayDecision } from '../intent-gateway.js';
 import type { SecondBrainService } from '../second-brain/second-brain-service.js';
+import { coalescePackageInstallToolCalls } from '../package-install-tool-coalescing.js';
 import {
   executeToolsConflictAware,
   isDeferredRemoteSandboxToolResult,
@@ -64,15 +65,16 @@ export async function executeToolLoopRound(input: {
     providerKind: 'local' | 'external',
   ) => ToolLoopSanitizedResult;
 }): Promise<ToolLoopRoundResult> {
+  const toolCalls = coalescePackageInstallToolCalls(input.response.toolCalls) ?? input.response.toolCalls;
   input.state.llmMessages.push({
     role: 'assistant',
     content: input.response.content ?? '',
-    toolCalls: input.response.toolCalls,
+    toolCalls,
   });
 
   const toolResults = await Promise.allSettled(
     executeToolsConflictAware({
-      toolCalls: input.response.toolCalls,
+      toolCalls,
       toolExecOrigin: input.toolExecOrigin,
       referenceTime: input.referenceTime,
       intentDecision: input.intentDecision,
@@ -147,7 +149,7 @@ export async function executeToolLoopRound(input: {
         });
       }
     } else {
-      const failedToolCall = input.response.toolCalls[toolResults.indexOf(settled)];
+      const failedToolCall = toolCalls[toolResults.indexOf(settled)];
       input.state.llmMessages.push({
         role: 'tool',
         toolCallId: failedToolCall?.id ?? '',

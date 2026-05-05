@@ -3786,6 +3786,45 @@ export class ToolExecutor {
     return result;
   }
 
+  private tryReturnRecentApprovedToolRun(job: ToolJobRecord): ToolRunResponse | null {
+    if (!job.argsHash) return null;
+    const recentApproved = this.approvals.list(50, 'approved').find(
+      (approval) => approval.toolName === job.toolName
+        && approval.argsHash === job.argsHash
+        && (approval.codeSessionId ?? '') === (job.codeSessionId ?? '')
+        && approval.decidedAt
+        && (this.now() - approval.decidedAt) < 5 * 60_000,
+    );
+    if (!recentApproved) return null;
+
+    const oldJob = this.jobsById.get(recentApproved.jobId);
+    if (oldJob?.status === 'succeeded') {
+      job.status = 'succeeded';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.resultPreview = oldJob.resultPreview;
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: job.id,
+        message: oldJob.resultPreview || 'Already approved and executed successfully.',
+      };
+    }
+    if (oldJob?.status === 'failed') {
+      job.status = 'failed';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = oldJob.error;
+      return {
+        success: false,
+        status: 'failed',
+        jobId: job.id,
+        message: oldJob.error || 'Previously failed execution.',
+      };
+    }
+    return null;
+  }
+
   async runTool(request: ToolExecutionRequest): Promise<ToolRunResponse> {
     if (!this.options.enabled) {
       return {
@@ -3838,20 +3877,6 @@ export class ToolExecutor {
     }
 
     const job = this.createJob(entry.definition, request, args);
-    const toolChainBudgetError = this.consumeToolChainBudget(entry.definition, request, job.argsHash);
-    if (toolChainBudgetError) {
-      job.status = 'denied';
-      job.completedAt = this.now();
-      job.durationMs = 0;
-      job.error = sanitizePreview(toolChainBudgetError);
-      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
-      return {
-        success: false,
-        status: job.status,
-        jobId: job.id,
-        message: toolChainBudgetError,
-      };
-    }
     const argsValidationError = this.validateToolArgs(entry.definition, args);
     if (argsValidationError) {
       job.status = 'failed';
@@ -3913,6 +3938,28 @@ export class ToolExecutor {
     }
 
     const decision = this.decide(entry.definition, args, request);
+    if (decision === 'require_approval') {
+      const replayedApprovedResult = this.tryReturnRecentApprovedToolRun(job);
+      if (replayedApprovedResult) {
+        return replayedApprovedResult;
+      }
+    }
+
+    const toolChainBudgetError = this.consumeToolChainBudget(entry.definition, request, job.argsHash);
+    if (toolChainBudgetError) {
+      job.status = 'denied';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = sanitizePreview(toolChainBudgetError);
+      this.recordToolChainOutcome(entry.definition, request, job.argsHash, job.status);
+      return {
+        success: false,
+        status: job.status,
+        jobId: job.id,
+        message: toolChainBudgetError,
+      };
+    }
+
     if (decision === 'deny') {
       job.status = 'denied';
       job.completedAt = this.now();
@@ -3932,44 +3979,11 @@ export class ToolExecutor {
         return await this.execute(job, request, args, entry.handler);
       }
 
-      // Caching / Retry Loop Fix: If the LLM just retried the exact same tool
-      // call after it was already approved and executed, return the previous result.
-      if (job.argsHash) {
-        const recentApproved = this.approvals.list(50, 'approved').find(
-          (a) => a.toolName === job.toolName
-            && a.argsHash === job.argsHash
-            && (a.codeSessionId ?? '') === (job.codeSessionId ?? '')
-            && a.decidedAt
-            && (this.now() - a.decidedAt) < 5 * 60_000
-        );
-        if (recentApproved) {
-          const oldJob = this.jobsById.get(recentApproved.jobId);
-          if (oldJob && oldJob.status === 'succeeded') {
-            job.status = 'succeeded';
-            job.completedAt = this.now();
-            job.durationMs = 0;
-            job.resultPreview = oldJob.resultPreview;
-            return {
-              success: true,
-              status: 'succeeded',
-              jobId: job.id,
-              message: oldJob.resultPreview || 'Already approved and executed successfully.',
-            };
-          } else if (oldJob && oldJob.status === 'failed') {
-            job.status = 'failed';
-            job.completedAt = this.now();
-            job.durationMs = 0;
-            job.error = oldJob.error;
-            return {
-              success: false,
-              status: 'failed',
-              jobId: job.id,
-              message: oldJob.error || 'Previously failed execution.',
-            };
-          }
-          // If approved but somehow pending execution, execute it now!
-          return await this.execute(job, request, args, entry.handler);
-        }
+      // If the LLM retried the exact same approved tool call, reuse the
+      // completed result instead of creating another approval prompt.
+      const replayedApprovedResult = this.tryReturnRecentApprovedToolRun(job);
+      if (replayedApprovedResult) {
+        return replayedApprovedResult;
       }
 
       if (this.consumeToolChainApprovalGrant(entry.definition, request)) {

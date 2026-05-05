@@ -2157,4 +2157,97 @@ describe('runLlmLoop', () => {
     expect(result.outcome.completionReason).not.toBe('tool_result_recovery');
     expect(result.finalContent).not.toMatch(/Created|Done|Successfully/i);
   });
+
+  it('coalesces same-round package installs before invoking broker tools', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Install the TypeScript dev stack.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [
+          {
+            id: 'call-1',
+            name: 'package_install',
+            arguments: JSON.stringify({ command: 'npm install -D typescript', cwd: 'S:\\Development\\MusicApp' }),
+          },
+          {
+            id: 'call-2',
+            name: 'package_install',
+            arguments: JSON.stringify({ command: 'npm install -D tsx', cwd: 'S:\\Development\\MusicApp' }),
+          },
+          {
+            id: 'call-3',
+            name: 'package_install',
+            arguments: JSON.stringify({ command: 'npm install -D @types/node', cwd: 'S:\\Development\\MusicApp' }),
+          },
+        ],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Installed the dev stack.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'package_install',
+          description: 'Install packages.',
+          parameters: {
+            type: 'object',
+            properties: {
+              command: { type: 'string' },
+              cwd: { type: 'string' },
+            },
+            required: ['command'],
+          },
+          risk: 'mutating',
+          category: 'shell',
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calls.push({ toolName: request.toolName, args: request.args });
+        return {
+          success: true,
+          status: 'succeeded',
+          message: 'Installed.',
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(calls).toEqual([
+      {
+        toolName: 'package_install',
+        args: {
+          command: 'npm install -D typescript tsx @types/node',
+          cwd: 'S:\\Development\\MusicApp',
+        },
+      },
+    ]);
+    expect(result.outcome).toMatchObject({
+      toolCallCount: 1,
+      toolResultCount: 1,
+      successfulToolResultCount: 1,
+    });
+  });
 });

@@ -599,12 +599,13 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
   context.registry.register(
     {
       name: 'package_install',
-      description: 'Run a managed package install through Guardian\'s staged trust path. Supported in v1 for explicit public-registry npm/pnpm/yarn/bun add-style commands and pip install commands. Guardian stages the requested top-level artifacts, runs bounded static checks plus native AV when available, and only then proceeds with the install. Mutating — requires approval. Requires execute_commands capability.',
+      description: 'Run a managed package install through Guardian\'s staged trust path. Supported in v1 for explicit public-registry npm/pnpm/yarn/bun add-style commands and pip install commands. Batch packages for the same manager, working directory, and install target into one command instead of calling once per package, for example `npm install -D typescript tsx @types/node`. Guardian stages the requested top-level artifacts, runs bounded static checks plus native AV when available, and only then proceeds with the install. Mutating — requires approval. Requires execute_commands capability.',
       shortDescription: 'Stage, review, and then run a managed package install.',
       risk: 'mutating',
       category: 'shell',
       examples: [
-        { input: { command: 'npm install lodash' }, description: 'Stage and install a Node package through the managed trust path' },
+        { input: { command: 'npm install lodash express zod' }, description: 'Stage and install multiple Node packages through one managed trust review' },
+        { input: { command: 'npm install -D typescript tsx @types/node' }, description: 'Install related dev dependencies in one package_install call' },
         { input: { command: 'pip install requests', allowCaution: true }, description: 'Proceed with a managed pip install after accepting caution-level findings' },
       ],
       parameters: {

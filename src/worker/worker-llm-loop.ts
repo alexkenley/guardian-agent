@@ -6,6 +6,7 @@ import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '
 import { normalizeToolCallsForExecution, recoverToolCallsFromStructuredText } from '../util/structured-json.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
+import { coalescePackageInstallToolCalls } from '../runtime/package-install-tool-coalescing.js';
 import type { PlannedTask, WorkerStopReason } from '../runtime/execution/types.js';
 import type {
   WorkerExecutionCompletionReason,
@@ -305,7 +306,7 @@ export async function runLlmLoop(
     if (response.toolCalls?.length) {
       response = {
         ...response,
-        toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+        toolCalls: coalescePackageInstallToolCalls(normalizeToolCallsForExecution(response.toolCalls, llmToolDefs)),
       };
     }
 
@@ -390,7 +391,7 @@ export async function runLlmLoop(
       if (response.toolCalls?.length) {
         response = {
           ...response,
-          toolCalls: normalizeToolCallsForExecution(response.toolCalls, llmToolDefs),
+          toolCalls: coalescePackageInstallToolCalls(normalizeToolCallsForExecution(response.toolCalls, llmToolDefs)),
         };
       }
     }
